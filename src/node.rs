@@ -14,16 +14,16 @@ use crate::ItemId;
 #[derive(Clone, Debug)]
 pub enum DbItem<'a, D: Distance> {
     Item(Item<'a, D>),
-    Node(Descendants<'a>), // TODO: change this to edges
+    Node(Links<'a>),
 }
 
 const LEAF_TAG: u8 = 0;
-const DESCENDANTS_TAG: u8 = 1;
+const LINKS_TAG: u8 = 1;
 
 impl<'a, D: Distance> DbItem<'a, D> {
-    pub fn leaf(self) -> Option<Item<'a, D>> {
-        if let DbItem::Item(leaf) = self {
-            Some(leaf)
+    pub fn item(self) -> Option<Item<'a, D>> {
+        if let DbItem::Item(item) = self {
+            Some(item)
         } else {
             None
         }
@@ -61,16 +61,16 @@ impl<D: Distance> Item<'_, D> {
 
 // FIXME: turn into graph node
 #[derive(Clone)]
-pub struct Descendants<'a> {
+pub struct Links<'a> {
     // A descendants node can only contains references to the leaf nodes.
     // We can get and store their ids directly without the `Mode`.
-    pub descendants: Cow<'a, RoaringBitmap>,
+    pub links: Cow<'a, RoaringBitmap>,
 }
 
-impl fmt::Debug for Descendants<'_> {
+impl fmt::Debug for Links<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let descendants = self.descendants.iter().collect::<Vec<_>>();
-        f.debug_struct("Descendants").field("descendants", &descendants).finish()
+        let links = self.links.iter().collect::<Vec<_>>();
+        f.debug_struct("Links").field("links", &links).finish()
     }
 }
 
@@ -125,9 +125,9 @@ impl<'a, D: Distance> BytesEncode<'a> for NodeCodec<D> {
                 bytes.extend_from_slice(bytes_of(header));
                 bytes.extend_from_slice(vector.as_bytes());
             }
-            DbItem::Node(Descendants { descendants }) => {
-                bytes.push(DESCENDANTS_TAG);
-                descendants.serialize_into(&mut bytes)?;
+            DbItem::Node(Links { links }) => {
+                bytes.push(LINKS_TAG);
+                links.serialize_into(&mut bytes)?;
             }
         }
         Ok(Cow::Owned(bytes))
@@ -146,8 +146,8 @@ impl<'a, D: Distance> BytesDecode<'a> for NodeCodec<D> {
 
                 Ok(DbItem::Item(Item { header, vector }))
             }
-            [DESCENDANTS_TAG, bytes @ ..] => Ok(DbItem::Node(Descendants {
-                descendants: Cow::Owned(RoaringBitmap::deserialize_from(bytes)?),
+            [LINKS_TAG, bytes @ ..] => Ok(DbItem::Node(Links {
+                links: Cow::Owned(RoaringBitmap::deserialize_from(bytes)?),
             })),
             unknown => panic!(
                 "Did not recognize node tag type: {unknown:?} while decoding a node from v0.7.0"

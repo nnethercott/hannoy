@@ -269,7 +269,7 @@ impl<'t, D: Distance> ImmutableItems<'t, D> {
         // - ptr: The pointer comes from LMDB. Since the database cannot be written to, it is still valid.
         // - len: All the items share the same dimensions and are the same size
         let bytes = unsafe { slice::from_raw_parts(ptr, len) };
-        NodeCodec::bytes_decode(bytes).map_err(heed::Error::Decoding).map(|node| node.leaf())
+        NodeCodec::bytes_decode(bytes).map_err(heed::Error::Decoding).map(|node| node.item())
     }
     
 }

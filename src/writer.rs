@@ -7,6 +7,7 @@ use rand::{Rng, SeedableRng};
 use roaring::RoaringBitmap;
 
 use crate::distance::Distance;
+use crate::hnsw::HnswBuilder;
 use crate::internals::KeyCodec;
 use crate::item_iter::ItemIter;
 use crate::node::{ItemIds, Item};
@@ -30,19 +31,15 @@ pub struct HannoyBuilder<'a, D: Distance, R: Rng + SeedableRng> {
 /// The options available when building the arroy database.
 pub(crate) struct BuildOption {
     pub(crate) m: usize,
-    pub(crate) m0: usize,
-    pub(crate) ml: f32,
-    pub(crate) ef_c: usize,
+    pub(crate) ef_construction: usize,
     pub(crate) available_memory: Option<usize>,
 }
 
 impl Default for BuildOption {
     fn default() -> Self {
         Self {
-            m: 16,
-            m0: 32,
-            ml: 16f32.ln().powf(-1.0),
-            ef_c: 6, // ad hoc
+            m: 32,
+            ef_construction: 6, // ad hoc
             available_memory: None,
         }
     }
@@ -246,6 +243,8 @@ impl<D: Distance> Writer<D> {
         Ok(())
     }
 
+    // NOTE: this can be abstracted into a generic trait `Index` and move some code into the
+    // options. this way arroy can be a factory for annoy-like, hnsw, etc
     fn index_hnsw<R: Rng + SeedableRng>(
         &self,
         wtxn: &mut RwTxn,
@@ -254,16 +253,7 @@ impl<D: Distance> Writer<D> {
         concurrent_node_ids: ConcurrentNodeIds,
         to_insert: RoaringBitmap,
     ) -> Result<(), Error> {
-
-        for item in to_insert{
-            // sample from an exponential ~ exp(ml)
-            let u = rng.sample(Uniform::new(0.0f32, 1.0));
-            let l = (-1.0*u.ln()/options.ml).floor() as usize;
-
-            // insert_item_in_index(item, l, wtxn, options);
-        }
-
-        Ok(())
+        todo!()
     }
 
 

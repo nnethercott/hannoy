@@ -10,6 +10,7 @@ mod roaring;
 mod spaces;
 mod version;
 mod writer;
+mod hnsw;
 
 mod unaligned_vector;
 
