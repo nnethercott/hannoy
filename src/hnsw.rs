@@ -1,5 +1,7 @@
 use std::{
-    cmp::{Ordering, Reverse},
+    cmp::Reverse,
+    collections::BinaryHeap,
+    marker::PhantomData,
     sync::atomic::{AtomicU16, Ordering},
 };
 
@@ -8,13 +10,20 @@ use ordered_float::OrderedFloat;
 use rand::{distributions::WeightedIndex, prelude::Distribution, Rng};
 use roaring::RoaringBitmap;
 
-use crate::{writer::BuildOption, ItemId};
+use crate::{
+    key::Key,
+    node::{DbItem, Item},
+    writer::BuildOption,
+    Database, Distance, ItemId, Result,
+};
 
 pub(crate) struct HnswBuilder {
+    m: usize,
     assign_probas: Vec<f32>,
     ef_construction: usize,
-    max_level: AtomicU16,
+    max_level: AtomicU16, // maybe one day we'll do concurrent stuff
     entrypoints: Vec<ItemId>,
+    links: Vec<RoaringBitmap>,
 }
 
 impl HnswBuilder {
@@ -22,10 +31,12 @@ impl HnswBuilder {
         let assign_probas = Self::get_default_probas(opts.m);
 
         Self {
+            m: opts.m,
             assign_probas,
             ef_construction: opts.ef_construction,
             max_level: AtomicU16::new(0),
             entrypoints: vec![],
+            links: vec![],
         }
     }
 
@@ -60,6 +71,7 @@ impl HnswBuilder {
     where
         R: Rng + ?Sized,
     {
+        // generate a random level for each point
         let levels: Vec<_> = (0..to_insert.len())
             .into_iter()
             .map(|_| {
@@ -70,6 +82,68 @@ impl HnswBuilder {
             .collect();
 
         let max_level = self.max_level.load(Ordering::Relaxed);
+    }
+
+    fn insert_node(&self, node: ItemId, wtxn: &RwTxn) {
+        // self.search(node) -> neighborhood
+        // for n in neighbors{
+        //    self.add_link(node, n, wtxn);
+        // }
+        todo!()
+    }
+
+    fn search(&self) {
+        todo!()
+    }
+
+    /// function to update an items bitmap of graph links
+    fn add_link<D: Distance>(
+        &mut self,
+        p: ItemId,
+        q: ItemId,
+        database: &Database<D>,
+        wtxn: &RoTxn,
+    ) -> Result<()> {
+        let links = &mut self.links[p as usize];
+        links.push(q);
+
+        if links.len() < self.m as u64 {
+            return Ok(());
+        }
+
+        let src = match database.get(wtxn, &Key::item(0, p))?.unwrap() {
+            DbItem::Item(item) => item,
+            _ => unreachable!(),
+        };
+
+        let mut minheap = BinaryHeap::new();
+        for item_id in links.iter() {
+            let dest = match database.get(wtxn, &Key::item(0, item_id))?.unwrap() {
+                DbItem::Item(item) => item,
+                _ => unreachable!(),
+            };
+            let d = D::distance(&src, &dest);
+            minheap.push((Reverse(OrderedFloat(d)), item_id));
+        }
+        debug_assert!(minheap.len() > self.m);
+
+        // TODO: turn Vec<RoaringBitmap> into Vec<Struct> which stores neighbors bitmap and current
+        // furthest neighbor id
+        let mut new_neighbors = RoaringBitmap::new();
+        for _ in 0..self.m {
+            if let Some((_, item_id)) = minheap.pop() {
+                new_neighbors.push(item_id);
+            }
+        }
+        *links = new_neighbors;
+
+        Ok(())
+
+        // self.select_heuristic()
+    }
+
+    fn select_heuristic(&self) {
+        todo!()
     }
 }
 

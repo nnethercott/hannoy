@@ -14,7 +14,7 @@ use crate::ItemId;
 #[derive(Clone, Debug)]
 pub enum DbItem<'a, D: Distance> {
     Item(Item<'a, D>),
-    Node(Links<'a>),
+    Node(GraphNode<'a>),
 }
 
 const LEAF_TAG: u8 = 0;
@@ -59,15 +59,15 @@ impl<D: Distance> Item<'_, D> {
     }
 }
 
-// FIXME: turn into graph node
 #[derive(Clone)]
-pub struct Links<'a> {
+pub struct GraphNode<'a> {
     // A descendants node can only contains references to the leaf nodes.
     // We can get and store their ids directly without the `Mode`.
+    // pub level: u16, 
     pub links: Cow<'a, RoaringBitmap>,
 }
 
-impl fmt::Debug for Links<'_> {
+impl fmt::Debug for GraphNode<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let links = self.links.iter().collect::<Vec<_>>();
         f.debug_struct("Links").field("links", &links).finish()
@@ -125,7 +125,7 @@ impl<'a, D: Distance> BytesEncode<'a> for NodeCodec<D> {
                 bytes.extend_from_slice(bytes_of(header));
                 bytes.extend_from_slice(vector.as_bytes());
             }
-            DbItem::Node(Links { links }) => {
+            DbItem::Node(GraphNode { links }) => {
                 bytes.push(LINKS_TAG);
                 links.serialize_into(&mut bytes)?;
             }
@@ -146,7 +146,7 @@ impl<'a, D: Distance> BytesDecode<'a> for NodeCodec<D> {
 
                 Ok(DbItem::Item(Item { header, vector }))
             }
-            [LINKS_TAG, bytes @ ..] => Ok(DbItem::Node(Links {
+            [LINKS_TAG, bytes @ ..] => Ok(DbItem::Node(GraphNode {
                 links: Cow::Owned(RoaringBitmap::deserialize_from(bytes)?),
             })),
             unknown => panic!(
