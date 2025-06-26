@@ -2,10 +2,11 @@ use std::{
     cmp::Reverse,
     collections::BinaryHeap,
     marker::PhantomData,
-    sync::atomic::{AtomicU16, Ordering},
+    sync::atomic::{AtomicUsize, Ordering},
 };
 
 use heed::{RoTxn, RwTxn};
+use min_max_heap::MinMaxHeap;
 use ordered_float::OrderedFloat;
 use rand::{distributions::WeightedIndex, prelude::Distribution, Rng};
 use roaring::RoaringBitmap;
@@ -17,16 +18,28 @@ use crate::{
     Database, Distance, ItemId, Result,
 };
 
-pub(crate) struct HnswBuilder {
+// TODO: this should be the struct from node.rs
+struct HnswNode {
+    pub level: usize,
+    // neigbours in my layer
+    pub links: RoaringBitmap,
+    // who i connect to in the next layer, during search
+    pub next: ItemId,
+}
+
+// could be worth to call build with a db ref, then build a helper struct storing that ...
+pub(crate) struct HnswBuilder<D> {
     m: usize,
     assign_probas: Vec<f32>,
     ef_construction: usize,
-    max_level: AtomicU16, // maybe one day we'll do concurrent stuff
+    max_level: AtomicUsize,
     entrypoints: Vec<ItemId>,
-    links: Vec<RoaringBitmap>,
+    // TODO: this might need to become a hashmap cause we don't push in a linear order
+    nodes: Vec<HnswNode>,
+    metric: PhantomData<D>,
 }
 
-impl HnswBuilder {
+impl<D: Distance> HnswBuilder<D> {
     pub fn new(opts: &BuildOption) -> Self {
         let assign_probas = Self::get_default_probas(opts.m);
 
@@ -34,9 +47,10 @@ impl HnswBuilder {
             m: opts.m,
             assign_probas,
             ef_construction: opts.ef_construction,
-            max_level: AtomicU16::new(0),
+            max_level: AtomicUsize::new(0),
             entrypoints: vec![],
-            links: vec![],
+            nodes: vec![],
+            metric: PhantomData,
         }
     }
 
@@ -59,12 +73,13 @@ impl HnswBuilder {
         assign_probas
     }
 
-    fn get_random_level<R>(&mut self, rng: &mut R) -> u16
+    // can probably even be u8's ...
+    fn get_random_level<R>(&mut self, rng: &mut R) -> usize
     where
         R: Rng + ?Sized,
     {
         let dist = WeightedIndex::new(&self.assign_probas).unwrap();
-        dist.sample(rng) as u16
+        dist.sample(rng) as usize
     }
 
     pub fn build<R>(&mut self, to_insert: RoaringBitmap, wtxn: &RwTxn, rng: &mut R)
@@ -82,81 +97,169 @@ impl HnswBuilder {
             .collect();
 
         let max_level = self.max_level.load(Ordering::Relaxed);
+
+        // 1. sort levels and indices by level asc
+        // 2. insert sequential
     }
 
-    fn insert_node(&self, node: ItemId, wtxn: &RwTxn) {
-        // self.search(node) -> neighborhood
-        // for n in neighbors{
-        //    self.add_link(node, n, wtxn);
+    fn get_db_item<'a>(
+        &'a self,
+        item_id: ItemId,
+        database: &Database<D>,
+        rtxn: &'a RoTxn<'a>,
+    ) -> Result<Item<'a, D>> {
+        match database.get(rtxn, &Key::item(0, item_id))?.unwrap() {
+            DbItem::Item(item) => Ok(item),
+            _ => Err(crate::Error::InvalidItemGet),
+        }
+    }
+
+    fn search_layer_build(
+        &mut self,
+        query: ItemId,
+        level: usize, // turn this into enum and implement range iter on that
+        database: &Database<D>,
+        rtxn: &RoTxn,
+    ) -> Result<()> {
+        let mut ep = 0;
+        let max_level = self.max_level.load(Ordering::Relaxed);
+
+        // greedy search with: ef = 1
+        for l in (level + 1..=max_level).rev() {
+            let mut neighbours = self.search_single_layer(query, ep, l, 1, database, rtxn)?;
+            ep = neighbours
+                .pop_min()
+                .map(|(_, n)| n)
+                .expect("Not a single nearest neighbor was found");
+        }
+
+        // beam search with: ef = ef_construction
+        for l in (0..=level.min(max_level)).rev() {
+            let mut neighbours =
+                self.search_single_layer(query, ep, l, self.ef_construction, database, rtxn)?;
+
+            // FIXME: limit neighbors as a fn(self.m(layer)) ...
+            while let Some((_, item_id)) = neighbours.pop_min(){
+                // add links in both directions
+                self.add_link_in_layer(query, item_id, database, rtxn);
+                self.add_link_in_layer(item_id, query, database, rtxn);
+                //helper.add_link_in_layer(item_id, query)
+            }
+        }
+
+        // match level{
+        //      Level::NonZero(n) =>{
+        //          if n > self.max_level{
+        //              set new one
+        //          } 
+        //          else{
+        //              bleh 
+        //          }
+        //      },
+        //      Level::Zero => {
+        //          do something
+        //      }
         // }
-        todo!()
+
+        Ok(())
     }
 
-    fn search(&self) {
-        todo!()
+    // TODO: clean this a bit
+    // NOTE: won't work right now cause self.nodes has no guarantee on order ...
+    #[allow(clippy::too_many_arguments)]
+    fn search_single_layer(
+        &self,
+        q: ItemId,
+        ep: ItemId,
+        level: usize,
+        ef: usize,
+        database: &Database<D>,
+        rtxn: &RoTxn,
+    ) -> Result<MinMaxHeap<(OrderedFloat<f32>, ItemId)>> {
+        let mut candidates = BinaryHeap::new();
+        let mut res = MinMaxHeap::with_capacity(ef);
+        let mut visited = RoaringBitmap::new();
+
+        // i don't like this, fix later
+        let v_ref = self.get_db_item(q, database, rtxn)?;
+        let w = self.get_db_item(ep, database, rtxn)?;
+        let dist = D::distance(&v_ref, &w);
+
+        candidates.push((Reverse(OrderedFloat(dist)), ep));
+        res.push((OrderedFloat(dist), ep));
+        visited.push(ep);
+
+        while let Some((Reverse(OrderedFloat(f)), c)) = candidates.pop() {
+            // stopping criteria
+            if let Some((OrderedFloat(f_max), _)) = res.peek_max() {
+                if f > *f_max {
+                    break;
+                }
+            }
+
+            // Get neighborhood and insert into candidates
+            let proximity = &self.nodes[c as usize].links;
+
+            for point in proximity.iter() {
+                if !visited.insert(point) {
+                    continue;
+                }
+                let dist = D::distance(&v_ref, &self.get_db_item(point, &database, rtxn)?);
+
+                res.push((OrderedFloat(dist), point));
+                candidates.push((Reverse(OrderedFloat(dist)), point));
+
+                if res.len() > ef {
+                    // NOTE: could just `res.push_pop_max()` with a single resize ...
+                    let _ = res.pop_max();
+                }
+            }
+        }
+
+        Ok(res)
     }
 
-    /// function to update an items bitmap of graph links
-    fn add_link<D: Distance>(
+    /// items bitmap of graph links -- does this need to be bidirectional ?
+    /// could also do a  (~furthest | new) & links
+    fn add_link_in_layer(
         &mut self,
         p: ItemId,
         q: ItemId,
         database: &Database<D>,
-        wtxn: &RoTxn,
+        rtxn: &RoTxn,
     ) -> Result<()> {
-        let links = &mut self.links[p as usize];
-        links.push(q);
+        // Add the new link
+        self.nodes[p as usize].links.insert(q);
 
-        if links.len() < self.m as u64 {
+        // Might not need to evict other links
+        if self.nodes[p as usize].links.len() <= self.m as u64 {
             return Ok(());
         }
 
-        let src = match database.get(wtxn, &Key::item(0, p))?.unwrap() {
-            DbItem::Item(item) => item,
-            _ => unreachable!(),
-        };
+        let links_snapshot: Vec<ItemId> = self.nodes[p as usize].links.iter().collect();
 
+        let src = self.get_db_item(p, &database, &rtxn)?;
         let mut minheap = BinaryHeap::new();
-        for item_id in links.iter() {
-            let dest = match database.get(wtxn, &Key::item(0, item_id))?.unwrap() {
-                DbItem::Item(item) => item,
-                _ => unreachable!(),
-            };
+
+        for item_id in links_snapshot.into_iter() {
+            let dest = self.get_db_item(item_id, &database, &rtxn)?;
             let d = D::distance(&src, &dest);
             minheap.push((Reverse(OrderedFloat(d)), item_id));
         }
         debug_assert!(minheap.len() > self.m);
 
-        // TODO: turn Vec<RoaringBitmap> into Vec<Struct> which stores neighbors bitmap and current
-        // furthest neighbor id
         let mut new_neighbors = RoaringBitmap::new();
         for _ in 0..self.m {
             if let Some((_, item_id)) = minheap.pop() {
                 new_neighbors.push(item_id);
             }
         }
-        *links = new_neighbors;
+        // Update links
+        self.nodes[p as usize].links = new_neighbors;
 
         Ok(())
-
-        // self.select_heuristic()
-    }
-
-    fn select_heuristic(&self) {
-        todo!()
     }
 }
-
-// struct NodeDistFarther {
-//     id: ItemId,
-//     dist: OrderedFloat<f32>,
-// }
-//
-// impl PartialOrd for NodeDistFarther {
-//     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-//         Reverse(self.dist.partial_cmp(&other.dist))
-//     }
-// }
 
 #[cfg(test)]
 mod tests {

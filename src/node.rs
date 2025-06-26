@@ -13,6 +13,8 @@ use crate::ItemId;
 
 #[derive(Clone, Debug)]
 pub enum DbItem<'a, D: Distance> {
+    // FIXME: Items need to have the links as well since we need vectors during search
+    // however : we can prefix search and just deserialize bitset before we get to level 0 ?
     Item(Item<'a, D>),
     Node(GraphNode<'a>),
 }
@@ -33,6 +35,8 @@ impl<'a, D: Distance> DbItem<'a, D> {
 /// A leaf node which corresponds to the vector inputed
 /// by the user and the distance header.
 pub struct Item<'a, D: Distance> {
+    // NOTE: put the graph info first so we can maybe do greedy search
+
     /// The header of this leaf.
     pub header: D::Header,
     /// The vector of this leaf.
@@ -63,7 +67,7 @@ impl<D: Distance> Item<'_, D> {
 pub struct GraphNode<'a> {
     // A descendants node can only contains references to the leaf nodes.
     // We can get and store their ids directly without the `Mode`.
-    // pub level: u16, 
+    // pub level: u16,
     pub links: Cow<'a, RoaringBitmap>,
 }
 

@@ -2,12 +2,10 @@ use std::path::PathBuf;
 
 use heed::types::{DecodeIgnore, Unit};
 use heed::{RoTxn, RwTxn};
-use rand::distributions::Uniform;
 use rand::{Rng, SeedableRng};
 use roaring::RoaringBitmap;
 
 use crate::distance::Distance;
-use crate::hnsw::HnswBuilder;
 use crate::internals::KeyCodec;
 use crate::item_iter::ItemIter;
 use crate::node::{ItemIds, Item};

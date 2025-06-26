@@ -79,6 +79,9 @@ pub enum Error {
         /// The version that is unknown.
         version: Version,
     },
+
+    #[error("Not a valid Item")]
+    InvalidItemGet,
 }
 
 impl Error {
