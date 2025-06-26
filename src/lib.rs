@@ -1,5 +1,6 @@
 mod distance;
 mod error;
+mod hnsw;
 mod item_iter;
 mod key;
 mod metadata;
@@ -10,7 +11,6 @@ mod roaring;
 mod spaces;
 mod version;
 mod writer;
-mod hnsw;
 
 mod unaligned_vector;
 
@@ -24,7 +24,6 @@ use node_id::{NodeId, NodeMode};
 
 /// The set of types used by the [`Distance`] trait.
 pub mod internals {
-    
 
     pub use crate::distance::{
         NodeHeaderBinaryQuantizedCosine, NodeHeaderCosine, NodeHeaderEuclidean,

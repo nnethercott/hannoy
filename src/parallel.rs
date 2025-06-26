@@ -11,7 +11,7 @@ use memmap2::Mmap;
 use nohash::{BuildNoHashHasher, IntMap, IntSet};
 use roaring::RoaringBitmap;
 
-use crate::internals::{KeyCodec, Item, NodeCodec};
+use crate::internals::{Item, KeyCodec, NodeCodec};
 use crate::key::{Key, Prefix, PrefixCodec};
 use crate::node::DbItem;
 use crate::{Database, Distance, Error, ItemId, Result};
@@ -271,7 +271,6 @@ impl<'t, D: Distance> ImmutableItems<'t, D> {
         let bytes = unsafe { slice::from_raw_parts(ptr, len) };
         NodeCodec::bytes_decode(bytes).map_err(heed::Error::Decoding).map(|node| node.item())
     }
-    
 }
 
 unsafe impl<D> Sync for ImmutableItems<'_, D> {}

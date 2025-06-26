@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::path::PathBuf;
 
 use heed::types::{DecodeIgnore, Unit};
@@ -8,15 +9,12 @@ use roaring::RoaringBitmap;
 use crate::distance::Distance;
 use crate::internals::KeyCodec;
 use crate::item_iter::ItemIter;
-use crate::node::{ItemIds, Item};
-use crate::parallel::{
-    ConcurrentNodeIds, ImmutableItems, ImmutableNodes,
-};
+use crate::node::{Item, ItemIds};
+use crate::parallel::{ConcurrentNodeIds, ImmutableItems, ImmutableNodes};
 use crate::unaligned_vector::UnalignedVector;
 use crate::version::{Version, VersionCodec};
 use crate::{
-    Database, Error, ItemId, Key, Metadata, MetadataCodec, DbItem, Prefix, PrefixCodec,
-    Result,
+    Database, DbItem, Error, ItemId, Key, Metadata, MetadataCodec, Prefix, PrefixCodec, Result,
 };
 
 /// The options available when building the arroy database.
@@ -128,7 +126,12 @@ impl<D: Distance> Writer<D> {
         }
 
         let vector = UnalignedVector::from_slice(vector);
-        let db_item = Item { header: D::new_header(&vector), vector };
+        let db_item = Item {
+            header: D::new_header(&vector),
+            vector,
+            links: Cow::Owned(RoaringBitmap::new()),
+            next: None,
+        };
         self.database.put(wtxn, &Key::item(self.index, item), &DbItem::Item(db_item))?;
         self.database.remap_data_type::<Unit>().put(wtxn, &Key::updated(self.index, item), &())?;
 
@@ -202,8 +205,9 @@ impl<D: Distance> Writer<D> {
             .database
             .remap_data_type::<MetadataCodec>()
             .get(wtxn, &Key::metadata(self.index))?;
-        let entry_points =
-            metadata.as_ref().map_or_else(Vec::new, |metadata| metadata.entry_points.iter().collect());
+        let entry_points = metadata
+            .as_ref()
+            .map_or_else(Vec::new, |metadata| metadata.entry_points.iter().collect());
         // we should not keep a reference to the metadata since they're going to be moved by LMDB
         drop(metadata);
 
@@ -212,13 +216,7 @@ impl<D: Distance> Writer<D> {
         let used_node_ids = self.used_nodes(wtxn, options)?;
         let concurrent_node_ids = ConcurrentNodeIds::new(used_node_ids);
 
-        self.index_hnsw(
-            wtxn,
-            rng,
-            options,
-            concurrent_node_ids,
-            to_insert,
-        )?;
+        self.index_hnsw(wtxn, rng, options, concurrent_node_ids, to_insert)?;
 
         tracing::debug!("write the metadata...");
         let metadata = Metadata {
@@ -253,7 +251,6 @@ impl<D: Distance> Writer<D> {
     ) -> Result<(), Error> {
         todo!()
     }
-
 
     fn reset_and_retrieve_updated_items(
         &self,
@@ -304,11 +301,7 @@ struct FrozzenReader<'a, D: Distance> {
     concurrent_node_ids: &'a ConcurrentNodeIds,
 }
 
-fn clear_nodes<D: Distance>(
-    wtxn: &mut RwTxn,
-    database: Database<D>,
-    index: u16,
-) -> Result<()> {
+fn clear_nodes<D: Distance>(wtxn: &mut RwTxn, database: Database<D>, index: u16) -> Result<()> {
     database.delete(wtxn, &Key::metadata(index))?;
     let mut cursor = database
         .remap_types::<PrefixCodec, DecodeIgnore>()

@@ -139,7 +139,7 @@ impl<D: Distance> HnswBuilder<D> {
                 self.search_single_layer(query, ep, l, self.ef_construction, database, rtxn)?;
 
             // FIXME: limit neighbors as a fn(self.m(layer)) ...
-            while let Some((_, item_id)) = neighbours.pop_min(){
+            while let Some((_, item_id)) = neighbours.pop_min() {
                 // add links in both directions
                 self.add_link_in_layer(query, item_id, database, rtxn);
                 self.add_link_in_layer(item_id, query, database, rtxn);
@@ -151,9 +151,9 @@ impl<D: Distance> HnswBuilder<D> {
         //      Level::NonZero(n) =>{
         //          if n > self.max_level{
         //              set new one
-        //          } 
+        //          }
         //          else{
-        //              bleh 
+        //              bleh
         //          }
         //      },
         //      Level::Zero => {
@@ -264,7 +264,7 @@ impl<D: Distance> HnswBuilder<D> {
 #[cfg(test)]
 mod tests {
     use super::HnswBuilder;
-    use crate::writer::BuildOption;
+    use crate::{distance::Cosine, writer::BuildOption};
     use rand::{rngs::StdRng, SeedableRng};
     use std::collections::HashMap;
 
@@ -274,7 +274,7 @@ mod tests {
         let mut opts = BuildOption::default();
         opts.m = 32;
         let mut rng = StdRng::seed_from_u64(42);
-        let mut hnsw = HnswBuilder::new(&opts);
+        let mut hnsw = HnswBuilder::<Cosine>::new(&opts);
 
         let mut bins = HashMap::new();
         (0..1000000).into_iter().for_each(|_| {

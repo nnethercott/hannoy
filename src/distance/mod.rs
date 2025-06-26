@@ -1,9 +1,11 @@
+use std::borrow::Cow;
 use std::fmt;
 
 pub use binary_quantized_cosine::{BinaryQuantizedCosine, NodeHeaderBinaryQuantizedCosine};
 use bytemuck::{Pod, Zeroable};
 pub use cosine::{Cosine, NodeHeaderCosine};
 pub use euclidean::{Euclidean, NodeHeaderEuclidean};
+use roaring::RoaringBitmap;
 
 use crate::node::Item;
 use crate::unaligned_vector::{UnalignedVector, UnalignedVectorCodec};
@@ -14,7 +16,12 @@ mod euclidean;
 
 fn new_leaf<D: Distance>(vec: Vec<f32>) -> Item<'static, D> {
     let vector = UnalignedVector::from_vec(vec);
-    Item { header: D::new_header(&vector), vector }
+    Item {
+        header: D::new_header(&vector),
+        vector,
+        links: Cow::Owned(RoaringBitmap::new()),
+        next: None,
+    }
 }
 
 /// A trait used by arroy to compute the distances,
@@ -40,4 +47,3 @@ pub trait Distance: Send + Sync + Sized + Clone + fmt::Debug + 'static {
 
     fn norm_no_header(v: &UnalignedVector<Self::VectorCodec>) -> f32;
 }
-

@@ -11,8 +11,7 @@ Some links:
   - probably need something like
     ```rust
     struct Item{
-      n_links: u8,
-      links: <RoaringBitMap as heed:BytesEncode>,  // <- length determined from `n_links`
+      links: <RoaringBitMap as heed:BytesEncode>,
       next: u8, // <- id of closest doc in layer below
       header: NodeHeader,
       vector: UnalignedVector,
