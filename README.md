@@ -6,10 +6,10 @@ Some links:
 - [faiss hnsw.cpp](https://github.com/facebookresearch/faiss/blob/main/faiss/impl/HNSW.cpp)
 - [hnsw.rs](https://github.com/rust-cv/hnsw)
 
-Some notes and ideas:
+## Some notes and ideas:
 - db schema for arroy may not be appropriate for an hnsw approach. Search works in arroy by retrieving splitting planes and computing the margin while in hnsw we need follow graph edges. If we store edges separately we'll need to make 2 requests to retrieve a) the edges/links and b) for each link a vector
   - probably need something like
-    ```
+    ```rust
     struct Item{
       n_links: u8,
       links: <RoaringBitMap as heed:BytesEncode>,  // <- length determined from `n_links`
