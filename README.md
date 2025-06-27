@@ -22,3 +22,5 @@ Some links:
   - simpler with one `Node` variant than before (`Item`, and `Tree`)
 
 - building should be cheaper than arroy since no new vectors are generated; we just need to keep track of graph edges. Also no duplicated trees should cut cost down a ton
+- idea: a lazy init feature for projecting any node from layer _l_ to layer 0 
+  - we'd keep a list of links/edges that need updating in db & perform that op after read

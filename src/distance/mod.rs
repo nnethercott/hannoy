@@ -7,20 +7,18 @@ pub use cosine::{Cosine, NodeHeaderCosine};
 pub use euclidean::{Euclidean, NodeHeaderEuclidean};
 use roaring::RoaringBitmap;
 
-use crate::node::Item;
+use crate::node::Node;
 use crate::unaligned_vector::{UnalignedVector, UnalignedVectorCodec};
 
 mod binary_quantized_cosine;
 mod cosine;
 mod euclidean;
 
-fn new_leaf<D: Distance>(vec: Vec<f32>) -> Item<'static, D> {
+fn new_leaf<D: Distance>(vec: Vec<f32>) -> Node<'static, D> {
     let vector = UnalignedVector::from_vec(vec);
-    Item {
+    Node {
         header: D::new_header(&vector),
         vector,
-        links: Cow::Owned(RoaringBitmap::new()),
-        next: None,
     }
 }
 
@@ -39,9 +37,9 @@ pub trait Distance: Send + Sync + Sized + Clone + fmt::Debug + 'static {
     fn new_header(vector: &UnalignedVector<Self::VectorCodec>) -> Self::Header;
 
     /// Returns a non-normalized distance.
-    fn distance(p: &Item<Self>, q: &Item<Self>) -> f32;
+    fn distance(p: &Node<Self>, q: &Node<Self>) -> f32;
 
-    fn norm(item: &Item<Self>) -> f32 {
+    fn norm(item: &Node<Self>) -> f32 {
         Self::norm_no_header(&item.vector)
     }
 

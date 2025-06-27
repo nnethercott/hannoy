@@ -9,7 +9,7 @@ use roaring::RoaringBitmap;
 use crate::distance::Distance;
 use crate::internals::KeyCodec;
 use crate::item_iter::ItemIter;
-use crate::node::{Item, ItemIds};
+use crate::node::{HnswNode, ItemIds, Node};
 use crate::parallel::{ConcurrentNodeIds, ImmutableItems, ImmutableNodes};
 use crate::unaligned_vector::UnalignedVector;
 use crate::version::{Version, VersionCodec};
@@ -126,7 +126,7 @@ impl<D: Distance> Writer<D> {
         }
 
         let vector = UnalignedVector::from_slice(vector);
-        let db_item = Item {
+        let db_item = HnswNode {
             header: D::new_header(&vector),
             vector,
             links: Cow::Owned(RoaringBitmap::new()),

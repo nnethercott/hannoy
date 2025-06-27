@@ -19,7 +19,7 @@ pub use error::Error;
 
 use key::{Key, Prefix, PrefixCodec};
 use metadata::{Metadata, MetadataCodec};
-use node::{DbItem, NodeCodec};
+use node::{DbItem, HnswNodeCodec};
 use node_id::{NodeId, NodeMode};
 
 /// The set of types used by the [`Distance`] trait.
@@ -29,7 +29,7 @@ pub mod internals {
         NodeHeaderBinaryQuantizedCosine, NodeHeaderCosine, NodeHeaderEuclidean,
     };
     pub use crate::key::KeyCodec;
-    pub use crate::node::{Item, NodeCodec};
+    pub use crate::node::{Node, HnswNodeCodec};
     pub use crate::unaligned_vector::{SizeMismatch, UnalignedVector, UnalignedVectorCodec};
 }
 
@@ -42,7 +42,7 @@ pub mod distances {
 pub type Result<T, E = Error> = std::result::Result<T, E>;
 
 /// The database required by arroy for reading or writing operations.
-pub type Database<D> = heed::Database<internals::KeyCodec, NodeCodec<D>>;
+pub type Database<D> = heed::Database<internals::KeyCodec, HnswNodeCodec<D>>;
 
 /// An identifier for the items stored in the database.
 pub type ItemId = u32;

@@ -13,12 +13,12 @@ use roaring::RoaringBitmap;
 
 use crate::{
     key::Key,
-    node::{DbItem, Item, PrefixItem, PrefixNodeCodec},
+    node::{DbItem, Node, NodeCodec},
     writer::BuildOption,
     Database, Distance, ItemId, Result,
 };
 
-struct HnswNode {
+struct NodeState {
     pub level: usize,
     // neigbours in my layer
     pub links: RoaringBitmap,
@@ -30,10 +30,10 @@ pub(crate) struct HnswBuilder<D> {
     m: usize,
     assign_probas: Vec<f32>,
     ef_construction: usize,
-    max_level: AtomicUsize,
+    max_level: usize,
     entrypoints: Vec<ItemId>,
     // TODO: this might need to become a hashmap cause we don't push in a linear order
-    layers: Vec<HnswNode>,
+    layers: Vec<NodeState>,
     metric: PhantomData<D>,
 }
 
@@ -45,7 +45,7 @@ impl<D: Distance> HnswBuilder<D> {
             m: opts.m,
             assign_probas,
             ef_construction: opts.ef_construction,
-            max_level: AtomicUsize::new(0),
+            max_level: 0,
             entrypoints: vec![],
             layers: vec![],
             metric: PhantomData,
@@ -85,16 +85,14 @@ impl<D: Distance> HnswBuilder<D> {
         R: Rng + ?Sized,
     {
         // generate a random level for each point
-        let levels: Vec<_> = (0..to_insert.len())
+        let mut levels: Vec<_> = (0..to_insert.len())
             .into_iter()
             .map(|_| {
                 let level = self.get_random_level(rng);
-                self.max_level.fetch_max(level, Ordering::Relaxed);
+                self.max_level = self.max_level.max(level);
                 level
             })
             .collect();
-
-        let max_level = self.max_level.load(Ordering::Relaxed);
 
         // 1. sort levels and indices by level asc
         // 2. insert sequential
@@ -106,25 +104,28 @@ impl<D: Distance> HnswBuilder<D> {
         item_id: ItemId,
         database: &Database<D>,
         rtxn: &'a RoTxn<'a>,
-    ) -> Result<Item<'a, D>> {
-        match database.get(rtxn, &Key::item(0, item_id))?.unwrap() {
-            DbItem::Item(item) => Ok(item),
-            _ => Err(crate::Error::InvalidItemGet),
-        }
+    ) -> Result<Node<'a, D>> {
+        database
+            .remap_data_type::<NodeCodec<D>>()
+            .get(rtxn, &Key::item(0, item_id))?
+            .ok_or(crate::Error::InvalidItemGet)
     }
 
-    fn search_layer_build(
+    fn entry_point(&self, q: ItemId) -> ItemId {
+        return self.entrypoints[0];
+    }
+
+    fn insert(
         &mut self,
         query: ItemId,
         level: usize,
         database: &Database<D>,
         rtxn: &RoTxn,
     ) -> Result<()> {
-        let mut ep = 0;
-        let max_level = self.max_level.load(Ordering::Relaxed);
+        let mut ep = self.entry_point(query);
 
         // greedy search with: ef = 1
-        for l in (level + 1..=max_level).rev() {
+        for l in (level + 1..=self.max_level).rev() {
             let mut neighbours = self.search_single_layer(query, ep, l, 1, database, rtxn)?;
             ep = neighbours
                 .pop_min()
@@ -133,15 +134,15 @@ impl<D: Distance> HnswBuilder<D> {
         }
 
         // beam search with: ef = ef_construction
-        for l in (0..=level.min(max_level)).rev() {
+        for l in (0..=level.min(self.max_level)).rev() {
             let mut neighbours =
                 self.search_single_layer(query, ep, l, self.ef_construction, database, rtxn)?;
 
             // FIXME: limit neighbors as a fn(self.m(layer)) ...
-            while let Some((_, item_id)) = neighbours.pop_min() {
+            while let Some((_, n)) = neighbours.pop_min() {
                 // add links in both directions
-                self.add_link_in_layer(query, item_id, database, rtxn);
-                self.add_link_in_layer(item_id, query, database, rtxn);
+                self.add_link(query, n, database, rtxn);
+                self.add_link(n, query, database, rtxn);
                 //helper.add_link_in_layer(item_id, query)
             }
         }
@@ -163,6 +164,7 @@ impl<D: Distance> HnswBuilder<D> {
         Ok(())
     }
 
+    // FIXME: return a vec of item ids instead of a minmax heap
     #[allow(clippy::too_many_arguments)]
     fn search_single_layer(
         &self,
@@ -177,10 +179,11 @@ impl<D: Distance> HnswBuilder<D> {
         let mut res = MinMaxHeap::with_capacity(ef);
         let mut visited = RoaringBitmap::new();
 
-        let v_ref = self.get_db_item(q, database, rtxn)?;
-        let w = self.get_db_item(ep, database, rtxn)?;
-        let dist = D::distance(&v_ref, &w);
+        let v_item = self.get_db_item(q, database, rtxn)?;
+        let ep_item = self.get_db_item(ep, database, rtxn)?;
+        let dist = D::distance(&v_item, &ep_item);
 
+        // Register `ep` as visited
         candidates.push((Reverse(OrderedFloat(dist)), ep));
         res.push((OrderedFloat(dist), ep));
         visited.push(ep);
@@ -196,11 +199,12 @@ impl<D: Distance> HnswBuilder<D> {
             // Get neighborhood and insert into candidates
             let proximity = &self.layers[c as usize].links;
 
+            // wonder if we can par_iter this ?
             for point in proximity.iter() {
                 if !visited.insert(point) {
                     continue;
                 }
-                let dist = D::distance(&v_ref, &self.get_db_item(point, &database, rtxn)?);
+                let dist = D::distance(&v_item, &self.get_db_item(point, &database, rtxn)?);
 
                 res.push((OrderedFloat(dist), point));
                 candidates.push((Reverse(OrderedFloat(dist)), point));
@@ -215,8 +219,8 @@ impl<D: Distance> HnswBuilder<D> {
         Ok(res)
     }
 
-    /// could also do a  (~furthest | new) & links
-    fn add_link_in_layer(
+    /// TODO: optimize; avoid recalculating distances
+    fn add_link(
         &mut self,
         p: ItemId,
         q: ItemId,

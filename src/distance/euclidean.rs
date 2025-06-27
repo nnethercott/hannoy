@@ -3,7 +3,7 @@ use std::fmt;
 use bytemuck::{Pod, Zeroable};
 
 use crate::distance::Distance;
-use crate::node::Item;
+use crate::node::Node;
 use crate::spaces::simple::{dot_product, euclidean_distance};
 use crate::unaligned_vector::UnalignedVector;
 
@@ -39,7 +39,7 @@ impl Distance for Euclidean {
         NodeHeaderEuclidean { bias: 0.0 }
     }
 
-    fn distance(p: &Item<Self>, q: &Item<Self>) -> f32 {
+    fn distance(p: &Node<Self>, q: &Node<Self>) -> f32 {
         euclidean_distance(&p.vector, &q.vector)
     }
 
