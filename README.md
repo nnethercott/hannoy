@@ -12,7 +12,7 @@ Some links:
     ```rust
     struct Item{
       links: <RoaringBitMap as heed:BytesEncode>,
-      next: u8, // <- id of closest doc in layer below
+      next: u32, // <- id of closest doc in layer below
       header: NodeHeader,
       vector: UnalignedVector,
       maybe_padding: todo!(),

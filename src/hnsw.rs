@@ -18,7 +18,6 @@ use crate::{
     Database, Distance, ItemId, Result,
 };
 
-// TODO: this should be the struct from node.rs
 struct HnswNode {
     pub level: usize,
     // neigbours in my layer
@@ -27,7 +26,6 @@ struct HnswNode {
     pub next: ItemId,
 }
 
-// could be worth to call build with a db ref, then build a helper struct storing that ...
 pub(crate) struct HnswBuilder<D> {
     m: usize,
     assign_probas: Vec<f32>,
@@ -35,7 +33,7 @@ pub(crate) struct HnswBuilder<D> {
     max_level: AtomicUsize,
     entrypoints: Vec<ItemId>,
     // TODO: this might need to become a hashmap cause we don't push in a linear order
-    nodes: Vec<HnswNode>,
+    layers: Vec<HnswNode>,
     metric: PhantomData<D>,
 }
 
@@ -49,7 +47,7 @@ impl<D: Distance> HnswBuilder<D> {
             ef_construction: opts.ef_construction,
             max_level: AtomicUsize::new(0),
             entrypoints: vec![],
-            nodes: vec![],
+            layers: vec![],
             metric: PhantomData,
         }
     }
@@ -100,6 +98,7 @@ impl<D: Distance> HnswBuilder<D> {
 
         // 1. sort levels and indices by level asc
         // 2. insert sequential
+        todo!()
     }
 
     fn get_db_item<'a>(
@@ -117,7 +116,7 @@ impl<D: Distance> HnswBuilder<D> {
     fn search_layer_build(
         &mut self,
         query: ItemId,
-        level: usize, // turn this into enum and implement range iter on that
+        level: usize,
         database: &Database<D>,
         rtxn: &RoTxn,
     ) -> Result<()> {
@@ -164,8 +163,6 @@ impl<D: Distance> HnswBuilder<D> {
         Ok(())
     }
 
-    // TODO: clean this a bit
-    // NOTE: won't work right now cause self.nodes has no guarantee on order ...
     #[allow(clippy::too_many_arguments)]
     fn search_single_layer(
         &self,
@@ -180,7 +177,6 @@ impl<D: Distance> HnswBuilder<D> {
         let mut res = MinMaxHeap::with_capacity(ef);
         let mut visited = RoaringBitmap::new();
 
-        // i don't like this, fix later
         let v_ref = self.get_db_item(q, database, rtxn)?;
         let w = self.get_db_item(ep, database, rtxn)?;
         let dist = D::distance(&v_ref, &w);
@@ -198,7 +194,7 @@ impl<D: Distance> HnswBuilder<D> {
             }
 
             // Get neighborhood and insert into candidates
-            let proximity = &self.nodes[c as usize].links;
+            let proximity = &self.layers[c as usize].links;
 
             for point in proximity.iter() {
                 if !visited.insert(point) {
@@ -219,7 +215,6 @@ impl<D: Distance> HnswBuilder<D> {
         Ok(res)
     }
 
-    /// items bitmap of graph links -- does this need to be bidirectional ?
     /// could also do a  (~furthest | new) & links
     fn add_link_in_layer(
         &mut self,
@@ -229,14 +224,14 @@ impl<D: Distance> HnswBuilder<D> {
         rtxn: &RoTxn,
     ) -> Result<()> {
         // Add the new link
-        self.nodes[p as usize].links.insert(q);
+        self.layers[p as usize].links.insert(q);
 
-        // Might not need to evict other links
-        if self.nodes[p as usize].links.len() <= self.m as u64 {
+        // Only evict neighbor if we're over capacity
+        if self.layers[p as usize].links.len() <= self.m as u64 {
             return Ok(());
         }
 
-        let links_snapshot: Vec<ItemId> = self.nodes[p as usize].links.iter().collect();
+        let links_snapshot: Vec<ItemId> = self.layers[p as usize].links.iter().collect();
 
         let src = self.get_db_item(p, &database, &rtxn)?;
         let mut minheap = BinaryHeap::new();
@@ -255,7 +250,7 @@ impl<D: Distance> HnswBuilder<D> {
             }
         }
         // Update links
-        self.nodes[p as usize].links = new_neighbors;
+        self.layers[p as usize].links = new_neighbors;
 
         Ok(())
     }
