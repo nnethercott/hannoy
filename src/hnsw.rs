@@ -13,7 +13,7 @@ use roaring::RoaringBitmap;
 
 use crate::{
     key::Key,
-    node::{DbItem, Item},
+    node::{DbItem, Item, PrefixItem, PrefixNodeCodec},
     writer::BuildOption,
     Database, Distance, ItemId, Result,
 };
