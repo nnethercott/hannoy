@@ -14,10 +14,8 @@ use crate::ItemId;
 
 #[derive(Clone, Debug)]
 pub enum DbItem<'a, D: Distance> {
-    // FIXME: Items need to have the links as well since we need vectors during search
-    // however : we can prefix search and just deserialize bitset before we get to level 0 ?
     Item(Item<'a, D>),
-    Node(GraphNode<'a>),
+    // keeping this in an enum just in case
 }
 
 const NODE_TAG: u8 = 0;
@@ -48,7 +46,13 @@ pub struct Item<'a, D: Distance> {
 
 impl<D: Distance> fmt::Debug for Item<'_, D> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Leaf").field("header", &self.header).field("vector", &self.vector).finish()
+        let links = self.links.iter().collect::<Vec<_>>();
+        f.debug_struct("Leaf")
+            .field("header", &self.header)
+            .field("vector", &self.vector)
+            .field("links", &links)
+            .field("next", &self.next)
+            .finish()
     }
 }
 
@@ -73,21 +77,6 @@ impl<D: Distance> Item<'_, D> {
             header: self.header,
             vector: Cow::Owned(self.vector.into_owned()),
         }
-    }
-}
-
-#[derive(Clone)]
-pub struct GraphNode<'a> {
-    // A descendants node can only contains references to the leaf nodes.
-    // We can get and store their ids directly without the `Mode`.
-    // pub level: u16,
-    pub links: Cow<'a, RoaringBitmap>,
-}
-
-impl fmt::Debug for GraphNode<'_> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let links = self.links.iter().collect::<Vec<_>>();
-        f.debug_struct("Links").field("links", &links).finish()
     }
 }
 
@@ -139,9 +128,11 @@ impl<'a, D: Distance> BytesEncode<'a> for NodeCodec<D> {
         match item {
             DbItem::Item(Item { links, next, header, vector }) => {
                 bytes.push(NODE_TAG);
-                let links_size = links.serialized_size() as u16;
-                bytes.extend_from_slice(&links_size.to_be_bytes());
-                links.serialize_into(&mut bytes)?;
+                bytes.extend_from_slice(bytes_of(header));
+                let vbytes = vector.as_bytes();
+                let len = vbytes.len() as u16;
+                bytes.extend_from_slice(&len.to_be_bytes());
+                bytes.extend(vbytes);
 
                 if let Some(item_id) = next {
                     bytes.push(1);
@@ -149,12 +140,6 @@ impl<'a, D: Distance> BytesEncode<'a> for NodeCodec<D> {
                 } else {
                     bytes.push(0);
                 }
-
-                bytes.extend_from_slice(bytes_of(header));
-                bytes.extend_from_slice(vector.as_bytes());
-            }
-            DbItem::Node(GraphNode { links }) => {
-                bytes.push(LINKS_TAG);
                 links.serialize_into(&mut bytes)?;
             }
         }
@@ -168,13 +153,13 @@ impl<'a, D: Distance> BytesDecode<'a> for NodeCodec<D> {
     fn bytes_decode(bytes: &'a [u8]) -> Result<Self::DItem, BoxedError> {
         match bytes {
             [NODE_TAG, bytes @ ..] => {
-                let links_size = BigEndian::read_u16(bytes);
-                let bytes = &bytes[std::mem::size_of_val(&links_size) as usize..];
-                let links: Cow<'_, RoaringBitmap> = Cow::Owned(
-                    RoaringBitmap::deserialize_from(&bytes[..links_size as usize]).unwrap(),
-                );
-                let bytes = &bytes[links_size as usize..];
+                let (header_bytes, bytes) = bytes.split_at(size_of::<D::Header>());
+                let header: D::Header = pod_read_unaligned(header_bytes);
+                let len = BigEndian::read_u16(bytes) as usize;
+                let bytes = &bytes[std::mem::size_of::<u16>()..];
+                let vector = UnalignedVector::<D::VectorCodec>::from_bytes(&bytes[..len]).unwrap();
 
+                let bytes = &bytes[len..];
                 let (next, bytes) = match bytes[0] {
                     1 => (
                         Some(BigEndian::read_u32(&bytes[1..])),
@@ -183,19 +168,44 @@ impl<'a, D: Distance> BytesDecode<'a> for NodeCodec<D> {
                     0 => (None, &bytes[1..]),
                     _ => unreachable!(),
                 };
-
-                let (header_bytes, remaining) = bytes.split_at(size_of::<D::Header>());
-                let header: D::Header = pod_read_unaligned(header_bytes);
-                let vector = UnalignedVector::<D::VectorCodec>::from_bytes(remaining).unwrap();
+                let links: Cow<'_, RoaringBitmap> =
+                    Cow::Owned(RoaringBitmap::deserialize_from(bytes).unwrap());
 
                 Ok(DbItem::Item(Item { header, vector, links, next }))
             }
-            [LINKS_TAG, bytes @ ..] => Ok(DbItem::Node(GraphNode {
-                links: Cow::Owned(RoaringBitmap::deserialize_from(bytes)?),
-            })),
-            unknown => panic!(
-                "Did not recognize node tag type: {unknown:?} while decoding a node from v0.7.0"
-            ),
+            unknown => panic!("Did not recognize node tag type: {unknown:?}"),
+        }
+    }
+}
+
+pub struct PrefixItem<'a, D: Distance> {
+    /// The header of this leaf.
+    pub header: D::Header,
+    /// The vector of this leaf.
+    pub vector: Cow<'a, UnalignedVector<D::VectorCodec>>,
+}
+
+impl<D: Distance> fmt::Debug for PrefixItem<'_, D> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Leaf").field("header", &self.header).field("vector", &self.vector).finish()
+    }
+}
+pub struct PrefixNodeCodec<D>(D);
+
+impl<'a, D: Distance> BytesDecode<'a> for PrefixNodeCodec<D> {
+    type DItem = PrefixItem<'a, D>;
+
+    fn bytes_decode(bytes: &'a [u8]) -> Result<Self::DItem, BoxedError> {
+        match bytes {
+            [NODE_TAG, bytes @ ..] => {
+                let (header_bytes, bytes) = bytes.split_at(size_of::<D::Header>());
+                let header: D::Header = pod_read_unaligned(header_bytes);
+                let len = BigEndian::read_u16(bytes) as usize;
+                let bytes = &bytes[std::mem::size_of::<u16>()..];
+                let vector = UnalignedVector::<D::VectorCodec>::from_bytes(&bytes[..len]).unwrap();
+                Ok(PrefixItem { header, vector })
+            }
+            unknown => panic!("Did not recognize node tag type: {unknown:?}"),
         }
     }
 }
@@ -203,7 +213,7 @@ impl<'a, D: Distance> BytesDecode<'a> for NodeCodec<D> {
 #[cfg(test)]
 mod tests {
     use super::{DbItem, Item, NodeCodec};
-    use crate::{distance::Cosine, internals::UnalignedVector, Distance};
+    use crate::{distance::Cosine, internals::UnalignedVector, node::PrefixNodeCodec, Distance};
     use heed::{BytesDecode, BytesEncode};
     use roaring::RoaringBitmap;
     use std::borrow::Cow;
@@ -229,5 +239,26 @@ mod tests {
 
         dbg!("{:?}", &db_item2);
         dbg!("{:?}", &db_item);
+    }
+
+    #[test]
+    fn test_prefix_codec() {
+        type D = Cosine;
+
+        let vector = UnalignedVector::from_vec(vec![1.0f32, 2.0f32]);
+        let header = D::new_header(&vector);
+        let item = Item { vector, header, next: None, links: Cow::Owned(RoaringBitmap::new()) };
+        let db_item = DbItem::Item(item.clone());
+
+        let bytes = NodeCodec::<D>::bytes_encode(&db_item);
+        assert!(bytes.is_ok());
+        let bytes = bytes.unwrap();
+
+        let new_item = PrefixNodeCodec::<D>::bytes_decode(bytes.as_ref());
+        assert!(new_item.is_ok());
+        let new_item = new_item.unwrap();
+
+        assert!(matches!(new_item.vector, Cow::Borrowed(_)));
+        assert_eq!(new_item.vector.as_bytes(), item.vector.as_bytes());
     }
 }
