@@ -24,3 +24,7 @@ Some links:
 - building should be cheaper than arroy since no new vectors are generated; we just need to keep track of graph edges. Also no duplicated trees should cut cost down a ton
 - idea: a lazy init feature for projecting any node from layer _l_ to layer 0 
   - we'd keep a list of links/edges that need updating in db & perform that op after read
+
+- apparently a node is supposed to be present on all layers below it, e.g. if lvl(i)=L then for any l<L i is in layer l too
+  - at the end (if we want) we can prune the duplicated nodes and determine a connecting id
+  - we may need to do this when writing to db since ids are replicated. however, we could also just assign new ids for the replicas before write ...

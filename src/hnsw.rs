@@ -1,9 +1,4 @@
-use std::{
-    cmp::Reverse,
-    collections::BinaryHeap,
-    marker::PhantomData,
-    sync::atomic::{AtomicUsize, Ordering},
-};
+use std::{cmp::Reverse, collections::BinaryHeap, marker::PhantomData};
 
 use heed::{RoTxn, RwTxn};
 use min_max_heap::MinMaxHeap;
@@ -11,6 +6,7 @@ use nohash::IntMap;
 use ordered_float::OrderedFloat;
 use rand::{distributions::WeightedIndex, prelude::Distribution, Rng};
 use roaring::RoaringBitmap;
+use smallvec::{smallvec, SmallVec};
 
 use crate::{
     key::Key,
@@ -19,43 +15,42 @@ use crate::{
     Database, Distance, ItemId, Result,
 };
 
-struct NodeState {
-    pub level: usize,
-    // neigbours in my layer
-    pub links: RoaringBitmap,
-    // who i connect to in the next layer, during search
-    pub next: ItemId,
+type Link = (OrderedFloat<f32>, ItemId);
+
+/// State with stack-allocated graph edges
+struct NodeState<const M: usize> {
+    // next is always ourselves in the subsequent layer
+    links: SmallVec<[Link; M]>,
 }
 
-pub(crate) struct HnswBuilder<D> {
-    m: usize,
+pub(crate) struct HnswBuilder<D, const M: usize, const M0: usize> {
     assign_probas: Vec<f32>,
     ef_construction: usize,
     max_level: usize,
     entrypoints: Vec<ItemId>,
-    layers: IntMap<ItemId, NodeState>,
-    metric: PhantomData<D>,
+    layers: Vec<IntMap<ItemId, NodeState<M0>>>,
+    // last: IntMap<ItemId, NodeState<M>>,
+    distance: PhantomData<D>,
 }
 
-impl<D: Distance> HnswBuilder<D> {
+impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
     pub fn new(opts: &BuildOption) -> Self {
-        let assign_probas = Self::get_default_probas(opts.m);
+        let assign_probas = Self::get_default_probas();
 
         Self {
-            m: opts.m,
             assign_probas,
             ef_construction: opts.ef_construction,
             max_level: 0,
             entrypoints: vec![],
-            layers: IntMap::default(),
-            metric: PhantomData,
+            layers: vec![],
+            distance: PhantomData,
         }
     }
 
     /// build quantiles from an x ~ exp(1/ln(m))
-    fn get_default_probas(m: usize) -> Vec<f32> {
-        let mut assign_probas = Vec::with_capacity(m);
-        let level_factor = 1.0 / (m as f32).ln();
+    fn get_default_probas() -> Vec<f32> {
+        let mut assign_probas = Vec::with_capacity(M);
+        let level_factor = 1.0 / (M as f32).ln();
         let mut level = 0;
         loop {
             // P(L<x<L+1) = P(x<L+1) - P(x<L)
@@ -80,8 +75,13 @@ impl<D: Distance> HnswBuilder<D> {
         dist.sample(rng) as usize
     }
 
-    pub fn build<R>(&mut self, to_insert: RoaringBitmap, wtxn: &RwTxn, rng: &mut R)
-    where
+    pub fn build<R>(
+        &mut self,
+        to_insert: RoaringBitmap,
+        database: &Database<D>,
+        rtxn: &RoTxn,
+        rng: &mut R,
+    ) where
         R: Rng + ?Sized,
     {
         // generate a random level for each point
@@ -93,25 +93,33 @@ impl<D: Distance> HnswBuilder<D> {
                 level
             })
             .collect();
+        levels.sort_by(|a, b| b.cmp(a));
 
-        // 1. sort levels and indices by level asc
-        // 2. insert sequential
-        todo!()
+        for _ in 0..self.max_level {
+            self.layers.push(IntMap::default());
+        }
+
+        // perform the insert
+        for (item_id, level) in to_insert.iter().zip(levels) {
+            let _ = self.insert(item_id, level, database, rtxn);
+        }
     }
 
+    /// Fetches only vector info from lmdb using special codec
     fn get_db_item<'a>(
         &'a self,
-        item_id: ItemId,
+        item_id: &ItemId,
         database: &Database<D>,
         rtxn: &'a RoTxn<'a>,
     ) -> Result<Node<'a, D>> {
         database
             .remap_data_type::<NodeCodec<D>>()
-            .get(rtxn, &Key::item(0, item_id))?
+            .get(rtxn, &Key::item(0, *item_id))?
             .ok_or(crate::Error::InvalidItemGet)
     }
 
-    fn entry_point(&self, q: ItemId) -> ItemId {
+    // TODO: handle inserting these
+    fn entry_point(&self) -> ItemId {
         return self.entrypoints[0];
     }
 
@@ -122,74 +130,67 @@ impl<D: Distance> HnswBuilder<D> {
         database: &Database<D>,
         rtxn: &RoTxn,
     ) -> Result<()> {
-        let mut ep = self.entry_point(query);
+        let mut eps = vec![self.entry_point()];
 
-        // greedy search with: ef = 1
-        let start = (level + 1).max(self.max_level);
-        for l in (start..=self.max_level).rev() {
-            let mut neighbours = self.search_single_layer(query, ep, l, 1, database, rtxn)?;
-            ep = neighbours
-                .pop_min()
-                .map(|(_, n)| n)
-                .expect("Not a single nearest neighbor was found");
-            // set to ep.next
+        // Greedy search with: ef = 1
+        for lvl in (level + 1..=self.max_level).rev() {
+            let mut neighbours = self.explore_layer(&query, &eps, lvl, 1, database, rtxn)?;
+            let closest = neighbours.pop_min().map(|(_, n)| n).expect("No neighbor was found");
+            eps = vec![closest];
         }
 
-        // beam search with: ef = ef_construction
-        for l in (0..=level.min(self.max_level)).rev() {
+        // Beam search with: ef = ef_construction
+        for lvl in (0..=level.min(self.max_level)).rev() {
+            self.create_node(query, lvl);
+
             let mut neighbours =
-                self.search_single_layer(query, ep, l, self.ef_construction, database, rtxn)?;
+                self.explore_layer(&query, &eps, lvl, self.ef_construction, database, rtxn)?;
 
-            // FIXME: limit neighbors as a fn(self.m(layer)) ...
+            // FIXME: limit neighbors with algo 4; right now we have ef_construction many
 
-            while let Some((OrderedFloat(f), n)) = neighbours.pop_min() {
+            eps.clear();
+            while let Some((dist, n)) = neighbours.pop_min() {
                 // add links in both directions
-                self.add_link(query, n, database, rtxn);
-                self.add_link(n, query, database, rtxn);
-                //helper.add_link_in_layer(item_id, query)
+                self.add_link(query, (dist, n), lvl, database, rtxn);
+                self.add_link(n, (dist, query), lvl, database, rtxn);
+
+                // Push each near point to the search list for next layer
+                eps.push(n);
             }
         }
-
-        // match level{
-        //      Level::NonZero(n) =>{
-        //          if n > self.max_level{
-        //              set new one
-        //          }
-        //          else{
-        //              bleh
-        //          }
-        //      },
-        //      Level::Zero => {
-        //          do something
-        //      }
-        // }
 
         Ok(())
     }
 
-    // FIXME: return a vec of item ids instead of a minmax heap
+    fn create_node(&mut self, item_id: ItemId, level: usize) {
+        self.layers[level].insert(item_id, NodeState { links: smallvec![] });
+    }
+
     #[allow(clippy::too_many_arguments)]
-    fn search_single_layer(
+    fn explore_layer(
         &self,
-        q: ItemId,
-        ep: ItemId,
+        q: &ItemId,
+        eps: &[ItemId],
         level: usize,
         ef: usize,
         database: &Database<D>,
         rtxn: &RoTxn,
-    ) -> Result<MinMaxHeap<(OrderedFloat<f32>, ItemId)>> {
+    ) -> Result<MinMaxHeap<Link>> {
         let mut candidates = BinaryHeap::new();
         let mut res = MinMaxHeap::with_capacity(ef);
         let mut visited = RoaringBitmap::new();
 
         let vq = self.get_db_item(q, database, rtxn)?;
-        let ve = self.get_db_item(ep, database, rtxn)?;
-        let dist = D::distance(&vq, &ve);
 
-        // Register `ep` as visited
-        candidates.push((Reverse(OrderedFloat(dist)), ep));
-        res.push((OrderedFloat(dist), ep));
-        visited.push(ep);
+        // Register all `eps` as visited and populate candidates
+        for ep in eps {
+            let ve = self.get_db_item(ep, database, rtxn)?;
+            let dist = D::distance(&vq, &ve);
+
+            candidates.push((Reverse(OrderedFloat(dist)), *ep));
+            res.push((OrderedFloat(dist), *ep));
+            visited.push(*ep);
+        }
 
         while let Some((Reverse(OrderedFloat(f)), c)) = candidates.pop() {
             // stopping criteria
@@ -199,18 +200,19 @@ impl<D: Distance> HnswBuilder<D> {
                 }
             }
 
-            // Get neighborhood and insert into candidates
-            let proximity = match self.layers.get(&c) {
-                Some(s) => &s.links,
-                None => &RoaringBitmap::new(),
+            // Get neighborhood of candidate
+            let proximity = match self.layers[level].get(&c) {
+                Some(node) => &node.links,
+                None => unreachable!(),
             };
 
-            // wonder if we can par_iter this ?
-            for point in proximity.iter() {
+            // can we par_iter distance computations ?
+            for &(_, point) in proximity.iter() {
                 if !visited.insert(point) {
                     continue;
                 }
-                let dist = D::distance(&vq, &self.get_db_item(point, &database, rtxn)?);
+                // distance between QUERY and point, not between neighbor and point
+                let dist = D::distance(&vq, &self.get_db_item(&point, &database, rtxn)?);
 
                 res.push((OrderedFloat(dist), point));
                 candidates.push((Reverse(OrderedFloat(dist)), point));
@@ -225,43 +227,36 @@ impl<D: Distance> HnswBuilder<D> {
         Ok(res)
     }
 
-    // TODO: optimize; avoid recalculating distances
-    // probably store the neighbors as a vec<(u32, f32)>
     fn add_link(
         &mut self,
         p: ItemId,
-        q: ItemId,
+        q: Link,
+        level: usize,
         database: &Database<D>,
         rtxn: &RoTxn,
     ) -> Result<()> {
-        // Add the new link
-        self.layers.get_mut(&p).ok_or(crate::Error::NotInIntMap(p))?.links.insert(q);
+        // Get links for p
+        let links = &mut self.layers[level].get_mut(&p).ok_or(crate::Error::NotInIntMap(p))?.links;
+        let cap = if level == 0 { M0 } else { M };
 
-        // Only evict neighbor if we're over capacity
-        if self.layers.get(&p).ok_or(crate::Error::NotInIntMap(p))?.links.len() <= self.m as u64 {
+        if links.len() < cap {
+            links.push(q);
+            links.sort_unstable();
             return Ok(());
         }
 
-        let links_snapshot: Vec<ItemId> = self.layers.get(&p).unwrap().links.iter().collect();
-
-        let src = self.get_db_item(p, &database, &rtxn)?;
-        let mut minheap = BinaryHeap::new();
-
-        for item_id in links_snapshot.into_iter() {
-            let dest = self.get_db_item(item_id, &database, &rtxn)?;
-            let d = D::distance(&src, &dest);
-            minheap.push((Reverse(OrderedFloat(d)), item_id));
+        // Avoid doing work unless necessary
+        if q.0 > links.last().unwrap().0 {
+            return Ok(());
         }
-        debug_assert!(minheap.len() > self.m);
 
-        let mut new_neighbors = RoaringBitmap::new();
-        for _ in 0..self.m {
-            if let Some((_, item_id)) = minheap.pop() {
-                new_neighbors.push(item_id);
-            }
+        // pop first to avoid moving smallvec to heap
+        let _ = links.pop();
+
+        match links.binary_search(&q) {
+            Ok(index) => links.insert(index, q),
+            Err(index) => links.insert(index, q),
         }
-        // Update links
-        self.layers.get_mut(&p).unwrap().links = new_neighbors;
 
         Ok(())
     }
@@ -277,10 +272,8 @@ mod tests {
     #[test]
     // should be like: https://www.pinecone.io/learn/series/faiss/hnsw/
     fn check_distribution_shape() {
-        let mut opts = BuildOption::default();
-        opts.m = 32;
         let mut rng = StdRng::seed_from_u64(42);
-        let mut hnsw = HnswBuilder::<Cosine>::new(&opts);
+        let mut hnsw = HnswBuilder::<Cosine, 32, 48>::new(&BuildOption::default());
 
         let mut bins = HashMap::new();
         (0..1000000).into_iter().for_each(|_| {
