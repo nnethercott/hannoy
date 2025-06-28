@@ -29,6 +29,7 @@ nohash = "0.2.0"
 page_size = "0.6.0"
 enum-iterator = "2.1.0"
 min-max-heap = "1.3.0"
+smallvec = { version = "1.15.1", features = ["write", "const_generics"] }
 
 [dev-dependencies]
 anyhow = "1.0.95"
