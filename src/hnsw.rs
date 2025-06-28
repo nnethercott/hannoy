@@ -19,7 +19,7 @@ type Link = (OrderedFloat<f32>, ItemId);
 
 /// State with stack-allocated graph edges
 struct NodeState<const M: usize> {
-    next: Option<ItemId>,
+    // next is always ourselves in the subsequent layer
     links: SmallVec<[Link; M]>,
 }
 
@@ -29,7 +29,7 @@ pub(crate) struct HnswBuilder<D, const M: usize, const M0: usize> {
     max_level: usize,
     entrypoints: Vec<ItemId>,
     layers: Vec<IntMap<ItemId, NodeState<M0>>>,
-    last: IntMap<ItemId, NodeState<M>>,
+    // last: IntMap<ItemId, NodeState<M>>,
     distance: PhantomData<D>,
 }
 
@@ -43,7 +43,6 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
             max_level: 0,
             entrypoints: vec![],
             layers: vec![],
-            last: IntMap::default(),
             distance: PhantomData,
         }
     }
@@ -76,8 +75,13 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
         dist.sample(rng) as usize
     }
 
-    pub fn build<R>(&mut self, to_insert: RoaringBitmap, wtxn: &RwTxn, rng: &mut R)
-    where
+    pub fn build<R>(
+        &mut self,
+        to_insert: RoaringBitmap,
+        database: &Database<D>,
+        rtxn: &RoTxn,
+        rng: &mut R,
+    ) where
         R: Rng + ?Sized,
     {
         // generate a random level for each point
@@ -89,12 +93,19 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
                 level
             })
             .collect();
+        levels.sort_by(|a, b| b.cmp(a));
 
-        // 1. sort levels and indices by level asc
-        // 2. insert sequential
-        todo!()
+        for _ in 0..self.max_level {
+            self.layers.push(IntMap::default());
+        }
+
+        // perform the insert
+        for (item_id, level) in to_insert.iter().zip(levels) {
+            let _ = self.insert(item_id, level, database, rtxn);
+        }
     }
 
+    /// Fetches only vector info from lmdb using special codec
     fn get_db_item<'a>(
         &'a self,
         item_id: &ItemId,
@@ -107,6 +118,7 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
             .ok_or(crate::Error::InvalidItemGet)
     }
 
+    // TODO: handle inserting these
     fn entry_point(&self) -> ItemId {
         return self.entrypoints[0];
     }
@@ -120,25 +132,21 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
     ) -> Result<()> {
         let mut eps = vec![self.entry_point()];
 
-        // Register point for given layer
-        // NOTE: this may be bad ! think about it more
-        self.layers[level].insert(query, NodeState { next: None, links: smallvec![] });
-
         // Greedy search with: ef = 1
         for lvl in (level + 1..=self.max_level).rev() {
-            let mut neighbours = self.search_single_layer(&query, &eps, lvl, 1, database, rtxn)?;
+            let mut neighbours = self.explore_layer(&query, &eps, lvl, 1, database, rtxn)?;
             let closest = neighbours.pop_min().map(|(_, n)| n).expect("No neighbor was found");
-
-            // Set ep to closest.next
-            eps = vec![self.layers[lvl].get(&closest).unwrap().next.unwrap()];
+            eps = vec![closest];
         }
 
         // Beam search with: ef = ef_construction
         for lvl in (0..=level.min(self.max_level)).rev() {
-            let mut neighbours =
-                self.search_single_layer(&query, &eps, lvl, self.ef_construction, database, rtxn)?;
+            self.create_node(query, lvl);
 
-            // FIXME: limit neighbors as a fn(self.m(layer)) ...
+            let mut neighbours =
+                self.explore_layer(&query, &eps, lvl, self.ef_construction, database, rtxn)?;
+
+            // FIXME: limit neighbors with algo 4; right now we have ef_construction many
 
             eps.clear();
             while let Some((dist, n)) = neighbours.pop_min() {
@@ -146,20 +154,20 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
                 self.add_link(query, (dist, n), lvl, database, rtxn);
                 self.add_link(n, (dist, query), lvl, database, rtxn);
 
-                // Push each closest point's `next` to search queue for next level
-                eps.push(self.layers[lvl].get(&n).unwrap().next.unwrap());
+                // Push each near point to the search list for next layer
+                eps.push(n);
             }
-
-            self.create_virtual_node(query, lvl + 1);
         }
 
         Ok(())
     }
 
-    fn create_virtual_node(&mut self, item_id: ItemId, level: usize) {}
+    fn create_node(&mut self, item_id: ItemId, level: usize) {
+        self.layers[level].insert(item_id, NodeState { links: smallvec![] });
+    }
 
     #[allow(clippy::too_many_arguments)]
-    fn search_single_layer(
+    fn explore_layer(
         &self,
         q: &ItemId,
         eps: &[ItemId],
@@ -174,7 +182,7 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
 
         let vq = self.get_db_item(q, database, rtxn)?;
 
-        // Register all `eps` as visited
+        // Register all `eps` as visited and populate candidates
         for ep in eps {
             let ve = self.get_db_item(ep, database, rtxn)?;
             let dist = D::distance(&vq, &ve);
@@ -192,13 +200,13 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
                 }
             }
 
-            // Get neighborhood and insert into candidates
+            // Get neighborhood of candidate
             let proximity = match self.layers[level].get(&c) {
                 Some(node) => &node.links,
-                None => continue,
+                None => unreachable!(),
             };
 
-            // wonder if we can par_iter this ?
+            // can we par_iter distance computations ?
             for &(_, point) in proximity.iter() {
                 if !visited.insert(point) {
                     continue;
