@@ -7,6 +7,7 @@ use std::{
 
 use heed::{RoTxn, RwTxn};
 use min_max_heap::MinMaxHeap;
+use nohash::IntMap;
 use ordered_float::OrderedFloat;
 use rand::{distributions::WeightedIndex, prelude::Distribution, Rng};
 use roaring::RoaringBitmap;
@@ -32,8 +33,7 @@ pub(crate) struct HnswBuilder<D> {
     ef_construction: usize,
     max_level: usize,
     entrypoints: Vec<ItemId>,
-    // TODO: this might need to become a hashmap cause we don't push in a linear order
-    layers: Vec<NodeState>,
+    layers: IntMap<ItemId, NodeState>,
     metric: PhantomData<D>,
 }
 
@@ -47,7 +47,7 @@ impl<D: Distance> HnswBuilder<D> {
             ef_construction: opts.ef_construction,
             max_level: 0,
             entrypoints: vec![],
-            layers: vec![],
+            layers: IntMap::default(),
             metric: PhantomData,
         }
     }
@@ -125,12 +125,14 @@ impl<D: Distance> HnswBuilder<D> {
         let mut ep = self.entry_point(query);
 
         // greedy search with: ef = 1
-        for l in (level + 1..=self.max_level).rev() {
+        let start = (level + 1).max(self.max_level);
+        for l in (start..=self.max_level).rev() {
             let mut neighbours = self.search_single_layer(query, ep, l, 1, database, rtxn)?;
             ep = neighbours
                 .pop_min()
                 .map(|(_, n)| n)
                 .expect("Not a single nearest neighbor was found");
+            // set to ep.next
         }
 
         // beam search with: ef = ef_construction
@@ -139,7 +141,8 @@ impl<D: Distance> HnswBuilder<D> {
                 self.search_single_layer(query, ep, l, self.ef_construction, database, rtxn)?;
 
             // FIXME: limit neighbors as a fn(self.m(layer)) ...
-            while let Some((_, n)) = neighbours.pop_min() {
+
+            while let Some((OrderedFloat(f), n)) = neighbours.pop_min() {
                 // add links in both directions
                 self.add_link(query, n, database, rtxn);
                 self.add_link(n, query, database, rtxn);
@@ -179,9 +182,9 @@ impl<D: Distance> HnswBuilder<D> {
         let mut res = MinMaxHeap::with_capacity(ef);
         let mut visited = RoaringBitmap::new();
 
-        let v_item = self.get_db_item(q, database, rtxn)?;
-        let ep_item = self.get_db_item(ep, database, rtxn)?;
-        let dist = D::distance(&v_item, &ep_item);
+        let vq = self.get_db_item(q, database, rtxn)?;
+        let ve = self.get_db_item(ep, database, rtxn)?;
+        let dist = D::distance(&vq, &ve);
 
         // Register `ep` as visited
         candidates.push((Reverse(OrderedFloat(dist)), ep));
@@ -197,14 +200,17 @@ impl<D: Distance> HnswBuilder<D> {
             }
 
             // Get neighborhood and insert into candidates
-            let proximity = &self.layers[c as usize].links;
+            let proximity = match self.layers.get(&c) {
+                Some(s) => &s.links,
+                None => &RoaringBitmap::new(),
+            };
 
             // wonder if we can par_iter this ?
             for point in proximity.iter() {
                 if !visited.insert(point) {
                     continue;
                 }
-                let dist = D::distance(&v_item, &self.get_db_item(point, &database, rtxn)?);
+                let dist = D::distance(&vq, &self.get_db_item(point, &database, rtxn)?);
 
                 res.push((OrderedFloat(dist), point));
                 candidates.push((Reverse(OrderedFloat(dist)), point));
@@ -219,7 +225,8 @@ impl<D: Distance> HnswBuilder<D> {
         Ok(res)
     }
 
-    /// TODO: optimize; avoid recalculating distances
+    // TODO: optimize; avoid recalculating distances
+    // probably store the neighbors as a vec<(u32, f32)>
     fn add_link(
         &mut self,
         p: ItemId,
@@ -228,14 +235,14 @@ impl<D: Distance> HnswBuilder<D> {
         rtxn: &RoTxn,
     ) -> Result<()> {
         // Add the new link
-        self.layers[p as usize].links.insert(q);
+        self.layers.get_mut(&p).ok_or(crate::Error::NotInIntMap(p))?.links.insert(q);
 
         // Only evict neighbor if we're over capacity
-        if self.layers[p as usize].links.len() <= self.m as u64 {
+        if self.layers.get(&p).ok_or(crate::Error::NotInIntMap(p))?.links.len() <= self.m as u64 {
             return Ok(());
         }
 
-        let links_snapshot: Vec<ItemId> = self.layers[p as usize].links.iter().collect();
+        let links_snapshot: Vec<ItemId> = self.layers.get(&p).unwrap().links.iter().collect();
 
         let src = self.get_db_item(p, &database, &rtxn)?;
         let mut minheap = BinaryHeap::new();
@@ -254,7 +261,7 @@ impl<D: Distance> HnswBuilder<D> {
             }
         }
         // Update links
-        self.layers[p as usize].links = new_neighbors;
+        self.layers.get_mut(&p).unwrap().links = new_neighbors;
 
         Ok(())
     }

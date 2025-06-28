@@ -82,6 +82,9 @@ pub enum Error {
 
     #[error("Not a valid Item")]
     InvalidItemGet,
+
+    #[error("Not in IntMap: key {0}")]
+    NotInIntMap(u32),
 }
 
 impl Error {
