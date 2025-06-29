@@ -1,10 +1,9 @@
 use std::borrow::Cow;
 use std::fmt;
-use std::mem::{size_of, transmute};
-use std::num::NonZeroU32;
+use std::mem::size_of;
 
 use bytemuck::{bytes_of, cast_slice, pod_read_unaligned};
-use byteorder::{BigEndian, ByteOrder, LittleEndian, NativeEndian};
+use byteorder::{BigEndian, ByteOrder, NativeEndian};
 use heed::{BoxedError, BytesDecode, BytesEncode};
 use roaring::RoaringBitmap;
 
@@ -34,7 +33,7 @@ impl<'a, D: Distance> DbItem<'a, D> {
 /// A leaf node which corresponds to the vector inputed
 /// by the user and the distance header.
 ///
-/// NOTE: this is nice cause greedy search during retrieval goes like 
+/// NOTE: this is nice cause greedy search during retrieval goes like
 /// while let Some(next) = ep.next.take(){
 ///     todo!()
 /// }
@@ -82,6 +81,12 @@ impl<D: Distance> HnswNode<'_, D> {
             header: self.header,
             vector: Cow::Owned(self.vector.into_owned()),
         }
+    }
+
+    pub fn new(vec: Vec<f32>) -> Self {
+        let vector = UnalignedVector::from_vec(vec);
+        let header = D::new_header(&vector);
+        Self { header, vector, links: Cow::Owned(RoaringBitmap::new()), next: None }
     }
 }
 

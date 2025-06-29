@@ -9,7 +9,7 @@ use roaring::RoaringBitmap;
 use crate::distance::Distance;
 use crate::internals::KeyCodec;
 use crate::item_iter::ItemIter;
-use crate::node::{HnswNode, ItemIds, Node};
+use crate::node::{HnswNode, ItemIds};
 use crate::parallel::{ConcurrentNodeIds, ImmutableItems, ImmutableNodes};
 use crate::unaligned_vector::UnalignedVector;
 use crate::version::{Version, VersionCodec};

@@ -3,3 +3,5 @@ Cargo.lock
 /assets/test.tree
 *.out
 *.tree
+lock.mdb
+data.mdb

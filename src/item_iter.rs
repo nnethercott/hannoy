@@ -1,6 +1,6 @@
 use crate::distance::Distance;
 use crate::internals::KeyCodec;
-use crate::node::{HnswNode, Node};
+use crate::node::HnswNode;
 use crate::{DbItem, ItemId, HnswNodeCodec, Result};
 
 // used by the reader

@@ -1,16 +1,17 @@
 use std::{cmp::Reverse, collections::BinaryHeap, marker::PhantomData};
 
-use heed::{RoTxn, RwTxn};
+use heed::RoTxn;
 use min_max_heap::MinMaxHeap;
 use nohash::IntMap;
 use ordered_float::OrderedFloat;
 use rand::{distributions::WeightedIndex, prelude::Distribution, Rng};
 use roaring::RoaringBitmap;
 use smallvec::{smallvec, SmallVec};
+use tracing::{debug, info};
 
 use crate::{
     key::Key,
-    node::{DbItem, Node, NodeCodec},
+    node::{Node, NodeCodec},
     writer::BuildOption,
     Database, Distance, ItemId, Result,
 };
@@ -18,17 +19,18 @@ use crate::{
 type Link = (OrderedFloat<f32>, ItemId);
 
 /// State with stack-allocated graph edges
+#[derive(Debug)]
 struct NodeState<const M: usize> {
     // next is always ourselves in the subsequent layer
     links: SmallVec<[Link; M]>,
 }
 
-pub(crate) struct HnswBuilder<D, const M: usize, const M0: usize> {
+pub struct HnswBuilder<D, const M: usize, const M0: usize> {
     assign_probas: Vec<f32>,
     ef_construction: usize,
     max_level: usize,
     entrypoints: Vec<ItemId>,
-    layers: Vec<IntMap<ItemId, NodeState<M0>>>,
+    pub layers: Vec<IntMap<ItemId, NodeState<M0>>>,
     // last: IntMap<ItemId, NodeState<M>>,
     distance: PhantomData<D>,
 }
@@ -85,23 +87,28 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
         R: Rng + ?Sized,
     {
         // generate a random level for each point
-        let mut levels: Vec<_> = (0..to_insert.len())
-            .into_iter()
-            .map(|_| {
+        let mut levels: Vec<_> = to_insert
+            .iter()
+            .map(|item_id| {
                 let level = self.get_random_level(rng);
                 self.max_level = self.max_level.max(level);
-                level
+                (item_id, level)
             })
             .collect();
-        levels.sort_by(|a, b| b.cmp(a));
 
-        for _ in 0..self.max_level {
+        levels.sort_by(|(_, a), (_, b)| b.cmp(a));
+        println!("levels={:?}", &levels);
+
+        for _ in 0..=self.max_level {
             self.layers.push(IntMap::default());
         }
 
         // perform the insert
-        for (item_id, level) in to_insert.iter().zip(levels) {
-            let _ = self.insert(item_id, level, database, rtxn);
+        for (item_id, level) in levels.into_iter() {
+            if level == self.max_level {
+                self.entrypoints.push(item_id);
+            }
+            self.insert(item_id, level, database, rtxn).unwrap();
         }
     }
 
@@ -118,7 +125,6 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
             .ok_or(crate::Error::InvalidItemGet)
     }
 
-    // TODO: handle inserting these
     fn entry_point(&self) -> ItemId {
         return self.entrypoints[0];
     }
@@ -227,6 +233,7 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
         Ok(res)
     }
 
+    // FIXME: make the Link type a struct so its more readable
     fn add_link(
         &mut self,
         p: ItemId,
@@ -235,6 +242,11 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
         database: &Database<D>,
         rtxn: &RoTxn,
     ) -> Result<()> {
+        // prevent links to self
+        if p == q.1{
+            return Ok(());
+        }
+
         // Get links for p
         let links = &mut self.layers[level].get_mut(&p).ok_or(crate::Error::NotInIntMap(p))?.links;
         let cap = if level == 0 { M0 } else { M };
@@ -265,10 +277,19 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
 #[cfg(test)]
 mod tests {
     use super::HnswBuilder;
-    use crate::{distance::Cosine, writer::BuildOption};
-    use rand::{rngs::StdRng, SeedableRng};
+    use crate::{
+        distance::Cosine,
+        key::Key,
+        node::{DbItem, HnswNode},
+        writer::BuildOption,
+        Database,
+    };
+    use heed::EnvOpenOptions;
+    use rand::{rngs::StdRng, Rng, SeedableRng};
+    use roaring::RoaringBitmap;
     use std::collections::HashMap;
 
+    #[ignore = "just cause"]
     #[test]
     // should be like: https://www.pinecone.io/learn/series/faiss/hnsw/
     fn check_distribution_shape() {
@@ -282,5 +303,39 @@ mod tests {
         });
 
         dbg!("{:?}", bins);
+    }
+
+    #[test]
+    fn test_build() {
+        let env = unsafe {
+            EnvOpenOptions::new()
+                .map_size(1024 * 1024 * 1024 * 2) // 2GiB
+                .open("./")
+        }
+        .unwrap();
+
+        let mut wtxn = env.write_txn().unwrap();
+        let db: Database<Cosine> = env.create_database(&mut wtxn, None).unwrap();
+
+        // insert a few vectors
+        let mut rng = StdRng::seed_from_u64(42);
+        let mut hnsw: HnswBuilder<Cosine, 2, 4> = HnswBuilder::new(&BuildOption::default());
+
+        let mut to_insert = RoaringBitmap::new();
+        for item_id in 0u32..10 {
+            let vec: Vec<f32> = (0..2).map(|_| rng.gen()).collect();
+            let item = HnswNode::new(vec);
+            db.put(&mut wtxn, &Key::item(0, item_id), &DbItem::Item(item)).unwrap();
+
+            // update build bitmap
+            to_insert.insert(item_id);
+        }
+
+        hnsw.build(to_insert, &db, &wtxn, &mut rng);
+
+        for (i,l) in hnsw.layers.iter().enumerate(){
+            println!("layer: {i}");
+            println!("hnsw state: {:?}", l);
+        }
     }
 }

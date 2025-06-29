@@ -1,11 +1,9 @@
-use std::borrow::Cow;
 use std::fmt;
 
 pub use binary_quantized_cosine::{BinaryQuantizedCosine, NodeHeaderBinaryQuantizedCosine};
 use bytemuck::{Pod, Zeroable};
 pub use cosine::{Cosine, NodeHeaderCosine};
 pub use euclidean::{Euclidean, NodeHeaderEuclidean};
-use roaring::RoaringBitmap;
 
 use crate::node::Node;
 use crate::unaligned_vector::{UnalignedVector, UnalignedVectorCodec};
@@ -14,6 +12,7 @@ mod binary_quantized_cosine;
 mod cosine;
 mod euclidean;
 
+// FIXME: move elsewhere, also currently unused
 fn new_leaf<D: Distance>(vec: Vec<f32>) -> Node<'static, D> {
     let vector = UnalignedVector::from_vec(vec);
     Node {
