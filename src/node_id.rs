@@ -3,7 +3,7 @@ use std::mem::size_of;
 
 use byteorder::{BigEndian, ByteOrder};
 
-use crate::ItemId;
+use crate::{ItemId, LayerId};
 
 /// /!\ Changing the value of the enum can be DB-breaking /!\
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -36,10 +36,13 @@ impl TryFrom<u8> for NodeMode {
 
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct NodeId {
-    // Indicate what the item represent.
+    /// Indicate what the item represent.
     pub mode: NodeMode,
     /// The item we want to get.
     pub item: ItemId,
+    /// Store Hnsw layer ID after ItemId for co-locality of (vec, its_links) in lmdb (?)
+    /// Safe to store in a u8 since impossible the graph will have >256 layers
+    pub layer: LayerId,
 }
 
 impl fmt::Debug for NodeId {
@@ -50,23 +53,24 @@ impl fmt::Debug for NodeId {
 
 impl NodeId {
     pub const fn metadata() -> Self {
-        Self { mode: NodeMode::Metadata, item: 0 }
+        Self { mode: NodeMode::Metadata, item: 0, layer: u8::MAX }
     }
 
     pub const fn version() -> Self {
-        Self { mode: NodeMode::Metadata, item: 1 }
+        Self { mode: NodeMode::Metadata, item: 1, layer: u8::MAX }
     }
 
     pub const fn updated(item: u32) -> Self {
-        Self { mode: NodeMode::Updated, item }
+        Self { mode: NodeMode::Updated, item, layer: u8::MAX }
     }
 
-    pub const fn node(item: u32) -> Self {
-        Self { mode: NodeMode::Node, item }
+    // FIXME: we may no longer need this
+    pub const fn links(item: u32, layer: u8) -> Self {
+        Self { mode: NodeMode::Node, item, layer }
     }
 
     pub const fn item(item: u32) -> Self {
-        Self { mode: NodeMode::Item, item }
+        Self { mode: NodeMode::Item, item, layer: 0 }
     }
 
     /// Return the underlying `ItemId` if it is an item.
@@ -85,21 +89,23 @@ impl NodeId {
         self.item
     }
 
-    pub fn to_bytes(self) -> [u8; 5] {
-        let mut output = [0; 5];
+    pub fn to_bytes(self) -> [u8; 6] {
+        let mut output = [0; 6];
 
         output[0] = self.mode as u8;
         let item_bytes = self.item.to_be_bytes();
-        output[1..].copy_from_slice(&item_bytes);
+        output[1..=4].copy_from_slice(&item_bytes);
+        output[5] = self.layer;
 
         output
     }
 
     pub fn from_bytes(bytes: &[u8]) -> (Self, &[u8]) {
         let mode = NodeMode::try_from(bytes[0]).expect("Could not parse the node mode");
-        let item = BigEndian::read_u32(&bytes[1..]);
+        let item = BigEndian::read_u32(&bytes[1..4]);
+        let layer = bytes[5];
 
-        (Self { mode, item }, &bytes[size_of::<NodeMode>() + size_of::<ItemId>()..])
+        (Self { mode, item, layer }, &bytes[size_of::<NodeMode>() + size_of::<ItemId>()..])
     }
 }
 
@@ -109,23 +115,25 @@ mod test {
 
     #[test]
     fn check_node_id_ordering() {
+        // NOTE: `layer`s take precedence over item_ids
         assert!(NodeId::item(0) == NodeId::item(0));
         assert!(NodeId::item(1) > NodeId::item(0));
         assert!(NodeId::item(0) < NodeId::item(1));
 
-        assert!(NodeId::node(0) == NodeId::node(0));
-        assert!(NodeId::node(1) > NodeId::node(0));
-        assert!(NodeId::node(0) < NodeId::node(1));
+        assert!(NodeId::links(0, 0) == NodeId::links(0, 0));
+        assert!(NodeId::links(1, 0) > NodeId::links(0, 0));
+        assert!(NodeId::links(0, 1) > NodeId::links(0, 0));
+        assert!(NodeId::links(1, 0) > NodeId::links(0, 1));
 
         assert!(NodeId::updated(0) == NodeId::updated(0));
         assert!(NodeId::updated(1) > NodeId::updated(0));
         assert!(NodeId::updated(0) < NodeId::updated(1));
 
         // tree < item whatever is the value
-        assert!(NodeId::node(u32::MAX) < NodeId::item(0));
+        assert!(NodeId::links(u32::MAX, 0) < NodeId::item(0));
 
         assert!(NodeId::metadata() == NodeId::metadata());
-        assert!(NodeId::metadata() < NodeId::node(u32::MIN));
+        assert!(NodeId::metadata() < NodeId::links(u32::MIN, 0));
         assert!(NodeId::metadata() < NodeId::updated(u32::MIN));
         assert!(NodeId::metadata() < NodeId::item(u32::MIN));
     }

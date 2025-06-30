@@ -14,7 +14,7 @@ use roaring::RoaringBitmap;
 use crate::internals::{HnswNodeCodec, KeyCodec, Node};
 use crate::key::{Key, Prefix, PrefixCodec};
 use crate::node::{DbItem, NodeCodec};
-use crate::{Database, Distance, Error, ItemId, Result};
+use crate::{Database, Distance, Error, ItemId, LayerId, Result};
 
 /// A structure to store the tree nodes out of the heed database.
 pub struct TmpNodes<DE> {
@@ -224,8 +224,10 @@ impl<'t, D: Distance> ImmutableItems<'t, D> {
         let mut constant_length = None;
 
         while let Some(item_id) = candidates.select(0) {
-            let bytes =
-                database.remap_data_type::<Bytes>().get(rtxn, &Key::item(index, item_id))?.unwrap();
+            let bytes = database
+                .remap_data_type::<Bytes>()
+                .get(rtxn, &Key::item(index, item_id))?
+                .unwrap();
             assert_eq!(*constant_length.get_or_insert(bytes.len()), bytes.len());
 
             let ptr = bytes.as_ptr();

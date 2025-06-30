@@ -20,13 +20,11 @@ pub struct Key {
     /// The prefix specified by the user.
     pub index: u16,
     pub node: NodeId,
-    /// Unused space.
-    _padding: u8,
 }
 
 impl Key {
     pub const fn new(index: u16, node: NodeId) -> Self {
-        Self { index, node, _padding: 0 }
+        Self { index, node }
     }
 
     pub const fn metadata(index: u16) -> Self {
@@ -45,8 +43,8 @@ impl Key {
         Self::new(index, NodeId::item(item))
     }
 
-    pub const fn tree(index: u16, item: u32) -> Self {
-        Self::new(index, NodeId::node(item))
+    pub const fn tree(index: u16, item: u32, layer: u8) -> Self {
+        Self::new(index, NodeId::links(item, layer))
     }
 }
 
@@ -60,8 +58,8 @@ impl<'a> heed::BytesEncode<'a> for KeyCodec {
         let mut output = Vec::with_capacity(size_of::<u64>());
         output.extend_from_slice(&item.index.to_be_bytes());
         output.extend_from_slice(&(item.node.mode as u8).to_be_bytes());
+        output.extend_from_slice(&(item.node.layer).to_be_bytes());
         output.extend_from_slice(&item.node.item.to_be_bytes());
-        output.extend_from_slice(&item._padding.to_be_bytes());
 
         Ok(Cow::Owned(output))
     }
@@ -75,10 +73,12 @@ impl heed::BytesDecode<'_> for KeyCodec {
         let bytes = &bytes[size_of::<u16>()..];
         let mode = bytes[0].try_into()?;
         let bytes = &bytes[size_of::<u8>()..];
+        let layer = bytes[1];
+        let bytes = &bytes[size_of::<u8>()..];
         let item = BigEndian::read_u32(bytes);
         // We don't need to deserialize the unused space
 
-        Ok(Key { index: prefix, node: NodeId { mode, item }, _padding: 0 })
+        Ok(Key { index: prefix, node: NodeId { mode, item, layer } })
     }
 }
 

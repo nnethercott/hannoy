@@ -46,3 +46,4 @@ pub type Database<D> = heed::Database<internals::KeyCodec, HnswNodeCodec<D>>;
 
 /// An identifier for the items stored in the database.
 pub type ItemId = u32;
+pub type LayerId = u8;

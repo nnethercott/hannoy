@@ -232,6 +232,8 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
             }
 
             // Get neighborhood of candidate
+            // NOTE: wouldn't it be better if candidates was Vec<(f32, HnswNode)> and we directly called
+            // c.links ?
             let proximity = match self.layers[level].get(&c) {
                 Some(node) => &node.links,
                 None => unreachable!(),

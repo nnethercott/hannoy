@@ -14,7 +14,8 @@ use crate::parallel::{ConcurrentNodeIds, ImmutableItems, ImmutableNodes};
 use crate::unaligned_vector::UnalignedVector;
 use crate::version::{Version, VersionCodec};
 use crate::{
-    Database, DbItem, Error, ItemId, Key, Metadata, MetadataCodec, Prefix, PrefixCodec, Result,
+    Database, DbItem, Error, ItemId, Key, Metadata, MetadataCodec, Prefix, PrefixCodec,
+    Result,
 };
 
 /// The options available when building the arroy database.
@@ -117,7 +118,12 @@ impl<D: Distance> Writer<D> {
     }
 
     /// Add an item associated to a vector in the database.
-    pub fn add_item(&self, wtxn: &mut RwTxn, item: ItemId, vector: &[f32]) -> Result<()> {
+    pub fn add_item(
+        &self,
+        wtxn: &mut RwTxn,
+        item: ItemId,
+        vector: &[f32],
+    ) -> Result<()> {
         if vector.len() != self.dimensions {
             return Err(Error::InvalidVecDimension {
                 expected: self.dimensions,
