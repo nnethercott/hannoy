@@ -130,7 +130,6 @@ impl<D: Distance> Writer<D> {
             header: D::new_header(&vector),
             vector,
             links: Cow::Owned(RoaringBitmap::new()),
-            next: None,
         };
         self.database.put(wtxn, &Key::item(self.index, item), &DbItem::Item(db_item))?;
         self.database.remap_data_type::<Unit>().put(wtxn, &Key::updated(self.index, item), &())?;

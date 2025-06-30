@@ -33,19 +33,13 @@ impl<'a, D: Distance> DbItem<'a, D> {
 /// A leaf node which corresponds to the vector inputed
 /// by the user and the distance header.
 ///
-/// NOTE: this is nice cause greedy search during retrieval goes like
-/// while let Some(next) = ep.next.take(){
-///     todo!()
-/// }
 pub struct HnswNode<'a, D: Distance> {
-    /// edges from the node
-    pub links: Cow<'a, RoaringBitmap>,
-    /// edge to next layer
-    pub next: Option<ItemId>,
     /// The header of this leaf.
     pub header: D::Header,
     /// The vector of this leaf.
     pub vector: Cow<'a, UnalignedVector<D::VectorCodec>>,
+    /// edges from the node
+    pub links: Cow<'a, RoaringBitmap>,
 }
 
 impl<D: Distance> fmt::Debug for HnswNode<'_, D> {
@@ -55,7 +49,6 @@ impl<D: Distance> fmt::Debug for HnswNode<'_, D> {
             .field("header", &self.header)
             .field("vector", &self.vector)
             .field("links", &links)
-            .field("next", &self.next)
             .finish()
     }
 }
@@ -64,7 +57,6 @@ impl<D: Distance> Clone for HnswNode<'_, D> {
     fn clone(&self) -> Self {
         Self {
             links: Cow::Owned(RoaringBitmap::new()),
-            next: None,
             header: self.header,
             vector: self.vector.clone(),
         }
@@ -76,17 +68,16 @@ impl<D: Distance> HnswNode<'_, D> {
     /// the internal vector. Doing so will make it mutable.
     pub fn into_owned(self) -> HnswNode<'static, D> {
         HnswNode {
-            links: Cow::Owned(self.links.into_owned()),
-            next: self.next,
             header: self.header,
             vector: Cow::Owned(self.vector.into_owned()),
+            links: Cow::Owned(self.links.into_owned()),
         }
     }
 
     pub fn new(vec: Vec<f32>) -> Self {
         let vector = UnalignedVector::from_vec(vec);
         let header = D::new_header(&vector);
-        Self { header, vector, links: Cow::Owned(RoaringBitmap::new()), next: None }
+        Self { header, vector, links: Cow::Owned(RoaringBitmap::new()) }
     }
 }
 
@@ -136,20 +127,13 @@ impl<'a, D: Distance> BytesEncode<'a> for HnswNodeCodec<D> {
     fn bytes_encode(item: &Self::EItem) -> Result<Cow<'a, [u8]>, BoxedError> {
         let mut bytes = Vec::new();
         match item {
-            DbItem::Item(HnswNode { links, next, header, vector }) => {
+            DbItem::Item(HnswNode { links, header, vector }) => {
                 bytes.push(NODE_TAG);
                 bytes.extend_from_slice(bytes_of(header));
                 let vbytes = vector.as_bytes();
                 let len = vbytes.len() as u16;
                 bytes.extend_from_slice(&len.to_be_bytes());
                 bytes.extend(vbytes);
-
-                if let Some(item_id) = next {
-                    bytes.push(1);
-                    bytes.extend_from_slice(&item_id.to_be_bytes());
-                } else {
-                    bytes.push(0);
-                }
                 links.serialize_into(&mut bytes)?;
             }
         }
@@ -170,18 +154,10 @@ impl<'a, D: Distance> BytesDecode<'a> for HnswNodeCodec<D> {
                 let vector = UnalignedVector::<D::VectorCodec>::from_bytes(&bytes[..len]).unwrap();
 
                 let bytes = &bytes[len..];
-                let (next, bytes) = match bytes[0] {
-                    1 => (
-                        Some(BigEndian::read_u32(&bytes[1..])),
-                        &bytes[1 + std::mem::size_of::<ItemId>()..],
-                    ),
-                    0 => (None, &bytes[1..]),
-                    _ => unreachable!(),
-                };
                 let links: Cow<'_, RoaringBitmap> =
                     Cow::Owned(RoaringBitmap::deserialize_from(bytes).unwrap());
 
-                Ok(DbItem::Item(HnswNode { header, vector, links, next }))
+                Ok(DbItem::Item(HnswNode { header, vector, links }))
             }
             unknown => panic!("Did not recognize node tag type: {unknown:?}"),
         }
@@ -234,7 +210,7 @@ mod tests {
 
         let vector = UnalignedVector::from_vec(vec![1.0f32, 2.0f32]);
         let header = D::new_header(&vector);
-        let item = HnswNode { vector, header, next: None, links: Cow::Owned(RoaringBitmap::new()) };
+        let item = HnswNode { vector, header, links: Cow::Owned(RoaringBitmap::new()) };
         let db_item = DbItem::Item(item);
 
         let bytes = HnswNodeCodec::<D>::bytes_encode(&db_item);
@@ -257,7 +233,7 @@ mod tests {
 
         let vector = UnalignedVector::from_vec(vec![1.0f32, 2.0f32]);
         let header = D::new_header(&vector);
-        let item = HnswNode { vector, header, next: None, links: Cow::Owned(RoaringBitmap::new()) };
+        let item = HnswNode { vector, header, links: Cow::Owned(RoaringBitmap::new()) };
         let db_item = DbItem::Item(item.clone());
 
         let bytes = HnswNodeCodec::<D>::bytes_encode(&db_item);

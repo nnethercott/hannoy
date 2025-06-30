@@ -15,10 +15,7 @@ mod euclidean;
 // FIXME: move elsewhere, also currently unused
 fn new_leaf<D: Distance>(vec: Vec<f32>) -> Node<'static, D> {
     let vector = UnalignedVector::from_vec(vec);
-    Node {
-        header: D::new_header(&vector),
-        vector,
-    }
+    Node { header: D::new_header(&vector), vector }
 }
 
 /// A trait used by arroy to compute the distances,

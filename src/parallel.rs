@@ -11,7 +11,7 @@ use memmap2::Mmap;
 use nohash::{BuildNoHashHasher, IntMap, IntSet};
 use roaring::RoaringBitmap;
 
-use crate::internals::{Node, KeyCodec, HnswNodeCodec};
+use crate::internals::{HnswNodeCodec, KeyCodec, Node};
 use crate::key::{Key, Prefix, PrefixCodec};
 use crate::node::{DbItem, NodeCodec};
 use crate::{Database, Distance, Error, ItemId, Result};

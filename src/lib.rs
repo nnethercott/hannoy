@@ -29,7 +29,7 @@ pub mod internals {
         NodeHeaderBinaryQuantizedCosine, NodeHeaderCosine, NodeHeaderEuclidean,
     };
     pub use crate::key::KeyCodec;
-    pub use crate::node::{Node, HnswNodeCodec};
+    pub use crate::node::{HnswNodeCodec, Node};
     pub use crate::unaligned_vector::{SizeMismatch, UnalignedVector, UnalignedVectorCodec};
 }
 

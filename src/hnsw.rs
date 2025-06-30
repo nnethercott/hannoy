@@ -1,13 +1,17 @@
-use std::{cmp::Reverse, collections::BinaryHeap, marker::PhantomData};
+use std::{
+    cmp::Reverse,
+    collections::BinaryHeap,
+    fmt::{self, Debug},
+    marker::PhantomData,
+};
 
-use heed::RoTxn;
+use heed::{RoTxn, RwTxn};
 use min_max_heap::MinMaxHeap;
 use nohash::IntMap;
 use ordered_float::OrderedFloat;
 use rand::{distributions::WeightedIndex, prelude::Distribution, Rng};
 use roaring::RoaringBitmap;
 use smallvec::{smallvec, SmallVec};
-use tracing::{debug, info};
 
 use crate::{
     key::Key,
@@ -19,10 +23,27 @@ use crate::{
 type Link = (OrderedFloat<f32>, ItemId);
 
 /// State with stack-allocated graph edges
-#[derive(Debug)]
 struct NodeState<const M: usize> {
-    // next is always ourselves in the subsequent layer
     links: SmallVec<[Link; M]>,
+}
+impl<const M: usize> Debug for NodeState<M> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // from [crate::unaligned_vector]
+        struct Number(f32);
+        impl fmt::Debug for Number {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                write!(f, "{:0.3}", self.0)
+            }
+        }
+        let mut list = f.debug_list();
+
+        for &(OrderedFloat(dist), id) in &self.links {
+            let tup = (id, Number(dist));
+            list.entry(&tup);
+        }
+
+        list.finish()
+    }
 }
 
 pub struct HnswBuilder<D, const M: usize, const M0: usize> {
@@ -38,6 +59,7 @@ pub struct HnswBuilder<D, const M: usize, const M0: usize> {
 impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
     pub fn new(opts: &BuildOption) -> Self {
         let assign_probas = Self::get_default_probas();
+        dbg!("{}", assign_probas.len());
 
         Self {
             assign_probas,
@@ -52,6 +74,7 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
     /// build quantiles from an x ~ exp(1/ln(m))
     fn get_default_probas() -> Vec<f32> {
         let mut assign_probas = Vec::with_capacity(M);
+        // NOTE: breaks when M=1 ...
         let level_factor = 1.0 / (M as f32).ln();
         let mut level = 0;
         loop {
@@ -81,7 +104,7 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
         &mut self,
         to_insert: RoaringBitmap,
         database: &Database<D>,
-        rtxn: &RoTxn,
+        wtxn: &mut RwTxn,
         rng: &mut R,
     ) where
         R: Rng + ?Sized,
@@ -103,13 +126,15 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
             self.layers.push(IntMap::default());
         }
 
-        // perform the insert
+        // perform the insert into hnsw graph
         for (item_id, level) in levels.into_iter() {
             if level == self.max_level {
                 self.entrypoints.push(item_id);
             }
-            self.insert(item_id, level, database, rtxn).unwrap();
+            self.insert(item_id, level, database, wtxn).unwrap();
         }
+
+        // TODO: persist in db
     }
 
     /// Fetches only vector info from lmdb using special codec
@@ -157,8 +182,8 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
             eps.clear();
             while let Some((dist, n)) = neighbours.pop_min() {
                 // add links in both directions
-                self.add_link(query, (dist, n), lvl, database, rtxn);
-                self.add_link(n, (dist, query), lvl, database, rtxn);
+                self.add_link(query, (dist, n), lvl);
+                self.add_link(n, (dist, query), lvl);
 
                 // Push each near point to the search list for next layer
                 eps.push(n);
@@ -233,17 +258,9 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
         Ok(res)
     }
 
-    // FIXME: make the Link type a struct so its more readable
-    fn add_link(
-        &mut self,
-        p: ItemId,
-        q: Link,
-        level: usize,
-        database: &Database<D>,
-        rtxn: &RoTxn,
-    ) -> Result<()> {
+    fn add_link(&mut self, p: ItemId, q: Link, level: usize) -> Result<()> {
         // prevent links to self
-        if p == q.1{
+        if p == q.1 {
             return Ok(());
         }
 
@@ -278,7 +295,7 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
 mod tests {
     use super::HnswBuilder;
     use crate::{
-        distance::Cosine,
+        distance::{Cosine, Euclidean},
         key::Key,
         node::{DbItem, HnswNode},
         writer::BuildOption,
@@ -297,7 +314,7 @@ mod tests {
         let mut hnsw = HnswBuilder::<Cosine, 32, 48>::new(&BuildOption::default());
 
         let mut bins = HashMap::new();
-        (0..1000000).into_iter().for_each(|_| {
+        (0..10000).into_iter().for_each(|_| {
             let level = hnsw.get_random_level(&mut rng);
             *bins.entry(level).or_insert(0) += 1;
         });
@@ -315,25 +332,27 @@ mod tests {
         .unwrap();
 
         let mut wtxn = env.write_txn().unwrap();
-        let db: Database<Cosine> = env.create_database(&mut wtxn, None).unwrap();
+        let db: Database<Euclidean> = env.create_database(&mut wtxn, None).unwrap();
 
         // insert a few vectors
         let mut rng = StdRng::seed_from_u64(42);
-        let mut hnsw: HnswBuilder<Cosine, 2, 4> = HnswBuilder::new(&BuildOption::default());
+        let mut hnsw: HnswBuilder<Euclidean, 2, 3> = HnswBuilder::new(&BuildOption::default());
+
+        let vecs: Vec<Vec<f32>> = (0..6).map(|_| (0..2).map(|_| rng.gen()).collect()).collect();
+        dbg!("{:?}", &vecs);
 
         let mut to_insert = RoaringBitmap::new();
-        for item_id in 0u32..10 {
-            let vec: Vec<f32> = (0..2).map(|_| rng.gen()).collect();
+        for (item_id, vec) in vecs.into_iter().enumerate() {
             let item = HnswNode::new(vec);
-            db.put(&mut wtxn, &Key::item(0, item_id), &DbItem::Item(item)).unwrap();
+            db.put(&mut wtxn, &Key::item(0, item_id as u32), &DbItem::Item(item)).unwrap();
 
             // update build bitmap
-            to_insert.insert(item_id);
+            to_insert.insert(item_id as u32);
         }
 
-        hnsw.build(to_insert, &db, &wtxn, &mut rng);
+        hnsw.build(to_insert, &db, &mut wtxn, &mut rng);
 
-        for (i,l) in hnsw.layers.iter().enumerate(){
+        for (i, l) in hnsw.layers.iter().enumerate() {
             println!("layer: {i}");
             println!("hnsw state: {:?}", l);
         }
