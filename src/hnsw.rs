@@ -15,7 +15,7 @@ use smallvec::{smallvec, SmallVec};
 
 use crate::{
     key::Key,
-    node::{Item, Links},
+    node::{Item, Links, Node},
     writer::BuildOption,
     Database, Distance, Error, ItemId, Result,
 };
@@ -49,11 +49,11 @@ impl<const M: usize> Debug for NodeState<M> {
     }
 }
 
-struct DbHelper<'a, D> {
+struct LmdbReader<'a, D> {
     database: &'a Database<D>,
     rtxn: &'a RoTxn<'a>,
 }
-impl<'a, D: Distance> DbHelper<'a, D> {
+impl<'a, D: Distance> LmdbReader<'a, D> {
     pub fn get_item(&self, item_id: ItemId) -> Result<Item<'a, D>> {
         let key = Key::item(0, item_id);
         Ok(self.database.get(self.rtxn, &key)?.ok_or(Error::missing_key(key))?.item().unwrap())
@@ -139,7 +139,7 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
             .collect();
 
         levels.sort_by(|(_, a), (_, b)| b.cmp(a));
-        println!("levels={:?}", &levels);
+        // println!("levels={:?}", &levels);
 
         for _ in 0..=self.max_level {
             self.layers.push(IntMap::default());
@@ -167,12 +167,14 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
         database: &Database<D>,
         rtxn: &RoTxn,
     ) -> Result<()> {
-        let lmdb = DbHelper { database, rtxn };
+        let lmdb = LmdbReader { database, rtxn };
         let mut eps = vec![self.entry_point()];
+
+        let q = lmdb.get_item(query)?;
 
         // Greedy search with: ef = 1
         for lvl in (level + 1..=self.max_level).rev() {
-            let mut neighbours = self.explore_layer(&query, &eps, lvl, 1, &lmdb)?;
+            let mut neighbours = self.explore_layer(&q, &eps, lvl, 1, &lmdb)?;
             let closest = neighbours.pop_min().map(|(_, n)| n).expect("No neighbor was found");
             eps = vec![closest];
         }
@@ -181,8 +183,7 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
         for lvl in (0..=level.min(self.max_level)).rev() {
             self.create_node(query, lvl);
 
-            let mut neighbours =
-                self.explore_layer(&query, &eps, lvl, self.ef_construction, &lmdb)?;
+            let mut neighbours = self.explore_layer(&q, &eps, lvl, self.ef_construction, &lmdb)?;
 
             // FIXME: limit neighbors with algo 4; right now we have ef_construction many
 
@@ -207,7 +208,7 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
     /// Returns only the Id's of our neighbours,
     fn get_or_create_neighbours(
         &mut self,
-        lmdb: &DbHelper<'_, D>,
+        lmdb: &LmdbReader<'_, D>,
         item_id: ItemId,
         level: usize,
     ) -> Result<Vec<ItemId>> {
@@ -227,25 +228,24 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
         }
     }
 
+    // FIXME: shouldn't be &mut self
     #[allow(clippy::too_many_arguments)]
     fn explore_layer(
         &mut self,
-        q: &ItemId,
+        query: &Item<D>,
         eps: &[ItemId],
         level: usize,
         ef: usize,
-        lmdb: &DbHelper<'_, D>,
+        lmdb: &LmdbReader<'_, D>,
     ) -> Result<MinMaxHeap<ScoredLink>> {
         let mut candidates = BinaryHeap::new();
         let mut res = MinMaxHeap::with_capacity(ef);
         let mut visited = RoaringBitmap::new();
 
-        let vq = lmdb.get_item(*q)?;
-
         // Register all `eps` as visited and populate candidates
         for &ep in eps {
             let ve = lmdb.get_item(ep)?;
-            let dist = D::distance(&vq, &ve);
+            let dist = D::distance(query, &ve);
 
             candidates.push((Reverse(OrderedFloat(dist)), ep));
             res.push((OrderedFloat(dist), ep));
@@ -269,7 +269,7 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
                     continue;
                 }
                 // distance between QUERY and point, not between neighbor and point
-                let dist = D::distance(&vq, &lmdb.get_item(point)?);
+                let dist = D::distance(query, &lmdb.get_item(point)?);
 
                 res.push((OrderedFloat(dist), point));
                 candidates.push((Reverse(OrderedFloat(dist)), point));
@@ -315,6 +315,39 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
 
         Ok(())
     }
+
+    // FIXME: shouldn't be &mut self
+    fn search(
+        &mut self,
+        query: &Item<D>,
+        k: usize,
+        ef: usize,
+        database: &Database<D>,
+        rtxn: &RoTxn,
+    ) -> Result<Vec<ScoredLink>> {
+        let lmdb = LmdbReader { database, rtxn };
+        let mut eps = vec![self.entry_point()];
+
+        // layers L->1
+        for lvl in (1..=self.max_level).rev() {
+            let mut neighbours = self.explore_layer(&query, &eps, lvl, 1, &lmdb)?;
+            let closest = neighbours.pop_min().map(|(_, n)| n).expect("No neighbor was found");
+            eps = vec![closest];
+        }
+
+        // layer 0
+        let mut neighbours = self.explore_layer(&query, &eps, 0, ef, &lmdb)?;
+
+        let mut nns = Vec::with_capacity(k);
+        while let Some(sp) = neighbours.pop_min() {
+            nns.push(sp);
+            if nns.len() == k {
+                break;
+            }
+        }
+
+        Ok(nns)
+    }
 }
 
 #[cfg(test)]
@@ -328,9 +361,10 @@ mod tests {
         Database,
     };
     use heed::EnvOpenOptions;
-    use rand::{rngs::StdRng, Rng, SeedableRng};
+    use ordered_float::OrderedFloat;
+    use rand::{rngs::StdRng, thread_rng, Rng, SeedableRng};
     use roaring::RoaringBitmap;
-    use std::collections::HashMap;
+    use std::{collections::HashMap, time::Instant};
 
     #[ignore = "just cause"]
     #[test]
@@ -361,11 +395,15 @@ mod tests {
         let db: Database<Euclidean> = env.create_database(&mut wtxn, None).unwrap();
 
         // insert a few vectors
-        let mut rng = StdRng::seed_from_u64(42);
-        let mut hnsw: HnswBuilder<Euclidean, 2, 3> = HnswBuilder::new(&BuildOption::default());
+        // let mut rng = StdRng::seed_from_u64(42);
+        let mut rng = thread_rng();
+        let mut opts = BuildOption::default();
+        opts.ef_construction = 200;
+        let mut hnsw: HnswBuilder<Euclidean, 16, 32> = HnswBuilder::new(&opts);
 
-        let vecs: Vec<Vec<f32>> = (0..6).map(|_| (0..2).map(|_| rng.gen()).collect()).collect();
-        dbg!("{:?}", &vecs);
+        let vecs: Vec<Vec<f32>> = (0..10000).map(|_| (0..768).map(|_| rng.gen()).collect()).collect();
+        let backup_vecs = vecs.clone();
+        // dbg!("{:?}", &vecs);
 
         let mut to_insert = RoaringBitmap::new();
         for (item_id, vec) in vecs.into_iter().enumerate() {
@@ -378,9 +416,30 @@ mod tests {
 
         hnsw.build(to_insert, &db, &mut wtxn, &mut rng);
 
-        for (i, l) in hnsw.layers.iter().enumerate() {
-            println!("layer: {i}");
-            println!("hnsw state: {:?}", l);
-        }
+        // for (i, l) in hnsw.layers.iter().enumerate() {
+        //     println!("layer: {i}");
+        //     println!("hnsw state: {:?}", l);
+        // }
+
+        // search
+        let query: Vec<_> = (0..768).map(|_| rng.gen()).collect();
+        // dbg!("query = {}", &query);
+        let q_item = Item::new(query.clone());
+
+        let now = Instant::now();
+        let nns = hnsw.search(&q_item, 5, 64, &db, &wtxn);
+        println!("elapsed; {:?}", now.elapsed());
+        dbg!("{:?}", nns);
+
+        // check now
+        let opt = backup_vecs
+            .iter()
+            .enumerate()
+            .map(|(i, v)| {
+                let dist: f32 = v.iter().zip(query.iter()).map(|(a, b)| (a - b).powi(2)).sum();
+                (dist, i)
+            })
+            .min_by_key(|(d,_)| OrderedFloat(*d));
+        dbg!("{:?}", opt);
     }
 }
