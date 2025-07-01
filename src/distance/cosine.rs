@@ -3,7 +3,7 @@ use std::fmt;
 use bytemuck::{Pod, Zeroable};
 
 use crate::distance::Distance;
-use crate::node::Node;
+use crate::node::Item;
 use crate::spaces::simple::dot_product;
 use crate::unaligned_vector::UnalignedVector;
 
@@ -37,7 +37,7 @@ impl Distance for Cosine {
         NodeHeaderCosine { norm: Self::norm_no_header(vector) }
     }
 
-    fn distance(p: &Node<Self>, q: &Node<Self>) -> f32 {
+    fn distance(p: &Item<Self>, q: &Item<Self>) -> f32 {
         let pn = p.header.norm;
         let qn = q.header.norm;
         let pq = dot_product(&p.vector, &q.vector);

@@ -14,10 +14,7 @@ use roaring::RoaringBitmap;
 use smallvec::{smallvec, SmallVec};
 
 use crate::{
-    key::Key,
-    node::{Node, NodeCodec},
-    writer::BuildOption,
-    Database, Distance, ItemId, Result,
+    key::Key, node::{Item, Node, NodeCodec}, writer::BuildOption, Database, Distance, Error, ItemId, Result
 };
 
 type Link = (OrderedFloat<f32>, ItemId);
@@ -143,11 +140,15 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
         item_id: &ItemId,
         database: &Database<D>,
         rtxn: &'a RoTxn<'a>,
-    ) -> Result<Node<'a, D>> {
-        database
-            .remap_data_type::<NodeCodec<D>>()
-            .get(rtxn, &Key::item(0, *item_id))?
-            .ok_or(crate::Error::InvalidItemGet)
+    ) -> Result<Item<'a, D>> {
+        let key = Key::item(0, *item_id);
+        match database
+            .get(rtxn, &key)?
+            .ok_or(Error::missing_key(key))?
+            {
+                Node::Item(item) => todo!(),
+                Node::Links(links) => todo!(),
+            }
     }
 
     fn entry_point(&self) -> ItemId {
@@ -299,7 +300,7 @@ mod tests {
     use crate::{
         distance::{Cosine, Euclidean},
         key::Key,
-        node::{DbItem, HnswNode},
+        node::{Node, Item},
         writer::BuildOption,
         Database,
     };
@@ -345,8 +346,8 @@ mod tests {
 
         let mut to_insert = RoaringBitmap::new();
         for (item_id, vec) in vecs.into_iter().enumerate() {
-            let item = HnswNode::new(vec);
-            db.put(&mut wtxn, &Key::item(0, item_id as u32), &DbItem::Item(item)).unwrap();
+            let item = Item::new(vec);
+            db.put(&mut wtxn, &Key::item(0, item_id as u32), &Node::Item(item)).unwrap();
 
             // update build bitmap
             to_insert.insert(item_id as u32);

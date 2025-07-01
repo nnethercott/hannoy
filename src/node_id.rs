@@ -14,9 +14,9 @@ pub enum NodeMode {
     /// Stores the list of all the `ItemId` that have been updated.
     /// We only stores `Unit` values under the keys.
     Updated = 1,
-    /// The graph nodes are stored under this id.
-    Node = 2,
-    /// The original vectors are stored under this id in `Leaf` structures.
+    /// The graph edges re stored under this id
+    Links = 2,
+    /// The original vectors are stored under this id
     Item = 3,
 }
 
@@ -26,7 +26,7 @@ impl TryFrom<u8> for NodeMode {
     fn try_from(v: u8) -> std::result::Result<Self, Self::Error> {
         match v {
             v if v == NodeMode::Item as u8 => Ok(NodeMode::Item),
-            v if v == NodeMode::Node as u8 => Ok(NodeMode::Node),
+            v if v == NodeMode::Links as u8 => Ok(NodeMode::Links),
             v if v == NodeMode::Updated as u8 => Ok(NodeMode::Updated),
             v if v == NodeMode::Metadata as u8 => Ok(NodeMode::Metadata),
             v => Err(format!("Could not convert {v} as a `NodeMode`.")),
@@ -66,7 +66,7 @@ impl NodeId {
 
     // FIXME: we may no longer need this
     pub const fn links(item: u32, layer: u8) -> Self {
-        Self { mode: NodeMode::Node, item, layer }
+        Self { mode: NodeMode::Links, item, layer }
     }
 
     pub const fn item(item: u32) -> Self {
@@ -85,7 +85,7 @@ impl NodeId {
     /// Panic otherwise.
     #[track_caller]
     pub fn unwrap_node(&self) -> ItemId {
-        assert_eq!(self.mode, NodeMode::Node);
+        assert_eq!(self.mode, NodeMode::Links);
         self.item
     }
 

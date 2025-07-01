@@ -1,11 +1,11 @@
 use crate::distance::Distance;
 use crate::internals::KeyCodec;
-use crate::node::HnswNode;
-use crate::{DbItem, HnswNodeCodec, ItemId, Result};
+use crate::node::Item;
+use crate::{Node, NodeCodec, ItemId, Result};
 
 // used by the reader
 pub struct ItemIter<'t, D: Distance> {
-    pub(crate) inner: heed::RoPrefix<'t, KeyCodec, HnswNodeCodec<D>>,
+    pub(crate) inner: heed::RoPrefix<'t, KeyCodec, NodeCodec<D>>,
 }
 
 impl<D: Distance> Iterator for ItemIter<'_, D> {
@@ -15,7 +15,7 @@ impl<D: Distance> Iterator for ItemIter<'_, D> {
         match self.inner.next() {
             #[allow(unreachable_patterns)]
             Some(Ok((key, node))) => match node {
-                DbItem::Item(HnswNode { header: _, vector, links: _ }) => {
+                Node::Item(Item { header: _, vector }) => {
                     Some(Ok((key.node.item, vector.to_vec())))
                 }
                 _ => unreachable!(),

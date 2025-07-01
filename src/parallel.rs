@@ -11,9 +11,9 @@ use memmap2::Mmap;
 use nohash::{BuildNoHashHasher, IntMap, IntSet};
 use roaring::RoaringBitmap;
 
-use crate::internals::{HnswNodeCodec, KeyCodec, Node};
+use crate::internals::{KeyCodec, Item};
 use crate::key::{Key, Prefix, PrefixCodec};
-use crate::node::{DbItem, NodeCodec};
+use crate::node::{Node, NodeCodec};
 use crate::{Database, Distance, Error, ItemId, LayerId, Result};
 
 /// A structure to store the tree nodes out of the heed database.
@@ -257,7 +257,7 @@ impl<'t, D: Distance> ImmutableItems<'t, D> {
     }
 
     /// Returns the leafs identified by the given ID.
-    pub fn get(&self, item_id: ItemId) -> heed::Result<Option<Node<'t, D>>> {
+    pub fn get(&self, item_id: ItemId) -> heed::Result<Option<Item<'t, D>>> {
         let len = match self.constant_length {
             Some(len) => len,
             None => return Ok(None),
@@ -271,7 +271,7 @@ impl<'t, D: Distance> ImmutableItems<'t, D> {
         // - ptr: The pointer comes from LMDB. Since the database cannot be written to, it is still valid.
         // - len: All the items share the same dimensions and are the same size
         let bytes = unsafe { slice::from_raw_parts(ptr, len) };
-        NodeCodec::bytes_decode(bytes).map_err(heed::Error::Decoding).map(|node| Some(node))
+        NodeCodec::bytes_decode(bytes).map_err(heed::Error::Decoding).map(|node| node.item())
     }
 }
 
@@ -290,7 +290,7 @@ impl<'t, D: Distance> ImmutableSubsetItems<'t, D> {
     }
 
     /// Returns the nodes identified by the given ID in the subset.
-    pub fn get(&self, item_id: ItemId) -> heed::Result<Option<Node<'t, D>>> {
+    pub fn get(&self, item_id: ItemId) -> heed::Result<Option<Item<'t, D>>> {
         if self.subset.contains(item_id) {
             self.items.get(item_id)
         } else {
@@ -344,7 +344,7 @@ impl<'t, D: Distance> ImmutableNodes<'t, D> {
     }
 
     /// Returns the tree node identified by the given ID.
-    pub fn get(&self, item_id: ItemId) -> heed::Result<Option<DbItem<'t, D>>> {
+    pub fn get(&self, item_id: ItemId) -> heed::Result<Option<Node<'t, D>>> {
         let (ptr, len) = match self.nodes.get(&item_id) {
             Some((len, ptr)) => (*ptr, *len),
             None => return Ok(None),
@@ -354,7 +354,7 @@ impl<'t, D: Distance> ImmutableNodes<'t, D> {
         // - ptr: The pointer comes from LMDB. Since the database cannot be written to, it is still valid.
         // - len: The len cannot change either
         let bytes = unsafe { slice::from_raw_parts(ptr, len) };
-        HnswNodeCodec::bytes_decode(bytes).map_err(heed::Error::Decoding).map(Some)
+        NodeCodec::bytes_decode(bytes).map_err(heed::Error::Decoding).map(Some)
     }
 }
 

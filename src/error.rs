@@ -80,9 +80,6 @@ pub enum Error {
         version: Version,
     },
 
-    #[error("Not a valid Item")]
-    InvalidItemGet,
-
     #[error("Not in IntMap: key {0}")]
     NotInIntMap(u32),
 }
@@ -93,7 +90,7 @@ impl Error {
             index: key.index,
             mode: match key.node.mode {
                 NodeMode::Item => "Item",
-                NodeMode::Node => "Tree",
+                NodeMode::Links => "Links",
                 NodeMode::Metadata => "Metadata",
                 NodeMode::Updated => "Updated",
             },
