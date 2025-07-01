@@ -14,14 +14,20 @@ use roaring::RoaringBitmap;
 use smallvec::{smallvec, SmallVec};
 
 use crate::{
-    key::Key, node::{Item, Node, NodeCodec}, writer::BuildOption, Database, Distance, Error, ItemId, Result
+    key::Key,
+    node::{Item, Links},
+    writer::BuildOption,
+    Database, Distance, Error, ItemId, Result,
 };
 
-type Link = (OrderedFloat<f32>, ItemId);
+// TODO:
+// - add dedicated 0th layer with M0 and fix corresponding code
+
+type ScoredLink = (OrderedFloat<f32>, ItemId);
 
 /// State with stack-allocated graph edges
 struct NodeState<const M: usize> {
-    links: SmallVec<[Link; M]>,
+    links: SmallVec<[ScoredLink; M]>,
 }
 impl<const M: usize> Debug for NodeState<M> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -40,6 +46,22 @@ impl<const M: usize> Debug for NodeState<M> {
         }
 
         list.finish()
+    }
+}
+
+struct DbHelper<'a, D> {
+    database: &'a Database<D>,
+    rtxn: &'a RoTxn<'a>,
+}
+impl<'a, D: Distance> DbHelper<'a, D> {
+    pub fn get_item(&self, item_id: ItemId) -> Result<Item<'a, D>> {
+        let key = Key::item(0, item_id);
+        Ok(self.database.get(self.rtxn, &key)?.ok_or(Error::missing_key(key))?.item().unwrap())
+    }
+
+    pub fn get_links(&self, item_id: ItemId, level: usize) -> Result<Links<'a>> {
+        let key = Key::links(0, item_id, level as u8);
+        Ok(self.database.get(self.rtxn, &key)?.ok_or(Error::missing_key(key))?.links().unwrap())
     }
 }
 
@@ -134,23 +156,6 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
         // TODO: persist in db
     }
 
-    /// Fetches only vector info from lmdb using special codec
-    fn get_db_item<'a>(
-        &'a self,
-        item_id: &ItemId,
-        database: &Database<D>,
-        rtxn: &'a RoTxn<'a>,
-    ) -> Result<Item<'a, D>> {
-        let key = Key::item(0, *item_id);
-        match database
-            .get(rtxn, &key)?
-            .ok_or(Error::missing_key(key))?
-            {
-                Node::Item(item) => todo!(),
-                Node::Links(links) => todo!(),
-            }
-    }
-
     fn entry_point(&self) -> ItemId {
         return self.entrypoints[0];
     }
@@ -162,11 +167,12 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
         database: &Database<D>,
         rtxn: &RoTxn,
     ) -> Result<()> {
+        let lmdb = DbHelper { database, rtxn };
         let mut eps = vec![self.entry_point()];
 
         // Greedy search with: ef = 1
         for lvl in (level + 1..=self.max_level).rev() {
-            let mut neighbours = self.explore_layer(&query, &eps, lvl, 1, database, rtxn)?;
+            let mut neighbours = self.explore_layer(&query, &eps, lvl, 1, &lmdb)?;
             let closest = neighbours.pop_min().map(|(_, n)| n).expect("No neighbor was found");
             eps = vec![closest];
         }
@@ -176,7 +182,7 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
             self.create_node(query, lvl);
 
             let mut neighbours =
-                self.explore_layer(&query, &eps, lvl, self.ef_construction, database, rtxn)?;
+                self.explore_layer(&query, &eps, lvl, self.ef_construction, &lmdb)?;
 
             // FIXME: limit neighbors with algo 4; right now we have ef_construction many
 
@@ -198,30 +204,52 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
         self.layers[level].insert(item_id, NodeState { links: smallvec![] });
     }
 
+    /// Returns only the Id's of our neighbours,
+    fn get_or_create_neighbours(
+        &mut self,
+        lmdb: &DbHelper<'_, D>,
+        item_id: ItemId,
+        level: usize,
+    ) -> Result<Vec<ItemId>> {
+        // O(1)
+        match self.layers[level].get(&item_id) {
+            Some(node_state) => return Ok(node_state.links.iter().map(|(_, i)| *i).collect()),
+
+            // O(log n)
+            None => {
+                let Links { links } = lmdb.get_links(item_id, level)?;
+
+                // allow for new links to be established with existing item
+                self.create_node(item_id, level);
+
+                Ok(links.iter().collect())
+            }
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn explore_layer(
-        &self,
+        &mut self,
         q: &ItemId,
         eps: &[ItemId],
         level: usize,
         ef: usize,
-        database: &Database<D>,
-        rtxn: &RoTxn,
-    ) -> Result<MinMaxHeap<Link>> {
+        lmdb: &DbHelper<'_, D>,
+    ) -> Result<MinMaxHeap<ScoredLink>> {
         let mut candidates = BinaryHeap::new();
         let mut res = MinMaxHeap::with_capacity(ef);
         let mut visited = RoaringBitmap::new();
 
-        let vq = self.get_db_item(q, database, rtxn)?;
+        let vq = lmdb.get_item(*q)?;
 
         // Register all `eps` as visited and populate candidates
-        for ep in eps {
-            let ve = self.get_db_item(ep, database, rtxn)?;
+        for &ep in eps {
+            let ve = lmdb.get_item(ep)?;
             let dist = D::distance(&vq, &ve);
 
-            candidates.push((Reverse(OrderedFloat(dist)), *ep));
-            res.push((OrderedFloat(dist), *ep));
-            visited.push(*ep);
+            candidates.push((Reverse(OrderedFloat(dist)), ep));
+            res.push((OrderedFloat(dist), ep));
+            visited.push(ep);
         }
 
         while let Some((Reverse(OrderedFloat(f)), c)) = candidates.pop() {
@@ -232,21 +260,16 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
                 }
             }
 
-            // Get neighborhood of candidate
-            // NOTE: wouldn't it be better if candidates was Vec<(f32, HnswNode)> and we directly called
-            // c.links ?
-            let proximity = match self.layers[level].get(&c) {
-                Some(node) => &node.links,
-                None => unreachable!(),
-            };
+            // Get neighborhood of candidate either from `self` or LMDB
+            let proximity = self.get_or_create_neighbours(lmdb, c, level)?;
 
             // can we par_iter distance computations ?
-            for &(_, point) in proximity.iter() {
+            for &point in proximity.iter() {
                 if !visited.insert(point) {
                     continue;
                 }
                 // distance between QUERY and point, not between neighbor and point
-                let dist = D::distance(&vq, &self.get_db_item(&point, &database, rtxn)?);
+                let dist = D::distance(&vq, &lmdb.get_item(point)?);
 
                 res.push((OrderedFloat(dist), point));
                 candidates.push((Reverse(OrderedFloat(dist)), point));
@@ -261,7 +284,7 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
         Ok(res)
     }
 
-    fn add_link(&mut self, p: ItemId, q: Link, level: usize) -> Result<()> {
+    fn add_link(&mut self, p: ItemId, q: ScoredLink, level: usize) -> Result<()> {
         // prevent links to self
         if p == q.1 {
             return Ok(());
@@ -300,7 +323,7 @@ mod tests {
     use crate::{
         distance::{Cosine, Euclidean},
         key::Key,
-        node::{Node, Item},
+        node::{Item, Node},
         writer::BuildOption,
         Database,
     };

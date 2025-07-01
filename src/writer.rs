@@ -1,4 +1,3 @@
-use std::borrow::Cow;
 use std::path::PathBuf;
 
 use heed::types::{DecodeIgnore, Unit};
@@ -14,8 +13,7 @@ use crate::parallel::{ConcurrentNodeIds, ImmutableItems, ImmutableNodes};
 use crate::unaligned_vector::UnalignedVector;
 use crate::version::{Version, VersionCodec};
 use crate::{
-    Database, Node, Error, ItemId, Key, Metadata, MetadataCodec, Prefix, PrefixCodec,
-    Result,
+    Database, Error, ItemId, Key, Metadata, MetadataCodec, Node, Prefix, PrefixCodec, Result,
 };
 
 /// The options available when building the arroy database.
@@ -118,12 +116,7 @@ impl<D: Distance> Writer<D> {
     }
 
     /// Add an item associated to a vector in the database.
-    pub fn add_item(
-        &self,
-        wtxn: &mut RwTxn,
-        item: ItemId,
-        vector: &[f32],
-    ) -> Result<()> {
+    pub fn add_item(&self, wtxn: &mut RwTxn, item: ItemId, vector: &[f32]) -> Result<()> {
         if vector.len() != self.dimensions {
             return Err(Error::InvalidVecDimension {
                 expected: self.dimensions,
@@ -132,10 +125,7 @@ impl<D: Distance> Writer<D> {
         }
 
         let vector = UnalignedVector::from_slice(vector);
-        let db_item = Item {
-            header: D::new_header(&vector),
-            vector,
-        };
+        let db_item = Item { header: D::new_header(&vector), vector };
         self.database.put(wtxn, &Key::item(self.index, item), &Node::Item(db_item))?;
         self.database.remap_data_type::<Unit>().put(wtxn, &Key::updated(self.index, item), &())?;
 

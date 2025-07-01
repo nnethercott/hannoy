@@ -1,7 +1,7 @@
 use crate::distance::Distance;
 use crate::internals::KeyCodec;
 use crate::node::Item;
-use crate::{Node, NodeCodec, ItemId, Result};
+use crate::{ItemId, Node, NodeCodec, Result};
 
 // used by the reader
 pub struct ItemIter<'t, D: Distance> {

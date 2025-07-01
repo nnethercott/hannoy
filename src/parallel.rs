@@ -11,10 +11,10 @@ use memmap2::Mmap;
 use nohash::{BuildNoHashHasher, IntMap, IntSet};
 use roaring::RoaringBitmap;
 
-use crate::internals::{KeyCodec, Item};
+use crate::internals::{Item, KeyCodec};
 use crate::key::{Key, Prefix, PrefixCodec};
 use crate::node::{Node, NodeCodec};
-use crate::{Database, Distance, Error, ItemId, LayerId, Result};
+use crate::{Database, Distance, Error, ItemId, Result};
 
 /// A structure to store the tree nodes out of the heed database.
 pub struct TmpNodes<DE> {
@@ -224,10 +224,8 @@ impl<'t, D: Distance> ImmutableItems<'t, D> {
         let mut constant_length = None;
 
         while let Some(item_id) = candidates.select(0) {
-            let bytes = database
-                .remap_data_type::<Bytes>()
-                .get(rtxn, &Key::item(index, item_id))?
-                .unwrap();
+            let bytes =
+                database.remap_data_type::<Bytes>().get(rtxn, &Key::item(index, item_id))?.unwrap();
             assert_eq!(*constant_length.get_or_insert(bytes.len()), bytes.len());
 
             let ptr = bytes.as_ptr();

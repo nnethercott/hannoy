@@ -43,7 +43,7 @@ impl Key {
         Self::new(index, NodeId::item(item))
     }
 
-    pub const fn tree(index: u16, item: u32, layer: u8) -> Self {
+    pub const fn links(index: u16, item: u32, layer: u8) -> Self {
         Self::new(index, NodeId::links(item, layer))
     }
 }

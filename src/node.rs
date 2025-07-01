@@ -3,7 +3,7 @@ use std::fmt;
 use std::mem::size_of;
 
 use bytemuck::{bytes_of, cast_slice, pod_read_unaligned};
-use byteorder::{BigEndian, ByteOrder, NativeEndian};
+use byteorder::{ByteOrder, NativeEndian};
 use heed::{BoxedError, BytesDecode, BytesEncode};
 use roaring::RoaringBitmap;
 
@@ -24,6 +24,14 @@ impl<'a, D: Distance> Node<'a, D> {
     pub fn item(self) -> Option<Item<'a, D>> {
         if let Node::Item(item) = self {
             Some(item)
+        } else {
+            None
+        }
+    }
+
+    pub fn links(self) -> Option<Links<'a>> {
+        if let Node::Links(links) = self {
+            Some(links)
         } else {
             None
         }
@@ -211,7 +219,7 @@ mod tests {
         bitmap.insert(1);
         bitmap.insert(42);
 
-        let links = Links{links: Cow::Owned(bitmap)};
+        let links = Links { links: Cow::Owned(bitmap) };
         let db_item = Node::Links(links);
         let bytes = NodeCodec::<Cosine>::bytes_encode(&db_item).unwrap();
 
@@ -219,7 +227,7 @@ mod tests {
         assert!(matches!(node, Node::Links(_)));
         let new_links = match node {
             Node::Links(links) => links,
-            _ => unreachable!()
+            _ => unreachable!(),
         };
         assert!(new_links.links.contains(1));
         assert!(new_links.links.contains(42));
