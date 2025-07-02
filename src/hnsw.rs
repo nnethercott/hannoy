@@ -1,4 +1,5 @@
 use std::{
+    borrow::Cow,
     cmp::Reverse,
     collections::BinaryHeap,
     fmt::{self, Debug},
@@ -125,7 +126,8 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
         database: &Database<D>,
         wtxn: &mut RwTxn,
         rng: &mut R,
-    ) where
+    ) -> Result<()>
+    where
         R: Rng + ?Sized,
     {
         // generate a random level for each point
@@ -145,15 +147,28 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
             self.layers.push(IntMap::default());
         }
 
-        // perform the insert into hnsw graph
+        // build hnsw graph
         for (item_id, level) in levels.into_iter() {
             if level == self.max_level {
                 self.entrypoints.push(item_id);
             }
-            self.insert(item_id, level, database, wtxn).unwrap();
+            self.insert(item_id, level, database, wtxn)?;
         }
 
-        // TODO: persist in db
+        // insert into lmdb
+        for lvl in 0..=self.max_level {
+            for (item_id, node_state) in &self.layers[lvl] {
+                let key = Key::links(0, *item_id, lvl as u8);
+                let links = Links {
+                    links: Cow::Owned(RoaringBitmap::from_iter(
+                        node_state.links.iter().map(|(_, i)| *i),
+                    )),
+                };
+                let node_edges = database.put(wtxn, &key, &Node::Links(links))?;
+            }
+        }
+
+        Ok(())
     }
 
     fn entry_point(&self) -> ItemId {
@@ -212,6 +227,12 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
         item_id: ItemId,
         level: usize,
     ) -> Result<Vec<ItemId>> {
+        // FIXME: do some if-let chaining
+        if level >= self.layers.len() {
+            let Links { links } = lmdb.get_links(item_id, level)?;
+            return Ok(links.iter().collect());
+        }
+
         // O(1)
         match self.layers[level].get(&item_id) {
             Some(node_state) => return Ok(node_state.links.iter().map(|(_, i)| *i).collect()),
@@ -224,7 +245,6 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
         }
     }
 
-    // FIXME: shouldn't be &mut self
     #[allow(clippy::too_many_arguments)]
     fn explore_layer(
         &self,
@@ -257,11 +277,11 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
                 }
             }
 
-            // Get neighborhood of candidate either from `self` or LMDB
+            // Get neighborhood of candidate either from self or LMDB
             let proximity = self.get_neighbours(lmdb, c, level)?;
 
             // can we par_iter distance computations ?
-            for &point in proximity.iter() {
+            for point in proximity {
                 if !visited.insert(point) {
                     continue;
                 }
@@ -354,7 +374,12 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
 mod tests {
     use super::HnswBuilder;
     use crate::{
-        distance::Cosine, key::Key, node::{Item, Node}, ordered_float::OrderedFloat, writer::BuildOption, Database
+        distance::Cosine,
+        key::Key,
+        node::{Item, Node},
+        ordered_float::OrderedFloat,
+        writer::BuildOption,
+        Database,
     };
     use heed::EnvOpenOptions;
     use rand::{rngs::StdRng, thread_rng, Rng, SeedableRng};
@@ -394,10 +419,10 @@ mod tests {
         let mut rng = thread_rng();
         let mut opts = BuildOption::default();
         opts.ef_construction = 400;
-        let mut hnsw: HnswBuilder<Cosine, 16, 32> = HnswBuilder::new(&opts);
+        let mut hnsw: HnswBuilder<Cosine, 8, 16> = HnswBuilder::new(&opts);
 
         let vecs: Vec<Vec<f32>> =
-            (0..2000).map(|_| (0..784).map(|_| rng.gen()).collect()).collect();
+            (0..50000).map(|_| (0..784).map(|_| rng.gen()).collect()).collect();
         let backup_vecs = vecs.clone();
         // dbg!("{:?}", &vecs);
 
@@ -412,6 +437,7 @@ mod tests {
 
         let now = Instant::now();
         hnsw.build(to_insert, &db, &mut wtxn, &mut rng);
+        wtxn.commit().unwrap();
         println!("build; {:?}", now.elapsed());
 
         // for (i, l) in hnsw.layers.iter().enumerate() {
@@ -419,13 +445,16 @@ mod tests {
         //     println!("hnsw state: {:?}", l);
         // }
 
-        // search
+        // search, doing everything from lmdb
+        let mut hnsw2: HnswBuilder<Cosine, 8, 16> = HnswBuilder::new(&BuildOption::default());
+        hnsw2.entrypoints = hnsw.entrypoints.clone();
         let query: Vec<_> = (0..784).map(|_| rng.gen()).collect();
-        // dbg!("query = {}", &query);
         let q_item = Item::new(query.clone());
+        // dbg!("query = {}", &query);
 
         let now = Instant::now();
-        let nns = hnsw.search(&q_item, 10, 10, &db, &wtxn).unwrap();
+        let rtxn = env.read_txn().unwrap();
+        let nns = hnsw2.search(&q_item, 10, 10, &db, &rtxn).unwrap();
         println!("search; {:?}", now.elapsed());
 
         // check now

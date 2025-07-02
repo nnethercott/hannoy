@@ -79,9 +79,6 @@ pub enum Error {
         /// The version that is unknown.
         version: Version,
     },
-
-    #[error("Not in IntMap: key {0}")]
-    NotInIntMap(u32),
 }
 
 impl Error {
