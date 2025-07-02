@@ -8,7 +8,6 @@ use std::{
 use heed::{RoTxn, RwTxn};
 use min_max_heap::MinMaxHeap;
 use nohash::IntMap;
-use ordered_float::OrderedFloat;
 use rand::{distributions::WeightedIndex, prelude::Distribution, Rng};
 use roaring::RoaringBitmap;
 use smallvec::{smallvec, SmallVec};
@@ -16,6 +15,7 @@ use smallvec::{smallvec, SmallVec};
 use crate::{
     key::Key,
     node::{Item, Links, Node},
+    ordered_float::OrderedFloat,
     writer::BuildOption,
     Database, Distance, Error, ItemId, Result,
 };
@@ -23,7 +23,7 @@ use crate::{
 // TODO:
 // - add dedicated 0th layer with M0 and fix corresponding code
 
-type ScoredLink = (OrderedFloat<f32>, ItemId);
+type ScoredLink = (OrderedFloat, ItemId);
 
 /// State with stack-allocated graph edges
 struct NodeState<const M: usize> {
@@ -175,7 +175,7 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
         // Greedy search with: ef = 1
         for lvl in (level + 1..=self.max_level).rev() {
             let mut neighbours = self.explore_layer(&q, &eps, lvl, 1, &lmdb)?;
-            let closest = neighbours.pop_min().map(|(_, n)| n).expect("No neighbor was found");
+            let closest = neighbours.peek_min().map(|(_, n)| *n).expect("No neighbor was found");
             eps = vec![closest];
         }
 
@@ -184,16 +184,16 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
             self.create_node(query, lvl);
 
             let mut neighbours = self.explore_layer(&q, &eps, lvl, self.ef_construction, &lmdb)?;
-
-            // FIXME: limit neighbors with algo 4; right now we have ef_construction many
-
             eps.clear();
-            while let Some((dist, n)) = neighbours.pop_min() {
+
+            // FIXME: limit neighbors with algo 4
+            // NOTE: below should be changed to take M or M0 depending on layer. handle lvl 0
+            // seperately ?
+            let mut m_nearest_iter = neighbours.drain_asc().into_iter().take(M);
+            while let Some((dist, n)) = m_nearest_iter.next() {
                 // add links in both directions
                 self.add_link(query, (dist, n), lvl);
                 self.add_link(n, (dist, query), lvl);
-
-                // Push each near point to the search list for next layer
                 eps.push(n);
             }
         }
@@ -205,9 +205,9 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
         self.layers[level].insert(item_id, NodeState { links: smallvec![] });
     }
 
-    /// Returns only the Id's of our neighbours,
-    fn get_or_create_neighbours(
-        &mut self,
+    /// Returns only the Id's of our neighbours.
+    fn get_neighbours(
+        &self,
         lmdb: &LmdbReader<'_, D>,
         item_id: ItemId,
         level: usize,
@@ -219,10 +219,6 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
             // O(log n)
             None => {
                 let Links { links } = lmdb.get_links(item_id, level)?;
-
-                // allow for new links to be established with existing item
-                self.create_node(item_id, level);
-
                 Ok(links.iter().collect())
             }
         }
@@ -231,7 +227,7 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
     // FIXME: shouldn't be &mut self
     #[allow(clippy::too_many_arguments)]
     fn explore_layer(
-        &mut self,
+        &self,
         query: &Item<D>,
         eps: &[ItemId],
         level: usize,
@@ -242,7 +238,7 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
         let mut res = MinMaxHeap::with_capacity(ef);
         let mut visited = RoaringBitmap::new();
 
-        // Register all `eps` as visited and populate candidates
+        // Register all entry points as visited and populate candidates
         for &ep in eps {
             let ve = lmdb.get_item(ep)?;
             let dist = D::distance(query, &ve);
@@ -252,6 +248,7 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
             visited.push(ep);
         }
 
+        // NOTE: no need to store a minmax heap here; can just store max distance
         while let Some((Reverse(OrderedFloat(f)), c)) = candidates.pop() {
             // stopping criteria
             if let Some((OrderedFloat(f_max), _)) = res.peek_max() {
@@ -261,22 +258,22 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
             }
 
             // Get neighborhood of candidate either from `self` or LMDB
-            let proximity = self.get_or_create_neighbours(lmdb, c, level)?;
+            let proximity = self.get_neighbours(lmdb, c, level)?;
 
             // can we par_iter distance computations ?
             for &point in proximity.iter() {
                 if !visited.insert(point) {
                     continue;
                 }
-                // distance between QUERY and point, not between neighbor and point
                 let dist = D::distance(query, &lmdb.get_item(point)?);
 
-                res.push((OrderedFloat(dist), point));
                 candidates.push((Reverse(OrderedFloat(dist)), point));
 
-                if res.len() > ef {
-                    // NOTE: could just `res.push_pop_max()` with a single resize ...
-                    let _ = res.pop_max();
+                // optimized insert & removal maintaining original len
+                if res.len() == ef {
+                    let _ = res.push_pop_max((OrderedFloat(dist), point));
+                } else {
+                    let _ = res.push((OrderedFloat(dist), point));
                 }
             }
         }
@@ -290,8 +287,11 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
             return Ok(());
         }
 
-        // Get links for p
-        let links = &mut self.layers[level].get_mut(&p).ok_or(crate::Error::NotInIntMap(p))?.links;
+        // Get links for node p. If the node comes from lmdb we create a new NodeState with empty
+        // neighbours bitmap to track new HNSW graph edges.
+        let node_state = (self.layers[level].entry(p)).or_insert(NodeState { links: smallvec![] });
+        let links = &mut node_state.links;
+
         let cap = if level == 0 { M0 } else { M };
 
         if links.len() < cap {
@@ -318,7 +318,7 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
 
     // FIXME: shouldn't be &mut self
     fn search(
-        &mut self,
+        &self,
         query: &Item<D>,
         k: usize,
         ef: usize,
@@ -354,14 +354,9 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
 mod tests {
     use super::HnswBuilder;
     use crate::{
-        distance::{Cosine, Euclidean},
-        key::Key,
-        node::{Item, Node},
-        writer::BuildOption,
-        Database,
+        distance::Cosine, key::Key, node::{Item, Node}, ordered_float::OrderedFloat, writer::BuildOption, Database
     };
     use heed::EnvOpenOptions;
-    use ordered_float::OrderedFloat;
     use rand::{rngs::StdRng, thread_rng, Rng, SeedableRng};
     use roaring::RoaringBitmap;
     use std::{collections::HashMap, time::Instant};
@@ -392,16 +387,17 @@ mod tests {
         .unwrap();
 
         let mut wtxn = env.write_txn().unwrap();
-        let db: Database<Euclidean> = env.create_database(&mut wtxn, None).unwrap();
+        let db: Database<Cosine> = env.create_database(&mut wtxn, None).unwrap();
 
         // insert a few vectors
         // let mut rng = StdRng::seed_from_u64(42);
         let mut rng = thread_rng();
         let mut opts = BuildOption::default();
-        opts.ef_construction = 200;
-        let mut hnsw: HnswBuilder<Euclidean, 16, 32> = HnswBuilder::new(&opts);
+        opts.ef_construction = 400;
+        let mut hnsw: HnswBuilder<Cosine, 16, 32> = HnswBuilder::new(&opts);
 
-        let vecs: Vec<Vec<f32>> = (0..10000).map(|_| (0..768).map(|_| rng.gen()).collect()).collect();
+        let vecs: Vec<Vec<f32>> =
+            (0..2000).map(|_| (0..784).map(|_| rng.gen()).collect()).collect();
         let backup_vecs = vecs.clone();
         // dbg!("{:?}", &vecs);
 
@@ -414,7 +410,9 @@ mod tests {
             to_insert.insert(item_id as u32);
         }
 
+        let now = Instant::now();
         hnsw.build(to_insert, &db, &mut wtxn, &mut rng);
+        println!("build; {:?}", now.elapsed());
 
         // for (i, l) in hnsw.layers.iter().enumerate() {
         //     println!("layer: {i}");
@@ -422,24 +420,44 @@ mod tests {
         // }
 
         // search
-        let query: Vec<_> = (0..768).map(|_| rng.gen()).collect();
+        let query: Vec<_> = (0..784).map(|_| rng.gen()).collect();
         // dbg!("query = {}", &query);
         let q_item = Item::new(query.clone());
 
         let now = Instant::now();
-        let nns = hnsw.search(&q_item, 5, 64, &db, &wtxn);
-        println!("elapsed; {:?}", now.elapsed());
-        dbg!("{:?}", nns);
+        let nns = hnsw.search(&q_item, 10, 10, &db, &wtxn).unwrap();
+        println!("search; {:?}", now.elapsed());
 
         // check now
-        let opt = backup_vecs
+        fn l2_norm(vec: &[f32]) -> f32 {
+            vec.iter().map(|x| x * x).sum::<f32>().sqrt()
+        }
+
+        let query_norm = l2_norm(&query);
+        let mut opt: Vec<_> = backup_vecs
             .iter()
             .enumerate()
+            // .map(|(i, v)| {
+            //     let dist: f32 = v.iter().zip(query.iter()).map(|(a, b)| (a - b).powi(2)).sum();
+            //     (dist, i as u32)
+            // })
             .map(|(i, v)| {
-                let dist: f32 = v.iter().zip(query.iter()).map(|(a, b)| (a - b).powi(2)).sum();
-                (dist, i)
+                let dot: f32 = v.iter().zip(query.iter()).map(|(a, b)| a * b).sum();
+                let denom = l2_norm(v) * query_norm;
+                let cosine_sim = dot / denom.max(1e-6); // avoid division by zero
+                (0.5 - 0.5 * cosine_sim, i as u32)
             })
-            .min_by_key(|(d,_)| OrderedFloat(*d));
-        dbg!("{:?}", opt);
+            .collect();
+
+        opt.sort_by_key(|(d, _)| OrderedFloat(*d));
+
+        println!("{:?}", &opt[..nns.len()]);
+        println!("{:?}", &nns);
+
+        let mut recall = 0;
+        let nearest = RoaringBitmap::from_iter(opt.iter().take(nns.len()).map(|(_, i)| *i));
+        let retrieved = RoaringBitmap::from_iter(nns.iter().map(|(_, i)| *i));
+
+        println!("recall: {}", ((nearest & retrieved).len() as f64) / (nns.len() as f64));
     }
 }

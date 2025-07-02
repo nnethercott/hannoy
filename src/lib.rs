@@ -12,6 +12,7 @@ mod spaces;
 mod version;
 mod writer;
 
+mod ordered_float;
 mod unaligned_vector;
 
 pub use distance::Distance;
