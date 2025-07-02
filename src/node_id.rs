@@ -16,7 +16,7 @@ pub enum NodeMode {
     Updated = 1,
     /// The graph edges re stored under this id
     Links = 2,
-    /// The original vectors are stored under this id
+    /// The original vectors are stored under this id in `Leaf` structures.
     Item = 3,
 }
 

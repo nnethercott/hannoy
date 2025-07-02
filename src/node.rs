@@ -131,7 +131,7 @@ impl<'a, D: Distance> BytesEncode<'a> for NodeCodec<D> {
             }
             Node::Links(Links { links }) => {
                 bytes.push(LINKS_TAG);
-                links.serialize_into(&mut bytes);
+                links.serialize_into(&mut bytes)?;
             }
         }
         Ok(Cow::Owned(bytes))

@@ -210,7 +210,7 @@ impl<D: Distance> Writer<D> {
         let used_node_ids = self.used_nodes(wtxn, options)?;
         let concurrent_node_ids = ConcurrentNodeIds::new(used_node_ids);
 
-        self.index_hnsw(wtxn, rng, options, concurrent_node_ids, to_insert)?;
+        self.index_hnsw(wtxn, rng, options, to_insert)?;
 
         tracing::debug!("write the metadata...");
         let metadata = Metadata {
@@ -233,14 +233,11 @@ impl<D: Distance> Writer<D> {
         Ok(())
     }
 
-    // NOTE: this can be abstracted into a generic trait `Index` and move some code into the
-    // options. this way arroy can be a factory for annoy-like, hnsw, etc
     fn index_hnsw<R: Rng + SeedableRng>(
         &self,
         wtxn: &mut RwTxn,
         rng: &mut R,
         options: &BuildOption,
-        concurrent_node_ids: ConcurrentNodeIds,
         to_insert: RoaringBitmap,
     ) -> Result<(), Error> {
         todo!()

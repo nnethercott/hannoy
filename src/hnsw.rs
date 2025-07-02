@@ -50,18 +50,24 @@ impl<const M: usize> Debug for NodeState<M> {
     }
 }
 
+/// A struct to fetch nodes and links from lmdb
 struct LmdbReader<'a, D> {
     database: &'a Database<D>,
     rtxn: &'a RoTxn<'a>,
+    //lru
 }
 impl<'a, D: Distance> LmdbReader<'a, D> {
     pub fn get_item(&self, item_id: ItemId) -> Result<Item<'a, D>> {
         let key = Key::item(0, item_id);
+
+        // key is a `Key::item` so returned result must be a Node::Item
         Ok(self.database.get(self.rtxn, &key)?.ok_or(Error::missing_key(key))?.item().unwrap())
     }
 
     pub fn get_links(&self, item_id: ItemId, level: usize) -> Result<Links<'a>> {
         let key = Key::links(0, item_id, level as u8);
+
+        // key is a `Key::links` so returned result must be a Node::Links
         Ok(self.database.get(self.rtxn, &key)?.ok_or(Error::missing_key(key))?.links().unwrap())
     }
 }
@@ -79,7 +85,6 @@ pub struct HnswBuilder<D, const M: usize, const M0: usize> {
 impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
     pub fn new(opts: &BuildOption) -> Self {
         let assign_probas = Self::get_default_probas();
-        dbg!("{}", assign_probas.len());
 
         Self {
             assign_probas,
@@ -140,14 +145,14 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
             })
             .collect();
 
-        levels.sort_by(|(_, a), (_, b)| b.cmp(a));
+        levels.sort_unstable_by(|(_, a), (_, b)| b.cmp(a));
         // println!("levels={:?}", &levels);
 
         for _ in 0..=self.max_level {
             self.layers.push(IntMap::default());
         }
 
-        // build hnsw graph
+        // TODO: define a rayon scope with default threadpoool running hnsw.insert()
         for (item_id, level) in levels.into_iter() {
             if level == self.max_level {
                 self.entrypoints.push(item_id);
@@ -155,7 +160,7 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
             self.insert(item_id, level, database, wtxn)?;
         }
 
-        // insert into lmdb
+        // write single threaded to lmdb
         for lvl in 0..=self.max_level {
             for (item_id, node_state) in &self.layers[lvl] {
                 let key = Key::links(0, *item_id, lvl as u8);
@@ -189,7 +194,7 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
 
         // Greedy search with: ef = 1
         for lvl in (level + 1..=self.max_level).rev() {
-            let mut neighbours = self.explore_layer(&q, &eps, lvl, 1, &lmdb)?;
+            let neighbours = self.explore_layer(&q, &eps, lvl, 1, &lmdb)?;
             let closest = neighbours.peek_min().map(|(_, n)| *n).expect("No neighbor was found");
             eps = vec![closest];
         }
@@ -202,9 +207,7 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
             eps.clear();
 
             // FIXME: limit neighbors with algo 4
-            // NOTE: below should be changed to take M or M0 depending on layer. handle lvl 0
-            // seperately ?
-            let mut m_nearest_iter = neighbours.drain_asc().into_iter().take(M);
+            let mut m_nearest_iter = neighbours.drain_asc().into_iter().take(M0);
             while let Some((dist, n)) = m_nearest_iter.next() {
                 // add links in both directions
                 self.add_link(query, (dist, n), lvl);
@@ -228,6 +231,7 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
         level: usize,
     ) -> Result<Vec<ItemId>> {
         // FIXME: do some if-let chaining
+        // also should this be a Result<Option<Vec<_>> not Result<Vec<_>> ?
         if level >= self.layers.len() {
             let Links { links } = lmdb.get_links(item_id, level)?;
             return Ok(links.iter().collect());
@@ -268,7 +272,6 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
             visited.push(ep);
         }
 
-        // NOTE: no need to store a minmax heap here; can just store max distance
         while let Some((Reverse(OrderedFloat(f)), c)) = candidates.pop() {
             // stopping criteria
             if let Some((OrderedFloat(f_max), _)) = res.peek_max() {
@@ -286,7 +289,6 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
                     continue;
                 }
                 let dist = D::distance(query, &lmdb.get_item(point)?);
-
                 candidates.push((Reverse(OrderedFloat(dist)), point));
 
                 // optimized insert & removal maintaining original len
@@ -301,10 +303,12 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
         Ok(res)
     }
 
-    fn add_link(&mut self, p: ItemId, q: ScoredLink, level: usize) -> Result<()> {
+    /// Tries to add link between two elements, returns a bool indicating if the link was created
+    /// or not.
+    fn add_link(&mut self, p: ItemId, q: ScoredLink, level: usize) -> bool {
         // prevent links to self
         if p == q.1 {
-            return Ok(());
+            return false;
         }
 
         // Get links for node p. If the node comes from lmdb we create a new NodeState with empty
@@ -317,12 +321,12 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
         if links.len() < cap {
             links.push(q);
             links.sort_unstable();
-            return Ok(());
+            return true;
         }
 
         // Avoid doing work unless necessary
         if q.0 > links.last().unwrap().0 {
-            return Ok(());
+            return false;
         }
 
         // pop first to avoid moving smallvec to heap
@@ -333,10 +337,9 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
             Err(index) => links.insert(index, q),
         }
 
-        Ok(())
+        true
     }
 
-    // FIXME: shouldn't be &mut self
     fn search(
         &self,
         query: &Item<D>,
@@ -348,14 +351,14 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
         let lmdb = LmdbReader { database, rtxn };
         let mut eps = vec![self.entry_point()];
 
-        // layers L->1
+        // search layers L->1 with ef=1
         for lvl in (1..=self.max_level).rev() {
-            let mut neighbours = self.explore_layer(&query, &eps, lvl, 1, &lmdb)?;
-            let closest = neighbours.pop_min().map(|(_, n)| n).expect("No neighbor was found");
-            eps = vec![closest];
+            let neighbours = self.explore_layer(&query, &eps, lvl, 1, &lmdb)?;
+            let closest = neighbours.peek_min().map(|(_, n)| n).expect("No neighbor was found");
+            eps = vec![*closest];
         }
 
-        // layer 0
+        // search layer 0 with ef=ef
         let mut neighbours = self.explore_layer(&query, &eps, 0, ef, &lmdb)?;
 
         let mut nns = Vec::with_capacity(k);
@@ -422,7 +425,7 @@ mod tests {
         let mut hnsw: HnswBuilder<Cosine, 8, 16> = HnswBuilder::new(&opts);
 
         let vecs: Vec<Vec<f32>> =
-            (0..50000).map(|_| (0..784).map(|_| rng.gen()).collect()).collect();
+            (0..5000).map(|_| (0..784).map(|_| rng.gen()).collect()).collect();
         let backup_vecs = vecs.clone();
         // dbg!("{:?}", &vecs);
 

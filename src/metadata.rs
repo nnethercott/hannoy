@@ -22,13 +22,13 @@ impl<'a> heed::BytesEncode<'a> for MetadataCodec {
     type EItem = Metadata<'a>;
 
     fn bytes_encode(item: &'a Self::EItem) -> Result<Cow<'a, [u8]>, BoxedError> {
-        let Metadata { dimensions, items, entry_points: roots, distance } = item;
+        let Metadata { dimensions, items, entry_points, distance } = item;
         debug_assert!(!distance.as_bytes().iter().any(|&b| b == 0));
 
         let mut output = Vec::with_capacity(
             size_of::<u32>()
                 + items.serialized_size()
-                + roots.len() * size_of::<u32>()
+                + entry_points.len() * size_of::<u32>()
                 + distance.len()
                 + 1,
         );
@@ -37,7 +37,7 @@ impl<'a> heed::BytesEncode<'a> for MetadataCodec {
         output.extend_from_slice(&dimensions.to_be_bytes());
         output.extend_from_slice(&(items.serialized_size() as u32).to_be_bytes());
         items.serialize_into(&mut output)?;
-        output.extend_from_slice(roots.raw_bytes());
+        output.extend_from_slice(entry_points.raw_bytes());
 
         Ok(Cow::Owned(output))
     }
