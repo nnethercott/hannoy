@@ -11,6 +11,7 @@ use min_max_heap::MinMaxHeap;
 use nohash::{BuildNoHashHasher, NoHashHasher};
 use papaya::HashMap;
 use rand::{distributions::WeightedIndex, prelude::Distribution, Rng};
+use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use roaring::RoaringBitmap;
 use smallvec::{smallvec, SmallVec};
 
@@ -18,7 +19,8 @@ use crate::{
     key::Key,
     node::{Item, Links, Node},
     ordered_float::OrderedFloat,
-    writer::BuildOption,
+    parallel::{ImmutableItems, ImmutableLinks},
+    writer::{BuildOption, FrozzenReader},
     Database, Distance, Error, ItemId, Result,
 };
 
@@ -128,7 +130,7 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
     pub fn build<R>(
         &mut self,
         to_insert: RoaringBitmap,
-        database: &Database<D>,
+        database: Database<D>,
         wtxn: &mut RwTxn,
         rng: &mut R,
     ) -> Result<()>
@@ -146,19 +148,23 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
             .collect();
 
         levels.sort_unstable_by(|(_, a), (_, b)| b.cmp(a));
-        // println!("levels={:?}", &levels);
-
-        for _ in 0..=self.max_level {
+        for _ in 0..=self.max_level{
             self.layers.push(HashMap::new());
         }
 
-        // TODO: define a rayon scope with default threadpoool running hnsw.insert()
-        for (item_id, level) in levels.into_iter() {
-            if level == self.max_level {
-                self.entrypoints.push(item_id);
-            }
-            self.insert(item_id, level, database, wtxn)?;
+        // pointers to vector & links in the lmdb
+        let items = ImmutableItems::new(wtxn, database, &to_insert, 0)?;
+        let nb_links = database.len(wtxn)? + to_insert.len();
+        let links = ImmutableLinks::new(wtxn, database, 0, nb_links)?;
+        let lmdb = FrozzenReader { items: &items, links: &links };
+
+        for (item_id, level) in levels.iter().take_while(|(_, l)| *l == self.max_level) {
+            self.entrypoints.push(*item_id);
         }
+
+        levels.into_par_iter().for_each(|(id, lvl)| {
+            self.insert(id, lvl, &lmdb);
+        });
 
         // write single threaded to lmdb
         for lvl in 0..=self.max_level {
@@ -180,21 +186,14 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
         return self.entrypoints[0];
     }
 
-    fn insert(
-        &self,
-        query: ItemId,
-        level: usize,
-        database: &Database<D>,
-        rtxn: &RoTxn,
-    ) -> Result<()> {
-        let lmdb = LmdbReader { database, rtxn };
+    fn insert<'a>(&self, query: ItemId, level: usize, lmdb: &FrozzenReader<'a, D>) -> Result<()> {
         let mut eps = vec![self.entry_point()];
 
         let q = lmdb.get_item(query)?;
 
         // Greedy search with: ef = 1
         for lvl in (level + 1..=self.max_level).rev() {
-            let neighbours = self.explore_layer(&q, &eps, lvl, 1, &lmdb)?;
+            let neighbours = self.explore_layer(&q, &eps, lvl, 1, lmdb)?;
             let closest = neighbours.peek_min().map(|(_, n)| *n).expect("No neighbor was found");
             eps = vec![closest];
         }
@@ -203,7 +202,7 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
         for lvl in (0..=level.min(self.max_level)).rev() {
             self.create_node(query, lvl);
 
-            let mut neighbours = self.explore_layer(&q, &eps, lvl, self.ef_construction, &lmdb)?;
+            let mut neighbours = self.explore_layer(&q, &eps, lvl, self.ef_construction, lmdb)?;
             eps.clear();
 
             // FIXME: limit neighbors with algo 4
@@ -224,9 +223,9 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
     }
 
     /// Returns only the Id's of our neighbours.
-    fn get_neighbours(
+    fn get_neighbours<'a>(
         &self,
-        lmdb: &LmdbReader<'_, D>,
+        lmdb: &FrozzenReader<'a, D>,
         item_id: ItemId,
         level: usize,
     ) -> Result<Vec<ItemId>> {
@@ -250,13 +249,13 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn explore_layer(
+    fn explore_layer<'a>(
         &self,
         query: &Item<D>,
         eps: &[ItemId],
         level: usize,
         ef: usize,
-        lmdb: &LmdbReader<'_, D>,
+        lmdb: &FrozzenReader<'a, D>,
     ) -> Result<MinMaxHeap<ScoredLink>> {
         let mut candidates = BinaryHeap::new();
         let mut res = MinMaxHeap::with_capacity(ef);
@@ -342,15 +341,13 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
         map.update_or_insert_with(p, _add_link, || NodeState { links: smallvec![] });
     }
 
-    fn search(
+    fn search<'a>(
         &self,
         query: &Item<D>,
         k: usize,
         ef: usize,
-        database: &Database<D>,
-        rtxn: &RoTxn,
+        lmdb: &FrozzenReader<'a, D>,
     ) -> Result<Vec<ScoredLink>> {
-        let lmdb = LmdbReader { database, rtxn };
         let mut eps = vec![self.entry_point()];
 
         // search layers L->1 with ef=1
@@ -427,7 +424,7 @@ mod tests {
         let mut hnsw: HnswBuilder<Cosine, 8, 16> = HnswBuilder::new(&opts);
 
         let vecs: Vec<Vec<f32>> =
-            (0..10000).map(|_| (0..784).map(|_| rng.gen()).collect()).collect();
+            (0..50000).map(|_| (0..784).map(|_| rng.gen()).collect()).collect();
         let backup_vecs = vecs.clone();
         // dbg!("{:?}", &vecs);
 
@@ -441,7 +438,7 @@ mod tests {
         }
 
         let now = Instant::now();
-        hnsw.build(to_insert, &db, &mut wtxn, &mut rng);
+        hnsw.build(to_insert, db, &mut wtxn, &mut rng);
         wtxn.commit().unwrap();
         println!("build; {:?}", now.elapsed());
 
@@ -451,47 +448,47 @@ mod tests {
         // }
 
         // search, doing everything from lmdb
-        let mut hnsw2: HnswBuilder<Cosine, 8, 16> = HnswBuilder::new(&BuildOption::default());
-        hnsw2.entrypoints = hnsw.entrypoints.clone();
-        let query: Vec<_> = (0..784).map(|_| rng.gen()).collect();
-        let q_item = Item::new(query.clone());
-        // dbg!("query = {}", &query);
-
-        let now = Instant::now();
-        let rtxn = env.read_txn().unwrap();
-        let nns = hnsw2.search(&q_item, 10, 10, &db, &rtxn).unwrap();
-        println!("search; {:?}", now.elapsed());
-
-        // check now
-        fn l2_norm(vec: &[f32]) -> f32 {
-            vec.iter().map(|x| x * x).sum::<f32>().sqrt()
-        }
-
-        let query_norm = l2_norm(&query);
-        let mut opt: Vec<_> = backup_vecs
-            .iter()
-            .enumerate()
-            // .map(|(i, v)| {
-            //     let dist: f32 = v.iter().zip(query.iter()).map(|(a, b)| (a - b).powi(2)).sum();
-            //     (dist, i as u32)
-            // })
-            .map(|(i, v)| {
-                let dot: f32 = v.iter().zip(query.iter()).map(|(a, b)| a * b).sum();
-                let denom = l2_norm(v) * query_norm;
-                let cosine_sim = dot / denom.max(1e-6); // avoid division by zero
-                (0.5 - 0.5 * cosine_sim, i as u32)
-            })
-            .collect();
-
-        opt.sort_by_key(|(d, _)| OrderedFloat(*d));
-
-        println!("{:?}", &opt[..nns.len()]);
-        println!("{:?}", &nns);
-
-        let mut recall = 0;
-        let nearest = RoaringBitmap::from_iter(opt.iter().take(nns.len()).map(|(_, i)| *i));
-        let retrieved = RoaringBitmap::from_iter(nns.iter().map(|(_, i)| *i));
-
-        println!("recall: {}", ((nearest & retrieved).len() as f64) / (nns.len() as f64));
+        // let mut hnsw2: HnswBuilder<Cosine, 8, 16> = HnswBuilder::new(&BuildOption::default());
+        // hnsw2.entrypoints = hnsw.entrypoints.clone();
+        // let query: Vec<_> = (0..784).map(|_| rng.gen()).collect();
+        // let q_item = Item::new(query.clone());
+        // // dbg!("query = {}", &query);
+        //
+        // let now = Instant::now();
+        // let rtxn = env.read_txn().unwrap();
+        // let nns = hnsw2.search(&q_item, 10, 10, &db, &rtxn).unwrap();
+        // println!("search; {:?}", now.elapsed());
+        //
+        // // check now
+        // fn l2_norm(vec: &[f32]) -> f32 {
+        //     vec.iter().map(|x| x * x).sum::<f32>().sqrt()
+        // }
+        //
+        // let query_norm = l2_norm(&query);
+        // let mut opt: Vec<_> = backup_vecs
+        //     .iter()
+        //     .enumerate()
+        //     // .map(|(i, v)| {
+        //     //     let dist: f32 = v.iter().zip(query.iter()).map(|(a, b)| (a - b).powi(2)).sum();
+        //     //     (dist, i as u32)
+        //     // })
+        //     .map(|(i, v)| {
+        //         let dot: f32 = v.iter().zip(query.iter()).map(|(a, b)| a * b).sum();
+        //         let denom = l2_norm(v) * query_norm;
+        //         let cosine_sim = dot / denom.max(1e-6); // avoid division by zero
+        //         (0.5 - 0.5 * cosine_sim, i as u32)
+        //     })
+        //     .collect();
+        //
+        // opt.sort_by_key(|(d, _)| OrderedFloat(*d));
+        //
+        // println!("{:?}", &opt[..nns.len()]);
+        // println!("{:?}", &nns);
+        //
+        // let mut recall = 0;
+        // let nearest = RoaringBitmap::from_iter(opt.iter().take(nns.len()).map(|(_, i)| *i));
+        // let retrieved = RoaringBitmap::from_iter(nns.iter().map(|(_, i)| *i));
+        //
+        // println!("recall: {}", ((nearest & retrieved).len() as f64) / (nns.len() as f64));
     }
 }

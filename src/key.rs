@@ -100,8 +100,8 @@ impl Prefix {
         Self { index, mode: Some(NodeMode::Item) }
     }
 
-    pub const fn node(index: u16) -> Self {
-        Self { index, mode: Some(NodeMode::Item) }
+    pub const fn links(index: u16) -> Self {
+        Self { index, mode: Some(NodeMode::Links) }
     }
 
     pub const fn updated(index: u16) -> Self {

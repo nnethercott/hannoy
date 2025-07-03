@@ -8,12 +8,12 @@ use roaring::RoaringBitmap;
 use crate::distance::Distance;
 use crate::internals::KeyCodec;
 use crate::item_iter::ItemIter;
-use crate::node::{Item, ItemIds};
-use crate::parallel::{ConcurrentNodeIds, ImmutableItems, ImmutableNodes};
+use crate::node::{Item, ItemIds, Links};
+use crate::parallel::{ConcurrentNodeIds, ImmutableItems, ImmutableLinks};
 use crate::unaligned_vector::UnalignedVector;
 use crate::version::{Version, VersionCodec};
 use crate::{
-    Database, Error, ItemId, Key, Metadata, MetadataCodec, Node, Prefix, PrefixCodec, Result,
+    Database, Error, ItemId, Key, LayerId, Metadata, MetadataCodec, Node, Prefix, PrefixCodec, Result
 };
 
 /// The options available when building the arroy database.
@@ -167,7 +167,7 @@ impl<D: Distance> Writer<D> {
         Ok(self
             .database
             .remap_key_type::<PrefixCodec>()
-            .prefix_iter(rtxn, &Prefix::node(self.index))?
+            .prefix_iter(rtxn, &Prefix::links(self.index))?
             .remap_types::<KeyCodec, DecodeIgnore>()
             .try_fold(RoaringBitmap::new(), |mut bitmap, used| -> Result<RoaringBitmap> {
                 bitmap.insert(used?.0.node.item);
@@ -286,17 +286,31 @@ impl<D: Distance> Writer<D> {
 }
 
 #[derive(Clone)]
-struct FrozzenReader<'a, D: Distance> {
-    items: &'a ImmutableItems<'a, D>,
-    nodes: &'a ImmutableNodes<'a, D>,
-    concurrent_node_ids: &'a ConcurrentNodeIds,
+pub(crate) struct FrozzenReader<'a, D: Distance> {
+    pub items: &'a ImmutableItems<'a, D>,
+    pub links: &'a ImmutableLinks<'a, D>,
+}
+
+impl<'a, D: Distance> FrozzenReader<'a, D> {
+    pub fn get_item(&self, item_id: ItemId) -> Result<Item<'a, D>>{
+        let key = Key::item(0, item_id);
+
+        // key is a `Key::item` so returned result must be a Node::Item
+        Ok(self.items.get(item_id)?.ok_or(Error::missing_key(key))?)
+    }
+    pub fn get_links(&self, item_id: ItemId, level: usize) -> Result<Links<'a>>{
+        let key = Key::links(0, item_id, level as u8);
+
+        // key is a `Key::item` so returned result must be a Node::Item
+        Ok(self.links.get(item_id, level as u8)?.ok_or(Error::missing_key(key))?)
+    }
 }
 
 fn clear_nodes<D: Distance>(wtxn: &mut RwTxn, database: Database<D>, index: u16) -> Result<()> {
     database.delete(wtxn, &Key::metadata(index))?;
     let mut cursor = database
         .remap_types::<PrefixCodec, DecodeIgnore>()
-        .prefix_iter_mut(wtxn, &Prefix::node(index))?
+        .prefix_iter_mut(wtxn, &Prefix::links(index))?
         .remap_key_type::<DecodeIgnore>();
     while let Some((_id, _node)) = cursor.next().transpose()? {
         // safety: we keep no reference into the database between operations
