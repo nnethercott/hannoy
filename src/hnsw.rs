@@ -11,7 +11,10 @@ use min_max_heap::MinMaxHeap;
 use nohash::{BuildNoHashHasher, NoHashHasher};
 use papaya::HashMap;
 use rand::{distributions::WeightedIndex, prelude::Distribution, Rng};
-use rayon::iter::{IntoParallelIterator, ParallelIterator};
+use rayon::{
+    iter::{IntoParallelIterator, ParallelIterator},
+    ThreadPoolBuilder,
+};
 use roaring::RoaringBitmap;
 use smallvec::{smallvec, SmallVec};
 
@@ -148,7 +151,7 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
             .collect();
 
         levels.sort_unstable_by(|(_, a), (_, b)| b.cmp(a));
-        for _ in 0..=self.max_level{
+        for _ in 0..=self.max_level {
             self.layers.push(HashMap::new());
         }
 
@@ -162,6 +165,13 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
             self.entrypoints.push(*item_id);
         }
 
+        ThreadPoolBuilder::new()
+            .num_threads(1)
+            .build_global()
+            .expect("Failed to build global thread pool");
+
+        // FIXME: need to group by level, fork-join like
+        // could use kero's group by thing to build each iter
         levels.into_par_iter().for_each(|(id, lvl)| {
             self.insert(id, lvl, &lmdb);
         });
@@ -417,14 +427,14 @@ mod tests {
         let db: Database<Cosine> = env.create_database(&mut wtxn, None).unwrap();
 
         // insert a few vectors
-        // let mut rng = StdRng::seed_from_u64(42);
-        let mut rng = thread_rng();
+        let mut rng = StdRng::seed_from_u64(42);
+        // let mut rng = thread_rng();
         let mut opts = BuildOption::default();
         opts.ef_construction = 400;
-        let mut hnsw: HnswBuilder<Cosine, 8, 16> = HnswBuilder::new(&opts);
+        let mut hnsw: HnswBuilder<Cosine, 2, 2> = HnswBuilder::new(&opts);
 
         let vecs: Vec<Vec<f32>> =
-            (0..50000).map(|_| (0..784).map(|_| rng.gen()).collect()).collect();
+            (0..20).map(|_| (0..784).map(|_| rng.gen()).collect()).collect();
         let backup_vecs = vecs.clone();
         // dbg!("{:?}", &vecs);
 
@@ -440,6 +450,7 @@ mod tests {
         let now = Instant::now();
         hnsw.build(to_insert, db, &mut wtxn, &mut rng);
         wtxn.commit().unwrap();
+        println!("{:?}", hnsw.layers);
         println!("build; {:?}", now.elapsed());
 
         // for (i, l) in hnsw.layers.iter().enumerate() {
