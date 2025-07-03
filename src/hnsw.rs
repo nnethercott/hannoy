@@ -8,7 +8,8 @@ use std::{
 
 use heed::{RoTxn, RwTxn};
 use min_max_heap::MinMaxHeap;
-use nohash::IntMap;
+use nohash::{BuildNoHashHasher, NoHashHasher};
+use papaya::HashMap;
 use rand::{distributions::WeightedIndex, prelude::Distribution, Rng};
 use roaring::RoaringBitmap;
 use smallvec::{smallvec, SmallVec};
@@ -77,8 +78,7 @@ pub struct HnswBuilder<D, const M: usize, const M0: usize> {
     ef_construction: usize,
     max_level: usize,
     entrypoints: Vec<ItemId>,
-    pub layers: Vec<IntMap<ItemId, NodeState<M0>>>,
-    // last: IntMap<ItemId, NodeState<M>>,
+    pub layers: Vec<HashMap<ItemId, NodeState<M0>>>,
     distance: PhantomData<D>,
 }
 
@@ -149,7 +149,7 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
         // println!("levels={:?}", &levels);
 
         for _ in 0..=self.max_level {
-            self.layers.push(IntMap::default());
+            self.layers.push(HashMap::new());
         }
 
         // TODO: define a rayon scope with default threadpoool running hnsw.insert()
@@ -162,7 +162,7 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
 
         // write single threaded to lmdb
         for lvl in 0..=self.max_level {
-            for (item_id, node_state) in &self.layers[lvl] {
+            for (item_id, node_state) in &self.layers[lvl].pin() {
                 let key = Key::links(0, *item_id, lvl as u8);
                 let links = Links {
                     links: Cow::Owned(RoaringBitmap::from_iter(
@@ -181,7 +181,7 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
     }
 
     fn insert(
-        &mut self,
+        &self,
         query: ItemId,
         level: usize,
         database: &Database<D>,
@@ -219,8 +219,8 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
         Ok(())
     }
 
-    fn create_node(&mut self, item_id: ItemId, level: usize) {
-        self.layers[level].insert(item_id, NodeState { links: smallvec![] });
+    fn create_node(&self, item_id: ItemId, level: usize) {
+        self.layers[level].pin().insert(item_id, NodeState { links: smallvec![] });
     }
 
     /// Returns only the Id's of our neighbours.
@@ -238,7 +238,7 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
         }
 
         // O(1)
-        match self.layers[level].get(&item_id) {
+        match self.layers[level].pin().get(&item_id) {
             Some(node_state) => return Ok(node_state.links.iter().map(|(_, i)| *i).collect()),
 
             // O(log n)
@@ -305,39 +305,41 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
 
     /// Tries to add link between two elements, returns a bool indicating if the link was created
     /// or not.
-    fn add_link(&mut self, p: ItemId, q: ScoredLink, level: usize) -> bool {
+    fn add_link(&self, p: ItemId, q: ScoredLink, level: usize) {
         // prevent links to self
         if p == q.1 {
-            return false;
+            return;
         }
 
-        // Get links for node p. If the node comes from lmdb we create a new NodeState with empty
-        // neighbours bitmap to track new HNSW graph edges.
-        let node_state = (self.layers[level].entry(p)).or_insert(NodeState { links: smallvec![] });
-        let links = &mut node_state.links;
+        let map = self.layers[level].pin();
 
-        let cap = if level == 0 { M0 } else { M };
+        // 'pure' links update function
+        let _add_link = |node_state: &NodeState<M0>| {
+            let mut links = node_state.links.clone();
+            let cap = if level == 0 { M0 } else { M };
 
-        if links.len() < cap {
-            links.push(q);
-            links.sort_unstable();
-            return true;
-        }
+            if links.len() < cap {
+                links.push(q);
+                return NodeState { links };
+            }
 
-        // Avoid doing work unless necessary
-        if q.0 > links.last().unwrap().0 {
-            return false;
-        }
+            // This is safe cause we would have returned already above if links.len() == 0
+            if q.0 > links.last().unwrap().0 {
+                return NodeState { links };
+            }
 
-        // pop first to avoid moving smallvec to heap
-        let _ = links.pop();
+            // pop first to avoid moving smallvec to heap
+            let _ = links.pop();
 
-        match links.binary_search(&q) {
-            Ok(index) => links.insert(index, q),
-            Err(index) => links.insert(index, q),
-        }
+            match links.binary_search(&q) {
+                Ok(index) => links.insert(index, q),
+                Err(index) => links.insert(index, q),
+            }
 
-        true
+            NodeState { links }
+        };
+
+        map.update_or_insert_with(p, _add_link, || NodeState { links: smallvec![] });
     }
 
     fn search(
@@ -425,7 +427,7 @@ mod tests {
         let mut hnsw: HnswBuilder<Cosine, 8, 16> = HnswBuilder::new(&opts);
 
         let vecs: Vec<Vec<f32>> =
-            (0..5000).map(|_| (0..784).map(|_| rng.gen()).collect()).collect();
+            (0..10000).map(|_| (0..784).map(|_| rng.gen()).collect()).collect();
         let backup_vecs = vecs.clone();
         // dbg!("{:?}", &vecs);
 
