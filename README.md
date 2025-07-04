@@ -20,6 +20,7 @@ Some links:
 - [x] remove hardcode on lmdb_index=0 in builder
 - [ ] either make Writer<R,D,M,M0> or remove SmallVec
 - [ ] make hannoy work on [vector-relevancy-benchmark](https://github.com/meilisearch/vector-store-relevancy-benchmark)
+- [ ] see if we can memoize <p,q> in a cache during search heuristic
 
 ## Notes:
 - `Reader::by_item` **much** faster in hnsw since we have a direct bitmap of neighbours

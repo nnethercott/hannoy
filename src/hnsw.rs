@@ -1,5 +1,10 @@
 use std::{
-    borrow::Cow, cmp::Reverse, collections::BinaryHeap, f32, fmt::{self, Debug}, marker::PhantomData
+    borrow::Cow,
+    cmp::Reverse,
+    collections::BinaryHeap,
+    f32,
+    fmt::{self, Debug},
+    marker::PhantomData,
 };
 
 use heed::{RoTxn, RwTxn};
@@ -19,6 +24,7 @@ use crate::{
 
 // TODO:
 // - add dedicated 0th layer with M0 and fix corresponding code
+// - add a NodeState.links() method or something
 
 pub(crate) type ScoredLink = (OrderedFloat, ItemId);
 
@@ -202,14 +208,12 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
             self.create_node(query, lvl);
 
             let mut neighbours = self.explore_layer(&q, &eps, lvl, self.ef_construction, &lmdb)?;
-            eps.clear();
 
-            // FIXME: limit neighbors with algo 4
-            let mut m_nearest_iter = neighbours.drain_asc().into_iter().take(M0);
-            while let Some((dist, n)) = m_nearest_iter.next() {
+            eps.clear();
+            for (dist, n) in self.select_heuristic(neighbours, level, false, &lmdb)? {
                 // add links in both directions
-                self.add_link(query, (dist, n), lvl);
-                self.add_link(n, (dist, query), lvl);
+                self.add_link(query, (dist, n), lvl, &lmdb)?;
+                self.add_link(n, (dist, query), lvl, &lmdb)?;
                 eps.push(n);
             }
         }
@@ -302,10 +306,16 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
 
     /// Tries to add link between two elements, returns a bool indicating if the link was created
     /// or not.
-    fn add_link(&mut self, p: ItemId, q: ScoredLink, level: usize) -> bool {
+    fn add_link(
+        &mut self,
+        p: ItemId,
+        q: ScoredLink,
+        level: usize,
+        lmdb: &LmdbReader<'_, D>,
+    ) -> Result<()> {
         // prevent links to self
         if p == q.1 {
-            return false;
+            return Ok(());
         }
 
         // Get links for node p. If the node comes from lmdb we create a new NodeState with empty
@@ -318,23 +328,63 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
         if links.len() < cap {
             links.push(q);
             links.sort_unstable();
-            return true;
+            return Ok(());
         }
 
-        // Avoid doing work unless necessary
-        if q.0 > links.last().unwrap().0 {
-            return false;
+        // else select heuristic
+        let mut links_tmp = links.clone();
+        links_tmp.push(q);
+        drop(links);
+
+        let new_links =
+            self.select_heuristic(MinMaxHeap::from_iter(links_tmp), level, false, lmdb)?;
+        self.layers[level].entry(p).and_modify(|s| s.links = SmallVec::from_iter(new_links));
+
+        Ok(())
+    }
+
+    /// Naively choosing the nearest neighbours performs poorly on clustered data since we can never
+    /// escape our local neighbourhood.
+    fn select_heuristic(
+        &self,
+        mut candidates: MinMaxHeap<ScoredLink>,
+        level: usize,
+        keep_discarded: bool,
+        lmdb: &LmdbReader<'_, D>,
+    ) -> Result<Vec<ScoredLink>> {
+        let mut selected: Vec<ScoredLink> = Vec::with_capacity(M0);
+        let mut discared = vec![];
+
+        let cap = if level == 0 { M0 } else { M };
+
+        while let Some((dist_to_query, c)) = candidates.pop_min() {
+            if selected.len() == cap {
+                break;
+            }
+
+            // ensure we're closer to the query than we are to other candidates
+            // TODO: make this more rust like, `try_fold` or something
+            let mut ok_to_add = true;
+            for i in selected.iter().map(|(_, i)| *i) {
+                let d = D::distance(&lmdb.get_item(c)?, &lmdb.get_item(i)?);
+                if OrderedFloat(d) < dist_to_query {
+                    ok_to_add = false;
+                    break;
+                }
+            }
+
+            if ok_to_add {
+                selected.push((dist_to_query, c));
+            } else if keep_discarded {
+                discared.push((dist_to_query, c));
+            }
         }
 
-        // pop first to avoid moving smallvec to heap
-        let _ = links.pop();
-
-        match links.binary_search(&q) {
-            Ok(index) => links.insert(index, q),
-            Err(index) => links.insert(index, q),
+        while keep_discarded && selected.len() < cap && discared.len() > 0 {
+            selected.push(discared.remove(0));
         }
 
-        true
+        Ok(selected)
     }
 }
 
