@@ -1,9 +1,5 @@
 use std::{
-    borrow::Cow,
-    cmp::Reverse,
-    collections::BinaryHeap,
-    fmt::{self, Debug},
-    marker::PhantomData,
+    borrow::Cow, cmp::Reverse, collections::BinaryHeap, f32, fmt::{self, Debug}, marker::PhantomData
 };
 
 use heed::{RoTxn, RwTxn};
@@ -24,7 +20,7 @@ use crate::{
 // TODO:
 // - add dedicated 0th layer with M0 and fix corresponding code
 
-type ScoredLink = (OrderedFloat, ItemId);
+pub(crate) type ScoredLink = (OrderedFloat, ItemId);
 
 /// State with stack-allocated graph edges
 struct NodeState<const M: usize> {
@@ -53,19 +49,20 @@ impl<const M: usize> Debug for NodeState<M> {
 /// A struct to fetch nodes and links from lmdb
 struct LmdbReader<'a, D> {
     database: &'a Database<D>,
+    index: u16,
     rtxn: &'a RoTxn<'a>,
     //lru
 }
 impl<'a, D: Distance> LmdbReader<'a, D> {
     pub fn get_item(&self, item_id: ItemId) -> Result<Item<'a, D>> {
-        let key = Key::item(0, item_id);
+        let key = Key::item(self.index, item_id);
 
         // key is a `Key::item` so returned result must be a Node::Item
         Ok(self.database.get(self.rtxn, &key)?.ok_or(Error::missing_key(key))?.item().unwrap())
     }
 
     pub fn get_links(&self, item_id: ItemId, level: usize) -> Result<Links<'a>> {
-        let key = Key::links(0, item_id, level as u8);
+        let key = Key::links(self.index, item_id, level as u8);
 
         // key is a `Key::links` so returned result must be a Node::Links
         Ok(self.database.get(self.rtxn, &key)?.ok_or(Error::missing_key(key))?.links().unwrap())
@@ -75,8 +72,8 @@ impl<'a, D: Distance> LmdbReader<'a, D> {
 pub struct HnswBuilder<D, const M: usize, const M0: usize> {
     assign_probas: Vec<f32>,
     ef_construction: usize,
-    max_level: usize,
-    entrypoints: Vec<ItemId>,
+    pub max_level: usize,
+    pub entry_points: Vec<ItemId>,
     pub layers: Vec<IntMap<ItemId, NodeState<M0>>>,
     // last: IntMap<ItemId, NodeState<M>>,
     distance: PhantomData<D>,
@@ -90,7 +87,7 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
             assign_probas,
             ef_construction: opts.ef_construction,
             max_level: 0,
-            entrypoints: vec![],
+            entry_points: vec![],
             layers: vec![],
             distance: PhantomData,
         }
@@ -99,8 +96,7 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
     /// build quantiles from an x ~ exp(1/ln(m))
     fn get_default_probas() -> Vec<f32> {
         let mut assign_probas = Vec::with_capacity(M);
-        // NOTE: breaks when M=1 ...
-        let level_factor = 1.0 / (M as f32).ln();
+        let level_factor = 1.0 / (M as f32 + f32::EPSILON).ln();
         let mut level = 0;
         loop {
             // P(L<x<L+1) = P(x<L+1) - P(x<L)
@@ -129,6 +125,7 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
         &mut self,
         to_insert: RoaringBitmap,
         database: &Database<D>,
+        index: u16,
         wtxn: &mut RwTxn,
         rng: &mut R,
     ) -> Result<()>
@@ -146,18 +143,16 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
             .collect();
 
         levels.sort_unstable_by(|(_, a), (_, b)| b.cmp(a));
-        // println!("levels={:?}", &levels);
 
         for _ in 0..=self.max_level {
             self.layers.push(IntMap::default());
         }
 
-        // TODO: define a rayon scope with default threadpoool running hnsw.insert()
         for (item_id, level) in levels.into_iter() {
             if level == self.max_level {
-                self.entrypoints.push(item_id);
+                self.entry_points.push(item_id);
             }
-            self.insert(item_id, level, database, wtxn)?;
+            self.insert(item_id, level, database, index, wtxn)?;
         }
 
         // write single threaded to lmdb
@@ -173,11 +168,13 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
             }
         }
 
+        // println!("{:?}", &self.layers);
+
         Ok(())
     }
 
     fn entry_point(&self) -> ItemId {
-        return self.entrypoints[0];
+        return self.entry_points[0];
     }
 
     fn insert(
@@ -185,9 +182,10 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
         query: ItemId,
         level: usize,
         database: &Database<D>,
+        index: u16,
         rtxn: &RoTxn,
     ) -> Result<()> {
-        let lmdb = LmdbReader { database, rtxn };
+        let lmdb = LmdbReader { database, index, rtxn };
         let mut eps = vec![self.entry_point()];
 
         let q = lmdb.get_item(query)?;
@@ -230,8 +228,7 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
         item_id: ItemId,
         level: usize,
     ) -> Result<Vec<ItemId>> {
-        // FIXME: do some if-let chaining
-        // also should this be a Result<Option<Vec<_>> not Result<Vec<_>> ?
+        // FIXME: should this be a Result<Option<Vec<_>> not Result<Vec<_>> ?
         if level >= self.layers.len() {
             let Links { links } = lmdb.get_links(item_id, level)?;
             return Ok(links.iter().collect());
@@ -339,38 +336,6 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
 
         true
     }
-
-    fn search(
-        &self,
-        query: &Item<D>,
-        k: usize,
-        ef: usize,
-        database: &Database<D>,
-        rtxn: &RoTxn,
-    ) -> Result<Vec<ScoredLink>> {
-        let lmdb = LmdbReader { database, rtxn };
-        let mut eps = vec![self.entry_point()];
-
-        // search layers L->1 with ef=1
-        for lvl in (1..=self.max_level).rev() {
-            let neighbours = self.explore_layer(&query, &eps, lvl, 1, &lmdb)?;
-            let closest = neighbours.peek_min().map(|(_, n)| n).expect("No neighbor was found");
-            eps = vec![*closest];
-        }
-
-        // search layer 0 with ef=ef
-        let mut neighbours = self.explore_layer(&query, &eps, 0, ef, &lmdb)?;
-
-        let mut nns = Vec::with_capacity(k);
-        while let Some(sp) = neighbours.pop_min() {
-            nns.push(sp);
-            if nns.len() == k {
-                break;
-            }
-        }
-
-        Ok(nns)
-    }
 }
 
 #[cfg(test)]
@@ -403,93 +368,5 @@ mod tests {
         });
 
         dbg!("{:?}", bins);
-    }
-
-    #[test]
-    fn test_build() {
-        let env = unsafe {
-            EnvOpenOptions::new()
-                .map_size(1024 * 1024 * 1024 * 2) // 2GiB
-                .open("./")
-        }
-        .unwrap();
-
-        let mut wtxn = env.write_txn().unwrap();
-        let db: Database<Cosine> = env.create_database(&mut wtxn, None).unwrap();
-
-        // insert a few vectors
-        // let mut rng = StdRng::seed_from_u64(42);
-        let mut rng = thread_rng();
-        let mut opts = BuildOption::default();
-        opts.ef_construction = 400;
-        let mut hnsw: HnswBuilder<Cosine, 8, 16> = HnswBuilder::new(&opts);
-
-        let vecs: Vec<Vec<f32>> =
-            (0..5000).map(|_| (0..784).map(|_| rng.gen()).collect()).collect();
-        let backup_vecs = vecs.clone();
-        // dbg!("{:?}", &vecs);
-
-        let mut to_insert = RoaringBitmap::new();
-        for (item_id, vec) in vecs.into_iter().enumerate() {
-            let item = Item::new(vec);
-            db.put(&mut wtxn, &Key::item(0, item_id as u32), &Node::Item(item)).unwrap();
-
-            // update build bitmap
-            to_insert.insert(item_id as u32);
-        }
-
-        let now = Instant::now();
-        hnsw.build(to_insert, &db, &mut wtxn, &mut rng);
-        wtxn.commit().unwrap();
-        println!("build; {:?}", now.elapsed());
-
-        // for (i, l) in hnsw.layers.iter().enumerate() {
-        //     println!("layer: {i}");
-        //     println!("hnsw state: {:?}", l);
-        // }
-
-        // search, doing everything from lmdb
-        let mut hnsw2: HnswBuilder<Cosine, 8, 16> = HnswBuilder::new(&BuildOption::default());
-        hnsw2.entrypoints = hnsw.entrypoints.clone();
-        let query: Vec<_> = (0..784).map(|_| rng.gen()).collect();
-        let q_item = Item::new(query.clone());
-        // dbg!("query = {}", &query);
-
-        let now = Instant::now();
-        let rtxn = env.read_txn().unwrap();
-        let nns = hnsw2.search(&q_item, 10, 10, &db, &rtxn).unwrap();
-        println!("search; {:?}", now.elapsed());
-
-        // check now
-        fn l2_norm(vec: &[f32]) -> f32 {
-            vec.iter().map(|x| x * x).sum::<f32>().sqrt()
-        }
-
-        let query_norm = l2_norm(&query);
-        let mut opt: Vec<_> = backup_vecs
-            .iter()
-            .enumerate()
-            // .map(|(i, v)| {
-            //     let dist: f32 = v.iter().zip(query.iter()).map(|(a, b)| (a - b).powi(2)).sum();
-            //     (dist, i as u32)
-            // })
-            .map(|(i, v)| {
-                let dot: f32 = v.iter().zip(query.iter()).map(|(a, b)| a * b).sum();
-                let denom = l2_norm(v) * query_norm;
-                let cosine_sim = dot / denom.max(1e-6); // avoid division by zero
-                (0.5 - 0.5 * cosine_sim, i as u32)
-            })
-            .collect();
-
-        opt.sort_by_key(|(d, _)| OrderedFloat(*d));
-
-        println!("{:?}", &opt[..nns.len()]);
-        println!("{:?}", &nns);
-
-        let mut recall = 0;
-        let nearest = RoaringBitmap::from_iter(opt.iter().take(nns.len()).map(|(_, i)| *i));
-        let retrieved = RoaringBitmap::from_iter(nns.iter().map(|(_, i)| *i));
-
-        println!("recall: {}", ((nearest & retrieved).len() as f64) / (nns.len() as f64));
     }
 }

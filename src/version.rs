@@ -18,11 +18,6 @@ impl fmt::Display for Version {
 }
 
 impl Version {
-    /// Returns the version before the first versioned database.
-    pub fn before_version_db_was_introduced() -> Self {
-        Self { major: 0, minor: 4, patch: 0 }
-    }
-
     pub fn current() -> Self {
         Version {
             major: env!("CARGO_PKG_VERSION_MAJOR").parse().unwrap(),

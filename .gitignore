@@ -5,3 +5,4 @@ Cargo.lock
 *.tree
 lock.mdb
 data.mdb
+assets
