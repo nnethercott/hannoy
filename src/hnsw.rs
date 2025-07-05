@@ -273,30 +273,30 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
             visited.push(ep);
         }
 
-        while let Some((Reverse(OrderedFloat(f)), c)) = candidates.pop() {
-            // stopping criteria
-            if let Some((OrderedFloat(f_max), _)) = res.peek_max() {
-                if f > *f_max {
-                    break;
-                }
+        while let Some(&(Reverse(OrderedFloat(f)), c)) = candidates.peek() {
+            let &(OrderedFloat(f_max), _) = res.peek_max().unwrap();
+            if f > f_max {
+                break;
             }
+            let (_, c) = candidates.pop().unwrap(); // Now safe to pop
 
             // Get neighborhood of candidate either from self or LMDB
             let proximity = self.get_neighbours(lmdb, c, level)?;
-
-            // can we par_iter distance computations ?
             for point in proximity {
                 if !visited.insert(point) {
                     continue;
                 }
                 let dist = D::distance(query, &lmdb.get_item(point)?);
-                candidates.push((Reverse(OrderedFloat(dist)), point));
 
-                // optimized insert & removal maintaining original len
-                if res.len() == ef {
-                    let _ = res.push_pop_max((OrderedFloat(dist), point));
-                } else {
-                    let _ = res.push((OrderedFloat(dist), point));
+                if res.len() < ef || dist < f_max {
+                    candidates.push((Reverse(OrderedFloat(dist)), point));
+
+                    // optimized insert & removal maintaining original len
+                    if res.len() == ef {
+                        let _ = res.push_pop_max((OrderedFloat(dist), point));
+                    } else {
+                        let _ = res.push((OrderedFloat(dist), point));
+                    }
                 }
             }
         }

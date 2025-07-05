@@ -209,7 +209,7 @@ impl<'t, D: Distance> Reader<'t, D> {
         Ok(self.database.get(rtxn, key)?)
     }
 
-    // FIXME: this is more or less a direct copy of the builder, except we use a single 
+    // FIXME: this is more or less a direct copy of the builder, except we use a single
     // RoTxn instead of a FrozzenReader
     fn explore_layer(
         &self,
@@ -232,35 +232,33 @@ impl<'t, D: Distance> Reader<'t, D> {
             res.push((OrderedFloat(dist), ep));
             visited.push(ep);
         }
-
-        while let Some((Reverse(OrderedFloat(f)), c)) = candidates.pop() {
-            // stopping criteria
-            if let Some((OrderedFloat(f_max), _)) = res.peek_max() {
-                if f > *f_max {
-                    break;
-                }
+        while let Some(&(Reverse(OrderedFloat(f)), c)) = candidates.peek() {
+            let &(OrderedFloat(f_max), _) = res.peek_max().unwrap();
+            if f > f_max {
+                break;
             }
+            let (_, c) = candidates.pop().unwrap(); // Now safe to pop
 
             // Get neighborhood of candidate either from self or LMDB
             let proximity = match get_links(rtxn, self.database, self.index, c, level)? {
                 Some(Links { links }) => links.iter().collect::<Vec<ItemId>>(),
                 None => unreachable!(),
             };
-
-            // can we par_iter distance computations ?
             for point in proximity {
                 if !visited.insert(point) {
                     continue;
                 }
-                let dist =
-                    D::distance(query, &get_item(self.database, self.index, rtxn, point)?.unwrap());
-                candidates.push((Reverse(OrderedFloat(dist)), point));
+                let dist = D::distance(query, &get_item(self.database, self.index, rtxn, point)?.unwrap());
 
-                // optimized insert & removal maintaining original len
-                if res.len() == ef {
-                    let _ = res.push_pop_max((OrderedFloat(dist), point));
-                } else {
-                    let _ = res.push((OrderedFloat(dist), point));
+                if res.len() < ef || dist < f_max {
+                    candidates.push((Reverse(OrderedFloat(dist)), point));
+
+                    // optimized insert & removal maintaining original len
+                    if res.len() == ef {
+                        let _ = res.push_pop_max((OrderedFloat(dist), point));
+                    } else {
+                        let _ = res.push((OrderedFloat(dist), point));
+                    }
                 }
             }
         }
