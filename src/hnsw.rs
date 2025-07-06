@@ -210,7 +210,7 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
             let mut neighbours = self.explore_layer(&q, &eps, lvl, self.ef_construction, &lmdb)?;
 
             eps.clear();
-            for (dist, n) in self.select_heuristic(neighbours, level, false, &lmdb)? {
+            for (dist, n) in self.select_sng(neighbours, level, false, &lmdb)? {
                 // add links in both directions
                 self.add_link(query, (dist, n), lvl, &lmdb)?;
                 self.add_link(n, (dist, query), lvl, &lmdb)?;
@@ -304,8 +304,7 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
         Ok(res)
     }
 
-    /// Tries to add link between two elements, returns a bool indicating if the link was created
-    /// or not.
+    /// Tries to add a new link between nodes in a single direction.
     fn add_link(
         &mut self,
         p: ItemId,
@@ -336,26 +335,26 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
         links_tmp.push(q);
         drop(links);
 
-        let new_links =
-            self.select_heuristic(MinMaxHeap::from_iter(links_tmp), level, false, lmdb)?;
+        let new_links = self.select_sng(MinMaxHeap::from_iter(links_tmp), level, false, lmdb)?;
         self.layers[level].entry(p).and_modify(|s| s.links = SmallVec::from_iter(new_links));
 
         Ok(())
     }
 
     /// Naively choosing the nearest neighbours performs poorly on clustered data since we can never
-    /// escape our local neighbourhood.
-    fn select_heuristic(
+    /// escape our local neighbourhood. "Sparse Neighbourhood Graph" (SNG) condition sufficient for
+    /// quick convergence.
+    fn select_sng(
         &self,
         mut candidates: MinMaxHeap<ScoredLink>,
         level: usize,
         keep_discarded: bool,
         lmdb: &LmdbReader<'_, D>,
     ) -> Result<Vec<ScoredLink>> {
-        let mut selected: Vec<ScoredLink> = Vec::with_capacity(M0);
-        let mut discared = vec![];
-
         let cap = if level == 0 { M0 } else { M };
+
+        let mut selected: Vec<ScoredLink> = Vec::with_capacity(cap);
+        let mut discared = vec![];
 
         while let Some((dist_to_query, c)) = candidates.pop_min() {
             if selected.len() == cap {
@@ -363,7 +362,6 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
             }
 
             // ensure we're closer to the query than we are to other candidates
-            // TODO: make this more rust like, `try_fold` or something
             let mut ok_to_add = true;
             for i in selected.iter().map(|(_, i)| *i) {
                 let d = D::distance(&lmdb.get_item(c)?, &lmdb.get_item(i)?);
