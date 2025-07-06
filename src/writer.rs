@@ -6,6 +6,7 @@ use rand::{Rng, SeedableRng};
 use roaring::RoaringBitmap;
 
 use crate::distance::Distance;
+use crate::hnsw::HnswBuilder;
 use crate::internals::KeyCodec;
 use crate::item_iter::ItemIter;
 use crate::node::{Item, ItemIds, Links};
@@ -25,24 +26,24 @@ pub struct HannoyBuilder<'a, D: Distance, R: Rng + SeedableRng> {
 
 /// The options available when building the arroy database.
 pub(crate) struct BuildOption {
-    pub(crate) m: usize,
     pub(crate) ef_construction: usize,
     pub(crate) available_memory: Option<usize>,
 }
 
 impl Default for BuildOption {
     fn default() -> Self {
-        Self {
-            m: 32,
-            ef_construction: 6, // ad hoc
-            available_memory: None,
-        }
+        Self { ef_construction: 100, available_memory: None }
     }
 }
 
 impl<'a, D: Distance, R: Rng + SeedableRng> HannoyBuilder<'a, D, R> {
     pub fn available_memory(&mut self, memory: usize) -> &mut Self {
         self.inner.available_memory = Some(memory);
+        self
+    }
+
+    pub fn ef_construction(&mut self, ef_construction: usize) -> &mut Self {
+        self.inner.ef_construction = ef_construction;
         self
     }
 
@@ -199,24 +200,29 @@ impl<D: Distance> Writer<D> {
             .database
             .remap_data_type::<MetadataCodec>()
             .get(wtxn, &Key::metadata(self.index))?;
-        let entry_points = metadata
-            .as_ref()
-            .map_or_else(Vec::new, |metadata| metadata.entry_points.iter().collect());
+
+        //NOTE: may need this for incrememntal index
+        // let entry_points = metadata
+        //     .as_ref()
+        //     .map_or_else(Vec::new, |metadata| metadata.entry_points.iter().collect());
         // we should not keep a reference to the metadata since they're going to be moved by LMDB
+
         drop(metadata);
 
         tracing::debug!("Getting a reference to your {n_items} items...");
-
         let used_node_ids = self.used_nodes(wtxn, options)?;
         let concurrent_node_ids = ConcurrentNodeIds::new(used_node_ids);
 
-        self.index_hnsw(wtxn, rng, options, to_insert)?;
+        // main build here
+        let mut hnsw = HnswBuilder::<D, 4, 8>::new(options);
+        hnsw.build(to_insert, self.database, self.index, wtxn, rng)?;
 
         tracing::debug!("write the metadata...");
         let metadata = Metadata {
             dimensions: self.dimensions.try_into().unwrap(),
             items: item_indices,
-            entry_points: ItemIds::from_slice(&entry_points),
+            entry_points: ItemIds::from_slice(&hnsw.entry_points),
+            max_level: hnsw.max_level as u8,
             distance: D::name(),
         };
         self.database.remap_data_type::<MetadataCodec>().put(
@@ -231,16 +237,6 @@ impl<D: Distance> Writer<D> {
         )?;
 
         Ok(())
-    }
-
-    fn index_hnsw<R: Rng + SeedableRng>(
-        &self,
-        wtxn: &mut RwTxn,
-        rng: &mut R,
-        options: &BuildOption,
-        to_insert: RoaringBitmap,
-    ) -> Result<(), Error> {
-        todo!()
     }
 
     fn reset_and_retrieve_updated_items(

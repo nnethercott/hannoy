@@ -11,12 +11,15 @@ mod roaring;
 mod spaces;
 mod version;
 mod writer;
+mod reader;
 
 mod ordered_float;
 mod unaligned_vector;
 
 pub use distance::Distance;
 pub use error::Error;
+pub use writer::Writer;
+pub use reader::Reader;
 
 use key::{Key, Prefix, PrefixCodec};
 use metadata::{Metadata, MetadataCodec};

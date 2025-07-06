@@ -14,6 +14,7 @@ pub struct Metadata<'a> {
     pub items: RoaringBitmap,
     pub entry_points: ItemIds<'a>,
     pub distance: &'a str,
+    pub max_level: u8,
 }
 
 pub enum MetadataCodec {}
@@ -22,7 +23,7 @@ impl<'a> heed::BytesEncode<'a> for MetadataCodec {
     type EItem = Metadata<'a>;
 
     fn bytes_encode(item: &'a Self::EItem) -> Result<Cow<'a, [u8]>, BoxedError> {
-        let Metadata { dimensions, items, entry_points, distance } = item;
+        let Metadata { dimensions, items, entry_points, distance, max_level } = item;
         debug_assert!(!distance.as_bytes().iter().any(|&b| b == 0));
 
         let mut output = Vec::with_capacity(
@@ -38,6 +39,7 @@ impl<'a> heed::BytesEncode<'a> for MetadataCodec {
         output.extend_from_slice(&(items.serialized_size() as u32).to_be_bytes());
         items.serialize_into(&mut output)?;
         output.extend_from_slice(entry_points.raw_bytes());
+        output.push(*max_level);
 
         Ok(Cow::Owned(output))
     }
@@ -54,9 +56,11 @@ impl<'a> heed::BytesDecode<'a> for MetadataCodec {
         let items_size = BigEndian::read_u32(bytes) as usize;
         let bytes = &bytes[size_of::<u32>()..];
         let items = RoaringBitmap::deserialize_from(&bytes[..items_size])?;
-        let bytes = &bytes[items_size..];
+        let bytes = &bytes[items_size..bytes.len() - 1];
+        let entry_points = ItemIds::from_bytes(bytes);
+        let max_level = bytes[bytes.len()-1];
 
-        Ok(Metadata { dimensions, items, entry_points: ItemIds::from_bytes(bytes), distance })
+        Ok(Metadata { dimensions, items, distance, entry_points, max_level })
     }
 }
 

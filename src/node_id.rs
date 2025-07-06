@@ -53,15 +53,15 @@ impl fmt::Debug for NodeId {
 
 impl NodeId {
     pub const fn metadata() -> Self {
-        Self { mode: NodeMode::Metadata, item: 0, layer: u8::MAX }
+        Self { mode: NodeMode::Metadata, item: 0, layer: 0 }
     }
 
     pub const fn version() -> Self {
-        Self { mode: NodeMode::Metadata, item: 1, layer: u8::MAX }
+        Self { mode: NodeMode::Metadata, item: 1, layer: 0 }
     }
 
     pub const fn updated(item: u32) -> Self {
-        Self { mode: NodeMode::Updated, item, layer: u8::MAX }
+        Self { mode: NodeMode::Updated, item, layer: 0 }
     }
 
     // FIXME: we may no longer need this
