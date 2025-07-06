@@ -145,10 +145,10 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
             self.entry_points.push(*item_id);
         }
 
-        ThreadPoolBuilder::new()
-            .num_threads(1)
-            .build_global()
-            .expect("Failed to build global thread pool");
+        // ThreadPoolBuilder::new()
+        //     .num_threads(1)
+        //     .build_global()
+        //     .expect("Failed to build global thread pool");
 
         // FIXME: need to group by level, fork-join like
         // could use kero's group by thing to build each iter
@@ -304,7 +304,6 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
         let map = self.layers[level].pin();
 
         // 'pure' links update function
-        // FIXME: doesn't use our condition
         let _add_link = |node_state: &NodeState<M0>| {
             let mut links = node_state.links.clone();
             let cap = if level == 0 { M0 } else { M };
@@ -314,20 +313,14 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
                 return NodeState { links };
             }
 
-            // This is safe cause we would have returned already above if links.len() == 0
-            if q.0 > links.last().unwrap().0 {
-                return NodeState { links };
-            }
+            // TODO: get rid of minmaxheap bit
+            // NOTE: lots of work done internally here
+            let new_links = self
+                .select_sng(MinMaxHeap::from_iter(links), level, false, lmdb)
+                .map(SmallVec::from_iter)
+                .unwrap_or_else(|_| node_state.links.clone());
 
-            // pop first to avoid moving smallvec to heap
-            let _ = links.pop();
-
-            match links.binary_search(&q) {
-                Ok(index) => links.insert(index, q),
-                Err(index) => links.insert(index, q),
-            }
-
-            NodeState { links }
+            NodeState { links: new_links }
         };
 
         map.update_or_insert_with(p, _add_link, || NodeState { links: smallvec![] });
