@@ -17,7 +17,7 @@ use rayon::{
     ThreadPoolBuilder,
 };
 use roaring::RoaringBitmap;
-use smallvec::{smallvec, SmallVec};
+use tinyvec::{array_vec, ArrayVec};
 
 use crate::{
     key::Key,
@@ -36,7 +36,13 @@ pub(crate) type ScoredLink = (OrderedFloat, ItemId);
 
 /// State with stack-allocated graph edges
 struct NodeState<const M: usize> {
-    links: SmallVec<[ScoredLink; M]>,
+    links: ArrayVec<[ScoredLink; M]>,
+}
+
+impl<const M: usize> NodeState<M>{
+    fn bleh(&self) {
+       self.links.len();
+    }
 }
 impl<const M: usize> Debug for NodeState<M> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -207,7 +213,7 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
     }
 
     fn create_node(&self, item_id: ItemId, level: usize) {
-        self.layers[level].pin().insert(item_id, NodeState { links: smallvec![] });
+        self.layers[level].pin().insert(item_id, NodeState { links: array_vec![] });
     }
 
     /// Returns only the Id's of our neighbours.
@@ -317,13 +323,13 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
             // NOTE: lots of work done internally here
             let new_links = self
                 .select_sng(MinMaxHeap::from_iter(links), level, false, lmdb)
-                .map(SmallVec::from_iter)
+                .map(ArrayVec::from_iter)
                 .unwrap_or_else(|_| node_state.links.clone());
 
             NodeState { links: new_links }
         };
 
-        map.update_or_insert_with(p, _add_link, || NodeState { links: smallvec![] });
+        map.update_or_insert_with(p, _add_link, || NodeState { links: array_vec![] });
         Ok(())
     }
 

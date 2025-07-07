@@ -14,7 +14,8 @@ use crate::parallel::{ConcurrentNodeIds, ImmutableItems, ImmutableLinks};
 use crate::unaligned_vector::UnalignedVector;
 use crate::version::{Version, VersionCodec};
 use crate::{
-    Database, Error, ItemId, Key, LayerId, Metadata, MetadataCodec, Node, Prefix, PrefixCodec, Result
+    Database, Error, ItemId, Key, LayerId, Metadata, MetadataCodec, Node, Prefix, PrefixCodec,
+    Result,
 };
 
 /// The options available when building the arroy database.
@@ -214,7 +215,7 @@ impl<D: Distance> Writer<D> {
         let concurrent_node_ids = ConcurrentNodeIds::new(used_node_ids);
 
         // main build here
-        let mut hnsw = HnswBuilder::<D, 16, 32>::new(options);
+        let mut hnsw = HnswBuilder::<D, 8, 16>::new(options);
         hnsw.build(to_insert, self.database, self.index, wtxn, rng)?;
 
         tracing::debug!("write the metadata...");
@@ -288,13 +289,13 @@ pub(crate) struct FrozzenReader<'a, D: Distance> {
 }
 
 impl<'a, D: Distance> FrozzenReader<'a, D> {
-    pub fn get_item(&self, item_id: ItemId) -> Result<Item<'a, D>>{
+    pub fn get_item(&self, item_id: ItemId) -> Result<Item<'a, D>> {
         let key = Key::item(0, item_id);
 
         // key is a `Key::item` so returned result must be a Node::Item
         Ok(self.items.get(item_id)?.ok_or(Error::missing_key(key))?)
     }
-    pub fn get_links(&self, item_id: ItemId, level: usize) -> Result<Links<'a>>{
+    pub fn get_links(&self, item_id: ItemId, level: usize) -> Result<Links<'a>> {
         let key = Key::links(0, item_id, level as u8);
 
         // key is a `Key::item` so returned result must be a Node::Item

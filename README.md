@@ -6,21 +6,30 @@ Some links:
 - [faiss hnsw.cpp](https://github.com/facebookresearch/faiss/blob/main/faiss/impl/HNSW.cpp)
 - [hnsw.rs](https://github.com/rust-cv/hnsw)
 
+# Notes: 
+- downgraded smallvec to 0.14.0 to integrate with benchmark
+
 ## roadmap
 
 - [x] fix hardcode of M0 for M in build/get_neighbours
 - [x] add hnsw entrypoints to db `Node::Metadata`
 - [ ] update edge bitmap of re-indexed nodes
 - [ ] handle re-indexing case where new node may be on higher level
-- [ ] parallelize indexing
+- [x] parallelize indexing
 - [x] implement heuristic edge selection (mandatory; improves perfs non trivially -> Sparse Neighborhood Graph condition)
 - [ ] use [papaya](https://github.com/ibraheemdev/papaya) for NodeStates? (n_reads >> n_writes). `papaya::HashMap::<NoHash>`
 - [ ] add explanations to readme (KV rationale, pic of hnsw, etc.)
 - [ ] LRU cache for recently accessed vectors ? -> effectively solved with frozzen reader
 - [x] remove hardcode on lmdb_index=0 in builder
-- [ ] either make Writer<R,D,M,M0> or remove SmallVec
+- [ ] either make Writer<R,D,M,M0>, remove SmallVec, or make Writer<R,D,M> (M0=2*M)
 - [x] make hannoy work on [vector-relevancy-benchmark](https://github.com/meilisearch/vector-store-relevancy-benchmark)
 - [ ] see if we can memoize <p,q> in a cache during search heuristic
+- [ ] check to make sure each node only has at most M links (data races in parallel build might violate this)
+  - add a metrics struct to the build to track number of link add ops
+
+## ideas for improvement
+- use a centroid as graph entry point
+- only parallelize last layer build 
 
 ## Comments:
 - `Reader::by_item` **much** faster in hnsw since we have a direct bitmap of neighbours
