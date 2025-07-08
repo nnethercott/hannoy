@@ -215,7 +215,7 @@ impl<D: Distance> Writer<D> {
         let concurrent_node_ids = ConcurrentNodeIds::new(used_node_ids);
 
         // main build here
-        let mut hnsw = HnswBuilder::<D, 16, 32>::new(options);
+        let mut hnsw = HnswBuilder::<D, 24, 48>::new(options);
         let stats = hnsw.build(to_insert, self.database, self.index, wtxn, rng)?;
         dbg!("{:?}", stats);
 

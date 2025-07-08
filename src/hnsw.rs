@@ -11,7 +11,8 @@ use std::{
     collections::BinaryHeap,
     f32,
     fmt::{self, Debug},
-    marker::PhantomData, sync::atomic::Ordering,
+    marker::PhantomData,
+    sync::atomic::Ordering,
 };
 use tinyvec::{array_vec, ArrayVec};
 
@@ -135,32 +136,31 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
             })
             .collect();
 
-        levels.sort_unstable_by(|(_, a), (_, b)| b.cmp(a));
-
-        // add stats
-        build_stats.layer_dist = hashbrown::HashMap::from_iter(
-            levels.linear_group_by(|(_, la), (_, lb)| la == lb).map(|grp| {
-                let count = grp.len();
-                let lvl = grp[0].1;
-                (lvl, count)
-            }),
-        );
-
         for _ in 0..=self.max_level {
             self.layers.push(HashMap::new());
         }
-        for (item_id, level) in levels.iter().take_while(|(_, l)| *l == self.max_level) {
-            self.entry_points.push(*item_id);
+
+        levels.sort_unstable_by(|(_, a), (_, b)| b.cmp(a));
+        for &(item_id, _) in levels.iter().take_while(|(_, l)| *l == self.max_level) {
+            self.entry_points.push(item_id);
         }
 
-        // multi-threaded build
+        // setup concurrent lmdb reader
         let items = ImmutableItems::new(wtxn, database, &to_insert, 0)?;
         let nb_links = database.len(wtxn)? + to_insert.len();
         let links = ImmutableLinks::new(wtxn, database, 0, nb_links)?;
         let lmdb = FrozzenReader { items: &items, links: &links };
 
-        levels.into_par_iter().for_each(|(id, lvl)| {
-            self.insert(id, lvl, &lmdb, &build_stats);
+        let mut level_groups: Vec<_> =
+            levels.linear_group_by(|(_, la), (_, lb)| la == lb).collect();
+
+        // insert layers L...0 multi-threaded
+        level_groups.into_iter().for_each(|grp| {
+            grp.into_par_iter().for_each(|&(item_id, lvl)| {
+                self.insert(item_id, lvl, &lmdb, &build_stats);
+            });
+
+            build_stats.layer_dist.insert(grp[0].1, grp.len());
         });
 
         // single-threaded write to lmdb
