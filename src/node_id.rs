@@ -47,7 +47,7 @@ pub struct NodeId {
 
 impl fmt::Debug for NodeId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{:?}({})", self.mode, self.item)
+        write!(f, "{:?}({},{})", self.mode, self.item, self.layer)
     }
 }
 
@@ -64,7 +64,6 @@ impl NodeId {
         Self { mode: NodeMode::Updated, item, layer: 0 }
     }
 
-    // FIXME: we may no longer need this
     pub const fn links(item: u32, layer: u8) -> Self {
         Self { mode: NodeMode::Links, item, layer }
     }

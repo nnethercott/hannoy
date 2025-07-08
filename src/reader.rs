@@ -241,7 +241,10 @@ impl<'t, D: Distance> Reader<'t, D> {
             // Get neighborhood of candidate either from self or LMDB
             let proximity = match get_links(rtxn, self.database, self.index, c, level)? {
                 Some(Links { links }) => links.iter().collect::<Vec<ItemId>>(),
-                None => unreachable!(),
+                None => {
+                    println!("index: {}, id: {c}, level: {level}", &self.index);
+                    unreachable!()
+                },
             };
             for point in proximity {
                 if !visited.insert(point) {

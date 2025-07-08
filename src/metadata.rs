@@ -56,8 +56,8 @@ impl<'a> heed::BytesDecode<'a> for MetadataCodec {
         let items_size = BigEndian::read_u32(bytes) as usize;
         let bytes = &bytes[size_of::<u32>()..];
         let items = RoaringBitmap::deserialize_from(&bytes[..items_size])?;
-        let bytes = &bytes[items_size..bytes.len() - 1];
-        let entry_points = ItemIds::from_bytes(bytes);
+        let bytes = &bytes[items_size..];
+        let entry_points = ItemIds::from_bytes(&bytes[..bytes.len()-1]);
         let max_level = bytes[bytes.len()-1];
 
         Ok(Metadata { dimensions, items, distance, entry_points, max_level })
@@ -76,6 +76,7 @@ mod test {
             dimensions: 12,
             items: RoaringBitmap::from_sorted_iter(0..100).unwrap(),
             entry_points: ItemIds::from_slice(&[1, 2, 3, 4]),
+            max_level: 42,
             distance: "tamo",
         };
 
@@ -86,5 +87,6 @@ mod test {
         assert_eq!(metadata.items, decoded.items);
         assert_eq!(metadata.entry_points.raw_bytes(), decoded.entry_points.raw_bytes());
         assert_eq!(metadata.distance, decoded.distance);
+        assert_eq!(metadata.max_level, decoded.max_level);
     }
 }

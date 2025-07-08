@@ -143,6 +143,7 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
         levels.sort_unstable_by(|(_, a), (_, b)| b.cmp(a));
         for &(item_id, _) in levels.iter().take_while(|(_, l)| *l == self.max_level) {
             self.entry_points.push(item_id);
+            self.add_in_layers_below(item_id, self.max_level);
         }
 
         // setup concurrent lmdb reader
@@ -157,7 +158,8 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
         // insert layers L...0 multi-threaded
         level_groups.into_iter().for_each(|grp| {
             grp.into_par_iter().for_each(|&(item_id, lvl)| {
-                self.insert(item_id, lvl, &lmdb, &build_stats);
+                // FIXME: make this log each point that fails. previously source of serious issue !
+                self.insert(item_id, lvl, &lmdb, &build_stats).unwrap();
             });
 
             build_stats.layer_dist.insert(grp[0].1, grp.len());
@@ -166,23 +168,24 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
         // single-threaded write to lmdb
         for lvl in 0..=self.max_level {
             for (item_id, node_state) in &self.layers[lvl].pin() {
-                let key = Key::links(0, *item_id, lvl as u8);
+                let key = Key::links(index, *item_id, lvl as u8);
                 let links = Links {
                     links: Cow::Owned(RoaringBitmap::from_iter(
                         node_state.links.iter().map(|(_, i)| *i),
                     )),
                 };
 
-                let node_edges = database.put(wtxn, &key, &Node::Links(links))?;
+                database.put(wtxn, &key, &Node::Links(links))?;
             }
         }
 
+        debug_assert_eq!(
+            self.layers.iter().map(|m| m.len()).sum::<usize>(),
+            build_stats.layer_dist.iter().map(|(lvl, cnt)| { (lvl + 1) * cnt }).sum::<usize>()
+        );
+
         build_stats.compute_mean_degree(wtxn, &database, index);
         Ok(build_stats)
-    }
-
-    fn entry_point(&self) -> ItemId {
-        return self.entry_points[0];
     }
 
     fn insert<'a>(
@@ -192,7 +195,7 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
         lmdb: &FrozzenReader<'a, D>,
         build_stats: &BuildStats<D>,
     ) -> Result<()> {
-        let mut eps = vec![self.entry_point()];
+        let mut eps = Vec::from_iter(self.entry_points.clone());
 
         let q = lmdb.get_item(query)?;
 
@@ -203,15 +206,15 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
             eps = vec![closest];
         }
 
+        self.add_in_layers_below(query, level);
+
         // Beam search with: ef = ef_construction
-        for lvl in (0..=level.min(self.max_level)).rev() {
-            self.create_node(query, lvl);
-
-            let mut neighbours = self.explore_layer(&q, &eps, lvl, self.ef_construction, lmdb)?;
-            eps.clear();
+        for lvl in (0..=level).rev() {
+            let mut neighbours =
+                self.explore_layer(&q, &eps, lvl, self.ef_construction, lmdb)?.into_vec();
 
             eps.clear();
-            for (dist, n) in self.select_sng(neighbours.into_vec(), level, false, lmdb)? {
+            for (dist, n) in self.select_sng(neighbours, level, false, lmdb)? {
                 // add links in both directions
                 self.add_link(query, (dist, n), lvl, lmdb)?;
                 self.add_link(n, (dist, query), lvl, lmdb)?;
@@ -224,9 +227,12 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
         Ok(())
     }
 
-    // no-op if node already exists
-    fn create_node(&self, item_id: ItemId, level: usize) {
-        let _ = self.layers[level].pin().get_or_insert(item_id, NodeState { links: array_vec![] });
+    /// Rather than simply insert, we'll make it a no-op so we can re-insert the same item without
+    /// overwriting it's links in mem. This is useful in cases like Vanama build.
+    fn add_in_layers_below(&self, item_id: ItemId, level: usize) {
+        for level in 0..=level {
+            self.layers[level].pin().get_or_insert(item_id, NodeState { links: array_vec![] });
+        }
     }
 
     /// Returns only the Id's of our neighbours.

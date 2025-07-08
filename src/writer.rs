@@ -216,8 +216,8 @@ impl<D: Distance> Writer<D> {
 
         // main build here
         let mut hnsw = HnswBuilder::<D, 16, 32>::new(options);
-        let stats = hnsw.build(to_insert, self.database, self.index, wtxn, rng)?;
-        dbg!("{:?}", stats);
+        let _stats = hnsw.build(to_insert, self.database, self.index, wtxn, rng)?;
+        // dbg!("{:?}", stats);
 
         tracing::debug!("write the metadata...");
         let metadata = Metadata {

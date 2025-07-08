@@ -69,8 +69,8 @@ fn main() -> Result<()> {
 
     opt.sort_by_key(|(_, d)| OrderedFloat(*d));
 
-    println!("{:?}", &opt[..nns.len()]);
-    println!("{:?}", &nns);
+    // println!("{:?}", &opt[..nns.len()]);
+    // println!("{:?}", &nns);
 
     let mut recall = 0;
     let nearest = RoaringBitmap::from_iter(opt.iter().take(nns.len()).map(|(i, _)| *i));
