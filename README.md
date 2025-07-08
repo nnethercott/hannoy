@@ -26,6 +26,7 @@ Some links:
 - [ ] see if we can memoize <p,q> in a cache during search heuristic
 - [x] check to make sure each node only has at most M links (data races in parallel build might violate this), using `tinyvec` enforces this
 - [x] add a metrics struct to the build to track number of link add ops
+- [ ] add tests back to hannoy
 
 ## ideas for improvement
 - use a centroid as graph entry point

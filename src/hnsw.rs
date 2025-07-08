@@ -211,7 +211,7 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
             eps.clear();
 
             eps.clear();
-            for (dist, n) in self.select_sng(neighbours, level, false, lmdb)? {
+            for (dist, n) in self.select_sng(neighbours.into_vec(), level, false, lmdb)? {
                 // add links in both directions
                 self.add_link(query, (dist, n), lvl, lmdb)?;
                 self.add_link(n, (dist, query), lvl, lmdb)?;
@@ -224,8 +224,9 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
         Ok(())
     }
 
+    // no-op if node already exists
     fn create_node(&self, item_id: ItemId, level: usize) {
-        self.layers[level].pin().insert(item_id, NodeState { links: array_vec![] });
+        let _ = self.layers[level].pin().get_or_insert(item_id, NodeState { links: array_vec![] });
     }
 
     /// Returns only the Id's of our neighbours.
@@ -331,10 +332,8 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
                 return NodeState { links };
             }
 
-            // TODO: get rid of minmaxheap bit
-            // NOTE: lots of work done internally here
             let new_links = self
-                .select_sng(MinMaxHeap::from_iter(links), level, false, lmdb)
+                .select_sng(links.to_vec(), level, false, lmdb)
                 .map(ArrayVec::from_iter)
                 .unwrap_or_else(|_| node_state.links.clone());
 
@@ -350,17 +349,18 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
     /// quick convergence.
     fn select_sng(
         &self,
-        mut candidates: MinMaxHeap<ScoredLink>,
+        mut candidates: Vec<ScoredLink>,
         level: usize,
         keep_discarded: bool,
         lmdb: &FrozzenReader<'_, D>,
     ) -> Result<Vec<ScoredLink>> {
         let cap = if level == 0 { M0 } else { M };
+        candidates.sort_by(|a, b| b.cmp(a));
 
         let mut selected: Vec<ScoredLink> = Vec::with_capacity(cap);
         let mut discared = vec![];
 
-        while let Some((dist_to_query, c)) = candidates.pop_min() {
+        while let Some((dist_to_query, c)) = candidates.pop() {
             if selected.len() == cap {
                 break;
             }
