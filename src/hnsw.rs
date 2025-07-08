@@ -12,7 +12,6 @@ use std::{
     f32,
     fmt::{self, Debug},
     marker::PhantomData,
-    sync::atomic::Ordering,
 };
 use tinyvec::{array_vec, ArrayVec};
 
@@ -179,7 +178,7 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
             }
         }
 
-        debug_assert_eq!(
+        assert_eq!(
             self.layers.iter().map(|m| m.len()).sum::<usize>(),
             build_stats.layer_dist.iter().map(|(lvl, cnt)| { (lvl + 1) * cnt }).sum::<usize>()
         );

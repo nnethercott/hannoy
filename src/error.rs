@@ -1,6 +1,6 @@
 use std::io;
 
-use crate::{key::Key, node_id::NodeMode, version::Version, ItemId};
+use crate::{key::Key, node_id::NodeMode, version::Version, ItemId, LayerId};
 
 /// The different set of errors that arroy can encounter.
 #[derive(Debug, thiserror::Error)]
@@ -64,6 +64,8 @@ pub enum Error {
         mode: &'static str,
         /// The item ID queried
         item: ItemId,
+        // The item's layer
+        layer: LayerId,
     },
 
     /// Cannot decode the key mode
@@ -92,6 +94,7 @@ impl Error {
                 NodeMode::Updated => "Updated",
             },
             item: key.node.item,
+            layer: key.node.layer,
         }
     }
 }
