@@ -4,7 +4,6 @@ use min_max_heap::MinMaxHeap;
 use roaring::RoaringBitmap;
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
-use std::iter::repeat;
 use std::marker;
 use std::num::NonZeroUsize;
 
@@ -17,7 +16,7 @@ use crate::ordered_float::OrderedFloat;
 use crate::unaligned_vector::UnalignedVector;
 use crate::version::{Version, VersionCodec};
 use crate::{
-    Database, Error, ItemId, Key, LayerId, MetadataCodec, Node, NodeId, Prefix, PrefixCodec, Result,
+    Database, Error, ItemId, Key, MetadataCodec, Node, Prefix, PrefixCodec, Result,
 };
 
 /// Options used to make a query against an arroy [`Reader`].

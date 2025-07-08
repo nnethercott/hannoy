@@ -5,6 +5,7 @@ use std::marker;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
+use hashbrown::HashMap;
 use heed::types::Bytes;
 use heed::{BytesDecode, BytesEncode, RoTxn};
 use memmap2::Mmap;
@@ -13,8 +14,8 @@ use roaring::RoaringBitmap;
 
 use crate::internals::{Item, KeyCodec};
 use crate::key::{Key, Prefix, PrefixCodec};
-use crate::node::{Node, NodeCodec};
-use crate::{Database, Distance, Error, ItemId, Result};
+use crate::node::{Links, Node, NodeCodec};
+use crate::{Database, Distance, Error, ItemId, LayerId, Result};
 
 /// A structure to store the tree nodes out of the heed database.
 pub struct TmpNodes<DE> {
@@ -192,7 +193,7 @@ impl ConcurrentNodeIds {
 /// in the mmapped file and the transaction is kept here and therefore
 /// no longer touches the database.
 pub struct ImmutableItems<'t, D> {
-    items: IntMap<ItemId, *const u8>,
+    items: HashMap<ItemId, *const u8>,
     constant_length: Option<usize>,
     _marker: marker::PhantomData<(&'t (), D)>,
 }
@@ -205,53 +206,22 @@ impl<'t, D: Distance> ImmutableItems<'t, D> {
     pub fn new(
         rtxn: &'t RoTxn,
         database: Database<D>,
+        items: &RoaringBitmap,
         index: u16,
-        candidates: &mut RoaringBitmap,
-        memory: usize,
-    ) -> heed::Result<(Self, RoaringBitmap)> {
-        let page_size = page_size::get();
-        let nb_page_allowed = (memory as f64 / page_size as f64).floor() as usize;
-
-        let mut items = IntMap::with_capacity_and_hasher(
-            nb_page_allowed.min(candidates.len() as usize), // We cannot approximate the capacity better because we don't know yet the size of an item
-            BuildNoHashHasher::default(),
-        );
-        let mut pages_used = IntSet::with_capacity_and_hasher(
-            nb_page_allowed.min(candidates.len() as usize),
-            BuildNoHashHasher::default(),
-        );
-        let mut selected_items = RoaringBitmap::new();
+    ) -> heed::Result<Self> {
+        let mut map = HashMap::with_capacity(items.len() as usize);
         let mut constant_length = None;
 
-        while let Some(item_id) = candidates.select(0) {
+        for item_id in items {
             let bytes =
                 database.remap_data_type::<Bytes>().get(rtxn, &Key::item(index, item_id))?.unwrap();
             assert_eq!(*constant_length.get_or_insert(bytes.len()), bytes.len());
 
             let ptr = bytes.as_ptr();
-            let addr = ptr as usize;
-            let start = addr / page_size;
-            let end = (addr + bytes.len()) / page_size;
-
-            pages_used.insert(start);
-            if start != end {
-                pages_used.insert(end);
-            }
-
-            if pages_used.len() >= nb_page_allowed && items.len() >= 200 {
-                break;
-            }
-
-            // Safe because the items comes from another roaring bitmap
-            selected_items.push(item_id);
-            candidates.remove_smallest(1);
-            items.insert(item_id, ptr);
+            map.insert(item_id, ptr);
         }
 
-        Ok((
-            ImmutableItems { items, constant_length, _marker: marker::PhantomData },
-            selected_items,
-        ))
+        Ok(ImmutableItems { items: map, constant_length, _marker: marker::PhantomData })
     }
 
     /// Returns the leafs identified by the given ID.
@@ -275,75 +245,48 @@ impl<'t, D: Distance> ImmutableItems<'t, D> {
 
 unsafe impl<D> Sync for ImmutableItems<'_, D> {}
 
-/// A subset of leafs that are accessible for read.
-pub struct ImmutableSubsetItems<'t, D> {
-    subset: &'t RoaringBitmap,
-    items: &'t ImmutableItems<'t, D>,
-}
-
-impl<'t, D: Distance> ImmutableSubsetItems<'t, D> {
-    /// Creates a subset view of the available leafs.
-    pub fn from_item_ids(leafs: &'t ImmutableItems<'t, D>, subset: &'t RoaringBitmap) -> Self {
-        ImmutableSubsetItems { subset, items: leafs }
-    }
-
-    /// Returns the nodes identified by the given ID in the subset.
-    pub fn get(&self, item_id: ItemId) -> heed::Result<Option<Item<'t, D>>> {
-        if self.subset.contains(item_id) {
-            self.items.get(item_id)
-        } else {
-            Ok(None)
-        }
-    }
-
-    pub fn len(&self) -> u64 {
-        self.subset.len()
-    }
-}
-
-/// A struture used to keep a list of all the tree nodes in the tree.
-///
+/// A struture used to keep a list of all the links.
 /// It is safe to share between threads as the pointer are pointing
 /// in the mmapped file and the transaction is kept here and therefore
 /// no longer touches the database.
-pub struct ImmutableNodes<'t, D> {
-    nodes: IntMap<ItemId, (usize, *const u8)>,
+pub struct ImmutableLinks<'t, D> {
+    links: HashMap<(u32, u8), (usize, *const u8)>,
     _marker: marker::PhantomData<(&'t (), D)>,
 }
 
-impl<'t, D: Distance> ImmutableNodes<'t, D> {
+impl<'t, D: Distance> ImmutableLinks<'t, D> {
     /// Creates the structure by fetching all the root pointers
     /// and keeping the transaction making the pointers valid.
     pub fn new(
         rtxn: &'t RoTxn,
         database: Database<D>,
         index: u16,
-        nb_trees: u64,
+        nb_links: u64,
     ) -> heed::Result<Self> {
-        let mut nodes =
-            IntMap::with_capacity_and_hasher(nb_trees as usize, BuildNoHashHasher::default());
+        let mut links = HashMap::with_capacity(nb_links as usize);
 
         let iter = database
             .remap_types::<PrefixCodec, Bytes>()
-            .prefix_iter(rtxn, &Prefix::node(index))?
+            .prefix_iter(rtxn, &Prefix::links(index))?
             .remap_key_type::<KeyCodec>();
 
         for result in iter {
             let (key, bytes) = result?;
-            let tree_id = key.node.unwrap_node();
-            nodes.insert(tree_id, (bytes.len(), bytes.as_ptr()));
+            let links_id = key.node.unwrap_node();
+            links.insert(links_id, (bytes.len(), bytes.as_ptr()));
         }
 
-        Ok(ImmutableNodes { nodes, _marker: marker::PhantomData })
+        Ok(ImmutableLinks { links, _marker: marker::PhantomData })
     }
 
     pub fn empty() -> Self {
-        Self { nodes: IntMap::default(), _marker: marker::PhantomData }
+        Self { links: HashMap::default(), _marker: marker::PhantomData }
     }
 
     /// Returns the tree node identified by the given ID.
-    pub fn get(&self, item_id: ItemId) -> heed::Result<Option<Node<'t, D>>> {
-        let (ptr, len) = match self.nodes.get(&item_id) {
+    pub fn get(&self, item_id: ItemId, level: LayerId) -> heed::Result<Option<Links<'t>>> {
+        let key = (item_id, level);
+        let (ptr, len) = match self.links.get(&key) {
             Some((len, ptr)) => (*ptr, *len),
             None => return Ok(None),
         };
@@ -352,8 +295,10 @@ impl<'t, D: Distance> ImmutableNodes<'t, D> {
         // - ptr: The pointer comes from LMDB. Since the database cannot be written to, it is still valid.
         // - len: The len cannot change either
         let bytes = unsafe { slice::from_raw_parts(ptr, len) };
-        NodeCodec::bytes_decode(bytes).map_err(heed::Error::Decoding).map(Some)
+        NodeCodec::bytes_decode(bytes)
+            .map_err(heed::Error::Decoding)
+            .map(|node: Node<'t, D>| node.links())
     }
 }
 
-unsafe impl<D> Sync for ImmutableNodes<'_, D> {}
+unsafe impl<D> Sync for ImmutableLinks<'_, D> {}

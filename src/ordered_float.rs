@@ -5,7 +5,7 @@
 /// is actually a lot quicker.
 ///
 /// https://en.wikipedia.org/wiki/IEEE_754-1985#NaN
-#[derive(Debug, Clone, Copy)]
+#[derive(Default, Debug, Clone, Copy)]
 pub struct OrderedFloat(pub f32);
 
 impl PartialEq for OrderedFloat {

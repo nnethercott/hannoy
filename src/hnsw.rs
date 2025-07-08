@@ -1,3 +1,10 @@
+use heed::RwTxn;
+use min_max_heap::MinMaxHeap;
+use papaya::HashMap;
+use rand::{distributions::WeightedIndex, prelude::Distribution, Rng};
+use rayon::iter::{IntoParallelIterator, ParallelIterator};
+use roaring::RoaringBitmap;
+use slice_group_by::GroupBy;
 use std::{
     borrow::Cow,
     cmp::Reverse,
@@ -5,21 +12,18 @@ use std::{
     f32,
     fmt::{self, Debug},
     marker::PhantomData,
+    sync::atomic::Ordering,
 };
-
-use heed::{RoTxn, RwTxn};
-use min_max_heap::MinMaxHeap;
-use nohash::IntMap;
-use rand::{distributions::WeightedIndex, prelude::Distribution, Rng};
-use roaring::RoaringBitmap;
-use smallvec::{smallvec, SmallVec};
+use tinyvec::{array_vec, ArrayVec};
 
 use crate::{
     key::Key,
     node::{Item, Links, Node},
     ordered_float::OrderedFloat,
-    writer::BuildOption,
-    Database, Distance, Error, ItemId, Result,
+    parallel::{ImmutableItems, ImmutableLinks},
+    stats::BuildStats,
+    writer::{BuildOption, FrozzenReader},
+    Database, Distance, ItemId, Result,
 };
 
 // TODO:
@@ -30,7 +34,13 @@ pub(crate) type ScoredLink = (OrderedFloat, ItemId);
 
 /// State with stack-allocated graph edges
 struct NodeState<const M: usize> {
-    links: SmallVec<[ScoredLink; M]>,
+    links: ArrayVec<[ScoredLink; M]>,
+}
+
+impl<const M: usize> NodeState<M> {
+    fn bleh(&self) {
+        self.links.len();
+    }
 }
 impl<const M: usize> Debug for NodeState<M> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -52,36 +62,12 @@ impl<const M: usize> Debug for NodeState<M> {
     }
 }
 
-/// A struct to fetch nodes and links from lmdb
-struct LmdbReader<'a, D> {
-    database: &'a Database<D>,
-    index: u16,
-    rtxn: &'a RoTxn<'a>,
-    //lru
-}
-impl<'a, D: Distance> LmdbReader<'a, D> {
-    pub fn get_item(&self, item_id: ItemId) -> Result<Item<'a, D>> {
-        let key = Key::item(self.index, item_id);
-
-        // key is a `Key::item` so returned result must be a Node::Item
-        Ok(self.database.get(self.rtxn, &key)?.ok_or(Error::missing_key(key))?.item().unwrap())
-    }
-
-    pub fn get_links(&self, item_id: ItemId, level: usize) -> Result<Links<'a>> {
-        let key = Key::links(self.index, item_id, level as u8);
-
-        // key is a `Key::links` so returned result must be a Node::Links
-        Ok(self.database.get(self.rtxn, &key)?.ok_or(Error::missing_key(key))?.links().unwrap())
-    }
-}
-
 pub struct HnswBuilder<D, const M: usize, const M0: usize> {
     assign_probas: Vec<f32>,
     ef_construction: usize,
     pub max_level: usize,
     pub entry_points: Vec<ItemId>,
-    pub layers: Vec<IntMap<ItemId, NodeState<M0>>>,
-    // last: IntMap<ItemId, NodeState<M>>,
+    pub layers: Vec<HashMap<ItemId, NodeState<M0>>>,
     distance: PhantomData<D>,
 }
 
@@ -130,14 +116,16 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
     pub fn build<R>(
         &mut self,
         to_insert: RoaringBitmap,
-        database: &Database<D>,
+        database: Database<D>,
         index: u16,
         wtxn: &mut RwTxn,
         rng: &mut R,
-    ) -> Result<()>
+    ) -> Result<BuildStats<D>>
     where
         R: Rng + ?Sized,
     {
+        let mut build_stats = BuildStats::new();
+
         // generate a random level for each point
         let mut levels: Vec<_> = to_insert
             .iter()
@@ -148,57 +136,69 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
             })
             .collect();
 
-        levels.sort_unstable_by(|(_, a), (_, b)| b.cmp(a));
-
         for _ in 0..=self.max_level {
-            self.layers.push(IntMap::default());
+            self.layers.push(HashMap::new());
         }
 
-        for (item_id, level) in levels.into_iter() {
-            if level == self.max_level {
-                self.entry_points.push(item_id);
-            }
-            self.insert(item_id, level, database, index, wtxn)?;
+        levels.sort_unstable_by(|(_, a), (_, b)| b.cmp(a));
+        for &(item_id, _) in levels.iter().take_while(|(_, l)| *l == self.max_level) {
+            self.entry_points.push(item_id);
         }
 
-        // write single threaded to lmdb
+        // setup concurrent lmdb reader
+        let items = ImmutableItems::new(wtxn, database, &to_insert, 0)?;
+        let nb_links = database.len(wtxn)? + to_insert.len();
+        let links = ImmutableLinks::new(wtxn, database, 0, nb_links)?;
+        let lmdb = FrozzenReader { items: &items, links: &links };
+
+        let mut level_groups: Vec<_> =
+            levels.linear_group_by(|(_, la), (_, lb)| la == lb).collect();
+
+        // insert layers L...0 multi-threaded
+        level_groups.into_iter().for_each(|grp| {
+            grp.into_par_iter().for_each(|&(item_id, lvl)| {
+                self.insert(item_id, lvl, &lmdb, &build_stats);
+            });
+
+            build_stats.layer_dist.insert(grp[0].1, grp.len());
+        });
+
+        // single-threaded write to lmdb
         for lvl in 0..=self.max_level {
-            for (item_id, node_state) in &self.layers[lvl] {
+            for (item_id, node_state) in &self.layers[lvl].pin() {
                 let key = Key::links(0, *item_id, lvl as u8);
                 let links = Links {
                     links: Cow::Owned(RoaringBitmap::from_iter(
                         node_state.links.iter().map(|(_, i)| *i),
                     )),
                 };
+
                 let node_edges = database.put(wtxn, &key, &Node::Links(links))?;
             }
         }
 
-        // println!("{:?}", &self.layers);
-
-        Ok(())
+        build_stats.compute_mean_degree(wtxn, &database, index);
+        Ok(build_stats)
     }
 
     fn entry_point(&self) -> ItemId {
         return self.entry_points[0];
     }
 
-    fn insert(
-        &mut self,
+    fn insert<'a>(
+        &self,
         query: ItemId,
         level: usize,
-        database: &Database<D>,
-        index: u16,
-        rtxn: &RoTxn,
+        lmdb: &FrozzenReader<'a, D>,
+        build_stats: &BuildStats<D>,
     ) -> Result<()> {
-        let lmdb = LmdbReader { database, index, rtxn };
         let mut eps = vec![self.entry_point()];
 
         let q = lmdb.get_item(query)?;
 
         // Greedy search with: ef = 1
         for lvl in (level + 1..=self.max_level).rev() {
-            let neighbours = self.explore_layer(&q, &eps, lvl, 1, &lmdb)?;
+            let neighbours = self.explore_layer(&q, &eps, lvl, 1, lmdb)?;
             let closest = neighbours.peek_min().map(|(_, n)| *n).expect("No neighbor was found");
             eps = vec![closest];
         }
@@ -207,28 +207,31 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
         for lvl in (0..=level.min(self.max_level)).rev() {
             self.create_node(query, lvl);
 
-            let mut neighbours = self.explore_layer(&q, &eps, lvl, self.ef_construction, &lmdb)?;
+            let mut neighbours = self.explore_layer(&q, &eps, lvl, self.ef_construction, lmdb)?;
+            eps.clear();
 
             eps.clear();
-            for (dist, n) in self.select_sng(neighbours, level, false, &lmdb)? {
+            for (dist, n) in self.select_sng(neighbours, level, false, lmdb)? {
                 // add links in both directions
-                self.add_link(query, (dist, n), lvl, &lmdb)?;
-                self.add_link(n, (dist, query), lvl, &lmdb)?;
+                self.add_link(query, (dist, n), lvl, lmdb)?;
+                self.add_link(n, (dist, query), lvl, lmdb)?;
                 eps.push(n);
+
+                build_stats.incr_link_count(2);
             }
         }
 
         Ok(())
     }
 
-    fn create_node(&mut self, item_id: ItemId, level: usize) {
-        self.layers[level].insert(item_id, NodeState { links: smallvec![] });
+    fn create_node(&self, item_id: ItemId, level: usize) {
+        self.layers[level].pin().insert(item_id, NodeState { links: array_vec![] });
     }
 
     /// Returns only the Id's of our neighbours.
-    fn get_neighbours(
+    fn get_neighbours<'a>(
         &self,
-        lmdb: &LmdbReader<'_, D>,
+        lmdb: &FrozzenReader<'a, D>,
         item_id: ItemId,
         level: usize,
     ) -> Result<Vec<ItemId>> {
@@ -239,7 +242,7 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
         }
 
         // O(1)
-        match self.layers[level].get(&item_id) {
+        match self.layers[level].pin().get(&item_id) {
             Some(node_state) => return Ok(node_state.links.iter().map(|(_, i)| *i).collect()),
 
             // O(log n)
@@ -251,13 +254,13 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn explore_layer(
+    fn explore_layer<'a>(
         &self,
         query: &Item<D>,
         eps: &[ItemId],
         level: usize,
         ef: usize,
-        lmdb: &LmdbReader<'_, D>,
+        lmdb: &FrozzenReader<'a, D>,
     ) -> Result<MinMaxHeap<ScoredLink>> {
         let mut candidates = BinaryHeap::new();
         let mut res = MinMaxHeap::with_capacity(ef);
@@ -305,39 +308,40 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
     }
 
     /// Tries to add a new link between nodes in a single direction.
-    fn add_link(
-        &mut self,
+    fn add_link<'a>(
+        &self,
         p: ItemId,
         q: ScoredLink,
         level: usize,
-        lmdb: &LmdbReader<'_, D>,
+        lmdb: &FrozzenReader<'a, D>,
     ) -> Result<()> {
-        // prevent links to self
         if p == q.1 {
             return Ok(());
         }
 
-        // Get links for node p. If the node comes from lmdb we create a new NodeState with empty
-        // neighbours bitmap to track new HNSW graph edges.
-        let node_state = (self.layers[level].entry(p)).or_insert(NodeState { links: smallvec![] });
-        let links = &mut node_state.links;
+        let map = self.layers[level].pin();
 
-        let cap = if level == 0 { M0 } else { M };
+        // 'pure' links update function
+        let _add_link = |node_state: &NodeState<M0>| {
+            let mut links = node_state.links.clone();
+            let cap = if level == 0 { M0 } else { M };
 
-        if links.len() < cap {
-            links.push(q);
-            links.sort_unstable();
-            return Ok(());
-        }
+            if links.len() < cap {
+                links.push(q);
+                return NodeState { links };
+            }
 
-        // else select heuristic
-        let mut links_tmp = links.clone();
-        links_tmp.push(q);
-        drop(links);
+            // TODO: get rid of minmaxheap bit
+            // NOTE: lots of work done internally here
+            let new_links = self
+                .select_sng(MinMaxHeap::from_iter(links), level, false, lmdb)
+                .map(ArrayVec::from_iter)
+                .unwrap_or_else(|_| node_state.links.clone());
 
-        let new_links = self.select_sng(MinMaxHeap::from_iter(links_tmp), level, false, lmdb)?;
-        self.layers[level].entry(p).and_modify(|s| s.links = SmallVec::from_iter(new_links));
+            NodeState { links: new_links }
+        };
 
+        map.update_or_insert_with(p, _add_link, || NodeState { links: array_vec![] });
         Ok(())
     }
 
@@ -349,7 +353,7 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
         mut candidates: MinMaxHeap<ScoredLink>,
         level: usize,
         keep_discarded: bool,
-        lmdb: &LmdbReader<'_, D>,
+        lmdb: &FrozzenReader<'_, D>,
     ) -> Result<Vec<ScoredLink>> {
         let cap = if level == 0 { M0 } else { M };
 

@@ -84,9 +84,9 @@ impl NodeId {
     /// Return the underlying `ItemId` if it is a tree node.
     /// Panic otherwise.
     #[track_caller]
-    pub fn unwrap_node(&self) -> ItemId {
+    pub fn unwrap_node(&self) -> (ItemId, LayerId) {
         assert_eq!(self.mode, NodeMode::Links);
-        self.item
+        (self.item, self.layer)
     }
 
     pub fn to_bytes(self) -> [u8; 6] {
