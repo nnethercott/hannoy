@@ -215,8 +215,9 @@ impl<D: Distance> Writer<D> {
         let concurrent_node_ids = ConcurrentNodeIds::new(used_node_ids);
 
         // main build here
-        let mut hnsw = HnswBuilder::<D, 8, 16>::new(options);
-        hnsw.build(to_insert, self.database, self.index, wtxn, rng)?;
+        let mut hnsw = HnswBuilder::<D, 16, 32>::new(options);
+        let stats = hnsw.build(to_insert, self.database, self.index, wtxn, rng)?;
+        dbg!("{:?}", stats);
 
         tracing::debug!("write the metadata...");
         let metadata = Metadata {

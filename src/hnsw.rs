@@ -1,22 +1,18 @@
+use heed::RwTxn;
+use min_max_heap::MinMaxHeap;
+use papaya::HashMap;
+use rand::{distributions::WeightedIndex, prelude::Distribution, Rng};
+use rayon::iter::{IntoParallelIterator, ParallelIterator};
+use roaring::RoaringBitmap;
+use slice_group_by::GroupBy;
 use std::{
     borrow::Cow,
     cmp::Reverse,
     collections::BinaryHeap,
     f32,
     fmt::{self, Debug},
-    marker::PhantomData,
+    marker::PhantomData, sync::atomic::Ordering,
 };
-
-use heed::{RoTxn, RwTxn};
-use min_max_heap::MinMaxHeap;
-use nohash::{BuildNoHashHasher, NoHashHasher};
-use papaya::HashMap;
-use rand::{distributions::WeightedIndex, prelude::Distribution, Rng};
-use rayon::{
-    iter::{IntoParallelIterator, ParallelIterator},
-    ThreadPoolBuilder,
-};
-use roaring::RoaringBitmap;
 use tinyvec::{array_vec, ArrayVec};
 
 use crate::{
@@ -24,8 +20,9 @@ use crate::{
     node::{Item, Links, Node},
     ordered_float::OrderedFloat,
     parallel::{ImmutableItems, ImmutableLinks},
+    stats::BuildStats,
     writer::{BuildOption, FrozzenReader},
-    Database, Distance, Error, ItemId, Result,
+    Database, Distance, ItemId, Result,
 };
 
 // TODO:
@@ -39,9 +36,9 @@ struct NodeState<const M: usize> {
     links: ArrayVec<[ScoredLink; M]>,
 }
 
-impl<const M: usize> NodeState<M>{
+impl<const M: usize> NodeState<M> {
     fn bleh(&self) {
-       self.links.len();
+        self.links.len();
     }
 }
 impl<const M: usize> Debug for NodeState<M> {
@@ -122,10 +119,12 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
         index: u16,
         wtxn: &mut RwTxn,
         rng: &mut R,
-    ) -> Result<()>
+    ) -> Result<BuildStats<D>>
     where
         R: Rng + ?Sized,
     {
+        let mut build_stats = BuildStats::new();
+
         // generate a random level for each point
         let mut levels: Vec<_> = to_insert
             .iter()
@@ -137,32 +136,34 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
             .collect();
 
         levels.sort_unstable_by(|(_, a), (_, b)| b.cmp(a));
+
+        // add stats
+        build_stats.layer_dist = hashbrown::HashMap::from_iter(
+            levels.linear_group_by(|(_, la), (_, lb)| la == lb).map(|grp| {
+                let count = grp.len();
+                let lvl = grp[0].1;
+                (lvl, count)
+            }),
+        );
+
         for _ in 0..=self.max_level {
             self.layers.push(HashMap::new());
         }
+        for (item_id, level) in levels.iter().take_while(|(_, l)| *l == self.max_level) {
+            self.entry_points.push(*item_id);
+        }
 
-        // pointers to vector & links in the lmdb
+        // multi-threaded build
         let items = ImmutableItems::new(wtxn, database, &to_insert, 0)?;
         let nb_links = database.len(wtxn)? + to_insert.len();
         let links = ImmutableLinks::new(wtxn, database, 0, nb_links)?;
         let lmdb = FrozzenReader { items: &items, links: &links };
 
-        for (item_id, level) in levels.iter().take_while(|(_, l)| *l == self.max_level) {
-            self.entry_points.push(*item_id);
-        }
-
-        // ThreadPoolBuilder::new()
-        //     .num_threads(1)
-        //     .build_global()
-        //     .expect("Failed to build global thread pool");
-
-        // FIXME: need to group by level, fork-join like
-        // could use kero's group by thing to build each iter
         levels.into_par_iter().for_each(|(id, lvl)| {
-            self.insert(id, lvl, &lmdb);
+            self.insert(id, lvl, &lmdb, &build_stats);
         });
 
-        // write single threaded to lmdb
+        // single-threaded write to lmdb
         for lvl in 0..=self.max_level {
             for (item_id, node_state) in &self.layers[lvl].pin() {
                 let key = Key::links(0, *item_id, lvl as u8);
@@ -171,17 +172,26 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
                         node_state.links.iter().map(|(_, i)| *i),
                     )),
                 };
+
                 let node_edges = database.put(wtxn, &key, &Node::Links(links))?;
             }
         }
-        Ok(())
+
+        build_stats.compute_mean_degree(wtxn, &database, index);
+        Ok(build_stats)
     }
 
     fn entry_point(&self) -> ItemId {
         return self.entry_points[0];
     }
 
-    fn insert<'a>(&self, query: ItemId, level: usize, lmdb: &FrozzenReader<'a, D>) -> Result<()> {
+    fn insert<'a>(
+        &self,
+        query: ItemId,
+        level: usize,
+        lmdb: &FrozzenReader<'a, D>,
+        build_stats: &BuildStats<D>,
+    ) -> Result<()> {
         let mut eps = vec![self.entry_point()];
 
         let q = lmdb.get_item(query)?;
@@ -206,6 +216,8 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
                 self.add_link(query, (dist, n), lvl, lmdb)?;
                 self.add_link(n, (dist, query), lvl, lmdb)?;
                 eps.push(n);
+
+                build_stats.incr_link_count(2);
             }
         }
 

@@ -1,6 +1,7 @@
 use std::borrow::Cow;
 use std::fmt;
 use std::mem::size_of;
+use std::ops::Deref;
 
 use bytemuck::{bytes_of, cast_slice, pod_read_unaligned};
 use byteorder::{ByteOrder, NativeEndian};
@@ -76,6 +77,13 @@ impl<D: Distance> Item<'_, D> {
 #[derive(Clone, Debug)]
 pub struct Links<'a> {
     pub links: Cow<'a, RoaringBitmap>,
+}
+
+impl<'a> Deref for Links<'a> {
+    type Target = Cow<'a, RoaringBitmap>;
+    fn deref(&self) -> &Self::Target {
+        &self.links
+    }
 }
 
 #[derive(Clone)]

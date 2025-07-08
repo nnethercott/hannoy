@@ -12,6 +12,7 @@ mod spaces;
 mod version;
 mod writer;
 mod reader;
+mod stats;
 
 mod ordered_float;
 mod unaligned_vector;
