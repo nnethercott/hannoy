@@ -1,10 +1,11 @@
 use crate::{
     key::{KeyCodec, Prefix, PrefixCodec},
     node::{self, Links, Node},
-    Database,
+    Database, ItemId,
 };
 use hashbrown::HashMap;
 use heed::{Result, RoTxn};
+use ordered_float::OrderedFloat;
 use std::{
     marker::PhantomData,
     sync::atomic::{AtomicUsize, Ordering},
@@ -43,7 +44,12 @@ impl<D: Distance> BuildStats<D> {
     }
 
     /// iterate over all links in db and average out node rank
-    pub fn compute_mean_degree(&mut self, rtxn: &RoTxn, db: &Database<D>, index: u16) -> Result<()> {
+    pub fn compute_mean_degree(
+        &mut self,
+        rtxn: &RoTxn,
+        db: &Database<D>,
+        index: u16,
+    ) -> Result<()> {
         let iter = db
             .remap_key_type::<PrefixCodec>()
             .prefix_iter(rtxn, &Prefix::links(index))?
@@ -67,5 +73,30 @@ impl<D: Distance> BuildStats<D> {
         self.mean_degree = (total_links as f32) / (n_links as f32);
 
         Ok(())
+    }
+}
+
+#[derive(Debug, Default)]
+pub(crate) struct SearchStats {
+    n_cmps: papaya::HashMap<usize, usize>,
+    n_jumps: AtomicUsize,
+    pub matches: Vec<(ItemId, f32)>,
+}
+
+impl SearchStats {
+    pub fn new() -> Self {
+        SearchStats {
+            n_cmps: papaya::HashMap::new(),
+            n_jumps: AtomicUsize::new(0),
+            matches: vec![],
+        }
+    }
+
+    pub fn incr_n_cmps(&self, lvl: usize) {
+        self.n_cmps.pin().update_or_insert(lvl, |c| c + 1, 1);
+    }
+
+    pub fn incr_n_jumps(&self) {
+        self.n_jumps.fetch_add(1, Ordering::Relaxed);
     }
 }

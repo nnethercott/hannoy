@@ -13,11 +13,10 @@ use crate::internals::KeyCodec;
 use crate::item_iter::ItemIter;
 use crate::node::{Item, ItemIds, Links};
 use crate::ordered_float::OrderedFloat;
+use crate::stats::SearchStats;
 use crate::unaligned_vector::UnalignedVector;
 use crate::version::{Version, VersionCodec};
-use crate::{
-    Database, Error, ItemId, Key, MetadataCodec, Node, Prefix, PrefixCodec, Result,
-};
+use crate::{Database, Error, ItemId, Key, MetadataCodec, Node, Prefix, PrefixCodec, Result};
 
 /// Options used to make a query against an arroy [`Reader`].
 pub struct QueryBuilder<'a, D: Distance> {
@@ -63,7 +62,9 @@ impl<'a, D: Distance> QueryBuilder<'a, D> {
 
         let vector = UnalignedVector::from_slice(vector);
         let item = Item { header: D::new_header(&vector), vector };
-        self.reader.nns_by_vec(rtxn, &item, self)
+        let stats = self.reader.nns_by_vec(rtxn, &item, self)?;
+        dbg!("{:?}", &stats);
+        Ok(stats.matches)
     }
 }
 
@@ -217,6 +218,7 @@ impl<'t, D: Distance> Reader<'t, D> {
         level: usize,
         ef: usize,
         rtxn: &RoTxn,
+        stats: &SearchStats,
     ) -> Result<MinMaxHeap<ScoredLink>> {
         let mut candidates = BinaryHeap::new();
         let mut res = MinMaxHeap::with_capacity(ef);
@@ -230,6 +232,7 @@ impl<'t, D: Distance> Reader<'t, D> {
             candidates.push((Reverse(OrderedFloat(dist)), ep));
             res.push((OrderedFloat(dist), ep));
             visited.push(ep);
+            stats.incr_n_cmps(level);
         }
         while let Some(&(Reverse(OrderedFloat(f)), c)) = candidates.peek() {
             let &(OrderedFloat(f_max), _) = res.peek_max().unwrap();
@@ -237,6 +240,7 @@ impl<'t, D: Distance> Reader<'t, D> {
                 break;
             }
             let (_, c) = candidates.pop().unwrap(); // Now safe to pop
+            stats.incr_n_jumps();
 
             // Get neighborhood of candidate either from self or LMDB
             let proximity = match get_links(rtxn, self.database, self.index, c, level)? {
@@ -247,7 +251,9 @@ impl<'t, D: Distance> Reader<'t, D> {
                 if !visited.insert(point) {
                     continue;
                 }
-                let dist = D::distance(query, &get_item(self.database, self.index, rtxn, point)?.unwrap());
+                let dist =
+                    D::distance(query, &get_item(self.database, self.index, rtxn, point)?.unwrap());
+                stats.incr_n_cmps(level);
 
                 if res.len() < ef || dist < f_max {
                     candidates.push((Reverse(OrderedFloat(dist)), point));
@@ -269,18 +275,19 @@ impl<'t, D: Distance> Reader<'t, D> {
         rtxn: &'t RoTxn,
         query: &Item<D>,
         opt: &QueryBuilder<D>,
-    ) -> Result<Vec<(ItemId, f32)>> {
+    ) -> Result<SearchStats> {
+        let mut stats = SearchStats::default();
         let mut eps = Vec::from_iter(self.entry_points.iter());
 
         // search layers L->1 with ef=1
         for lvl in (1..=self.max_level).rev() {
-            let neighbours = self.explore_layer(&query, &eps, lvl, 1, rtxn)?;
+            let neighbours = self.explore_layer(&query, &eps, lvl, 1, rtxn, &stats)?;
             let closest = neighbours.peek_min().map(|(_, n)| n).expect("No neighbor was found");
             eps = vec![*closest];
         }
 
         // search layer 0 with ef=ef
-        let mut neighbours = self.explore_layer(&query, &eps, 0, opt.ef, rtxn)?;
+        let mut neighbours = self.explore_layer(&query, &eps, 0, opt.ef, rtxn, &stats)?;
 
         let mut nns = Vec::with_capacity(opt.count);
         while let Some((OrderedFloat(f), id)) = neighbours.pop_min() {
@@ -290,7 +297,8 @@ impl<'t, D: Distance> Reader<'t, D> {
             }
         }
 
-        Ok(nns)
+        stats.matches = nns;
+        Ok(stats)
     }
 
     fn nns_by_item(

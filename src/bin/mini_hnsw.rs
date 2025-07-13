@@ -15,7 +15,7 @@ fn main() -> Result<()> {
     .unwrap();
 
     let dim = 768;
-    let n = 1000;
+    let n = 10000;
 
     let mut wtxn = env.write_txn().unwrap();
     let db: Database<Cosine> = env.create_database(&mut wtxn, None).unwrap();
@@ -43,7 +43,7 @@ fn main() -> Result<()> {
     let reader = Reader::<Cosine>::open(&rtxn, 0, db).unwrap();
 
     let now = Instant::now();
-    let nns = reader.nns(10, 10).by_vector(&rtxn, &query)?;
+    let nns = reader.nns(10, 100).by_vector(&rtxn, &query)?;
     println!("search: {:?}", now.elapsed());
 
 
