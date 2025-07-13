@@ -48,8 +48,8 @@ impl<'a, D: Distance, R: Rng + SeedableRng> HannoyBuilder<'a, D, R> {
         self
     }
 
-    pub fn build(&mut self, wtxn: &mut RwTxn) -> Result<()> {
-        self.writer.build(wtxn, self.rng, &self.inner)
+    pub fn build<const M: usize, const M0: usize>(&mut self, wtxn: &mut RwTxn) -> Result<()> {
+        self.writer.build::<R, M, M0>(wtxn, self.rng, &self.inner)
     }
 }
 
@@ -183,7 +183,7 @@ impl<D: Distance> Writer<D> {
         HannoyBuilder { writer: self, rng, inner: BuildOption::default() }
     }
 
-    fn build<R: Rng + SeedableRng>(
+    fn build<R: Rng + SeedableRng, const M: usize, const M0: usize>(
         &self,
         wtxn: &mut RwTxn,
         rng: &mut R,
@@ -215,7 +215,7 @@ impl<D: Distance> Writer<D> {
         let concurrent_node_ids = ConcurrentNodeIds::new(used_node_ids);
 
         // main build here
-        let mut hnsw = HnswBuilder::<D, 16, 32>::new(options);
+        let mut hnsw = HnswBuilder::<D, M, M0>::new(options);
         let _stats = hnsw.build(to_insert, self.database, self.index, wtxn, rng)?;
         // dbg!("{:?}", stats);
 

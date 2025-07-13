@@ -32,7 +32,7 @@ fn main() -> Result<()> {
     builder.ef_construction(400);
 
     let now = Instant::now();
-    builder.build(&mut wtxn)?;
+    builder.build::<4,8>(&mut wtxn)?;
     println!("build: {:?}", now.elapsed());
     wtxn.commit()?;
 
