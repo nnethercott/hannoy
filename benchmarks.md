@@ -1,5 +1,5 @@
 # benchmarks
-Results below ran on a machine with 16xIntel(R) Core(TM) i7-6900K CPUs @ 3.20GHz using [this branch](https://github.com/meilisearch/vector-store-relevancy-benchmark/compare/main...nnethercott:vector-store-relevancy-benchmark:arroy-hannoy) in [this repo](https://github.com/meilisearch/vector-store-relevancy-benchmark).
+Results below ran on a machine with 8xIntel(R) Core(TM) i7-6900K CPUs @ 3.20GHz using [this branch](https://github.com/meilisearch/vector-store-relevancy-benchmark/compare/main...nnethercott:vector-store-relevancy-benchmark:arroy-hannoy) in [this repo](https://github.com/meilisearch/vector-store-relevancy-benchmark).
 
 *note: latencies seem *off by a factor of 10* vs those in [kero's blog post](https://blog.kerollmops.com/meilisearch-vs-qdrant-tradeoffs-strengths-and-weaknesses) ...
 
