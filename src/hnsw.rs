@@ -3,7 +3,7 @@ use min_max_heap::MinMaxHeap;
 use papaya::HashMap;
 use rand::{distributions::WeightedIndex, prelude::Distribution, Rng};
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
-use roaring::RoaringBitmap;
+use roaring::{bitmap, RoaringBitmap};
 use slice_group_by::GroupBy;
 use std::{
     borrow::Cow,
@@ -37,11 +37,6 @@ struct NodeState<const M: usize> {
     links: ArrayVec<[ScoredLink; M]>,
 }
 
-impl<const M: usize> NodeState<M> {
-    fn bleh(&self) {
-        self.links.len();
-    }
-}
 impl<const M: usize> Debug for NodeState<M> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         // from [crate::unaligned_vector]
@@ -188,7 +183,7 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
             build_stats.layer_dist.insert(grp[0].1, grp.len());
         });
 
-        self.maybe_resolve_links(&lmdb, to_delete)?;
+        self.maybe_patch_old_links(&lmdb, to_delete)?;
 
         // single-threaded write to lmdb
         for lvl in 0..=self.max_level {
@@ -255,17 +250,38 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
     /// During incremental updates we store a working copy of potential links to the new items. At
     /// the end of indexing we need to merge the old and new links and prune ones pointing to
     /// deleted items.
-    fn maybe_resolve_links(&self, lmdb: &FrozzenReader<D>, to_delete: RoaringBitmap) -> Result<()> {
+    /// Algorithm 4 from FreshDiskANN paper.
+    fn maybe_patch_old_links(&self, lmdb: &FrozzenReader<D>, to_delete: RoaringBitmap) -> Result<()> {
         let links_in_db =
             lmdb.links.iter().map(|((id, lvl), v)| ((id, lvl as usize), v.into_owned()));
 
-        links_in_db.for_each(|((id, lvl), mut bitmap)| {
-            // remove links to deleted
+        for ((id, lvl), out_links) in links_in_db {
+            let mut bitmap = RoaringBitmap::new();
+            for item_id in (&out_links & &to_delete).iter() {
+                bitmap.extend(lmdb.get_links(item_id, lvl)?.iter());
+            }
+            bitmap |= out_links;
             bitmap -= &to_delete;
-            // add links to new 
-            // bitmap &= self.layers[lvl].pin().get(&id)
-            todo!()
-        });
+
+            // now we need to recompute the distances ...
+            let candidates: Result<Vec<_>> = bitmap
+                .into_iter()
+                .map(|other| {
+                    let dist = D::distance(&lmdb.get_item(id)?, &lmdb.get_item(other)?);
+                    Ok::<ScoredLink, Error>((OrderedFloat(dist), other))
+                })
+                .collect();
+            let mut candidates = candidates?;
+
+            // NOTE: don't need to worry about other threads contesting `id`
+            let map_guard = self.layers[lvl].pin();
+            candidates
+                .extend(map_guard.get(&id).map(|state| state.links.to_vec()).unwrap_or(vec![]));
+
+            // finally prune and update
+            let pruned = self.select_sng(candidates, lvl, false, lmdb)?;
+            let _ = map_guard.insert(id, NodeState { links: ArrayVec::from_iter(pruned) });
+        }
 
         Ok(())
     }
