@@ -1,16 +1,28 @@
 use std::fmt;
 
 pub use binary_quantized_cosine::{BinaryQuantizedCosine, NodeHeaderBinaryQuantizedCosine};
+pub use binary_quantized_euclidean::{
+    BinaryQuantizedEuclidean, NodeHeaderBinaryQuantizedEuclidean,
+};
+pub use binary_quantized_manhattan::{
+    BinaryQuantizedManhattan, NodeHeaderBinaryQuantizedManhattan,
+};
 use bytemuck::{Pod, Zeroable};
 pub use cosine::{Cosine, NodeHeaderCosine};
 pub use euclidean::{Euclidean, NodeHeaderEuclidean};
+pub use hamming::{Hamming, NodeHeaderHamming};
+pub use manhattan::{Manhattan, NodeHeaderManhattan};
 
 use crate::node::Item;
 use crate::unaligned_vector::{UnalignedVector, UnalignedVectorCodec};
 
 mod binary_quantized_cosine;
+mod binary_quantized_euclidean;
+mod binary_quantized_manhattan;
 mod cosine;
 mod euclidean;
+mod hamming;
+mod manhattan;
 
 // FIXME: move elsewhere, also currently unused
 fn new_leaf<D: Distance>(vec: Vec<f32>) -> Item<'static, D> {

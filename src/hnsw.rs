@@ -151,7 +151,7 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
         let links = ImmutableLinks::new(wtxn, database, 0, nb_links)?;
         let lmdb = FrozzenReader { items: &items, links: &links };
 
-        let mut level_groups: Vec<_> =
+        let level_groups: Vec<_> =
             levels.linear_group_by(|(_, la), (_, lb)| la == lb).collect();
 
         // insert layers L...0 multi-threaded
@@ -209,7 +209,7 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
 
         // Beam search with: ef = ef_construction
         for lvl in (0..=level).rev() {
-            let mut neighbours =
+            let neighbours =
                 self.explore_layer(&q, &eps, lvl, self.ef_construction, lmdb)?.into_vec();
 
             eps.clear();
@@ -400,16 +400,12 @@ mod tests {
     use super::HnswBuilder;
     use crate::{
         distance::Cosine,
-        key::Key,
-        node::{Item, Node},
-        ordered_float::OrderedFloat,
         writer::BuildOption,
-        Database,
     };
-    use heed::EnvOpenOptions;
-    use rand::{rngs::StdRng, thread_rng, Rng, SeedableRng};
-    use roaring::RoaringBitmap;
-    use std::{collections::HashMap, time::Instant};
+    
+    use rand::{rngs::StdRng, SeedableRng};
+    
+    use std::collections::HashMap;
 
     #[ignore = "just cause"]
     #[test]

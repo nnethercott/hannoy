@@ -14,7 +14,7 @@ use crate::parallel::{ConcurrentNodeIds, ImmutableItems, ImmutableLinks};
 use crate::unaligned_vector::UnalignedVector;
 use crate::version::{Version, VersionCodec};
 use crate::{
-    Database, Error, ItemId, Key, LayerId, Metadata, MetadataCodec, Node, Prefix, PrefixCodec,
+    Database, Error, ItemId, Key, Metadata, MetadataCodec, Node, Prefix, PrefixCodec,
     Result,
 };
 

@@ -9,7 +9,7 @@ use hashbrown::HashMap;
 use heed::types::Bytes;
 use heed::{BytesDecode, BytesEncode, RoTxn};
 use memmap2::Mmap;
-use nohash::{BuildNoHashHasher, IntMap, IntSet};
+use nohash::IntMap;
 use roaring::RoaringBitmap;
 
 use crate::internals::{Item, KeyCodec};

@@ -72,7 +72,7 @@ fn main() -> Result<()> {
     // println!("{:?}", &opt[..nns.len()]);
     // println!("{:?}", &nns);
 
-    let mut recall = 0;
+    let recall = 0;
     let nearest = RoaringBitmap::from_iter(opt.iter().take(nns.len()).map(|(i, _)| *i));
     let retrieved = RoaringBitmap::from_iter(nns.iter().map(|(i, _)| *i));
 

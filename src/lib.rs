@@ -7,20 +7,20 @@ mod metadata;
 mod node;
 mod node_id;
 mod parallel;
+mod reader;
 mod roaring;
 mod spaces;
+mod stats;
 mod version;
 mod writer;
-mod reader;
-mod stats;
 
 mod ordered_float;
 mod unaligned_vector;
 
 pub use distance::Distance;
 pub use error::Error;
-pub use writer::Writer;
 pub use reader::Reader;
+pub use writer::Writer;
 
 use key::{Key, Prefix, PrefixCodec};
 use metadata::{Metadata, MetadataCodec};
@@ -40,7 +40,10 @@ pub mod internals {
 
 /// The set of distances implementing the [`Distance`] and supported by arroy.
 pub mod distances {
-    pub use crate::distance::{BinaryQuantizedCosine, Cosine, Euclidean};
+    pub use crate::distance::{
+        BinaryQuantizedCosine, BinaryQuantizedEuclidean, BinaryQuantizedManhattan, Cosine,
+        Euclidean, Hamming, Manhattan,
+    };
 }
 
 /// A custom Result type that is returning an arroy error by default.
