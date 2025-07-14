@@ -1,18 +1,65 @@
-# hannoy
-hannoy is an [LMDB](https://en.wikipedia.org/wiki/Lightning_Memory-Mapped_Database)-based [HNSW](https://www.pinecone.io/learn/series/faiss/hnsw/) implementation based on [arroy](https://github.com/meilisearch/arroy).
+# hannoy 🗼
+hannoy is a key-value backed [HNSW](https://www.pinecone.io/learn/series/faiss/hnsw/) implementation based on [arroy](https://github.com/meilisearch/arroy).
 
-Some links:
-- [paper](https://arxiv.org/abs/1603.09320)
-- [faiss hnsw.cpp](https://github.com/facebookresearch/faiss/blob/main/faiss/impl/HNSW.cpp)
-- [hnsw.rs](https://github.com/rust-cv/hnsw)
+# Motivation
+Many popular HNSW libraries are built in memory, meaning you need enough RAM to store all the vectors you're indexing. Instead, `hannoy` uses [LMDB](https://en.wikipedia.org/wiki/Lightning_Memory-Mapped_Database) — a memory-mapped KV store — as a storage backend. This is more well-suited for machines running multiple programs, or cases where the dataset you're indexing won't fit in memory. LMDB also supports non-blocking concurrent reads by design, meaning its safe to query the index in multi-threaded environments.
 
-# Notes:
-- downgraded smallvec to 0.14.0 to integrate with benchmark
-- single threaded builds result in best graph quality (high recall, low search time).
-- target: <100ms query latency on 10-100M vectors. (ideally <50ms)
+# Features
+- Supported metrics: [euclidean](https://en.wikipedia.org/wiki/Euclidean_distance#:~:text=In%20mathematics%2C%20the%20Euclidean%20distance,occasionally%20called%20the%20Pythagorean%20distance.), [cosine](https://en.wikipedia.org/wiki/Cosine_similarity#Cosine_distance), [manhattan](https://en.wikipedia.org/wiki/Taxicab_geometry), [hamming](https://en.wikipedia.org/wiki/Hamming_distance), as well as quantized counterparts.
+- Multithreaded builds using rayon
+- Small memory usage thanks to LMDB
+- [Compressed bitmaps](https://github.com/RoaringBitmap/roaring-rs) to store graph edges, adding overhead of only ~200 bytes per vector 
 
-## roadmap
-- [x] fix hardcode of M0 for M in build/get_neighbours
+# Usage
+Here's a quick demo:
+
+```rust
+use hannoy::{distances::Cosine, Database, Reader, Result, Writer};
+use heed::EnvOpenOptions;
+use rand::{rngs::StdRng, SeedableRng};
+
+fn main() -> Result<()> {
+    const DIM: usize = 3;
+    let vecs: Vec<[f32; DIM]> = vec![[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
+
+    let env = unsafe {
+        EnvOpenOptions::new()
+            .map_size(1024 * 1024 * 1024 * 1) // 1GiB
+            .open("./")
+    }
+    .unwrap();
+
+    let mut wtxn = env.write_txn().unwrap();
+    let db: Database<Cosine> = env.create_database(&mut wtxn, None)?;
+    let writer: Writer<Cosine> = Writer::new(db, 0, DIM);
+
+    // insert into lmdb
+    for (item_id, vec) in vecs.into_iter().enumerate() {
+        writer.add_item(&mut wtxn, item_id as u32, &vec)?;
+    }
+
+    // ...and build hnsw
+    let mut rng = StdRng::seed_from_u64(42);
+
+    let mut builder = writer.builder(&mut rng);
+    builder.ef_construction(400);
+    builder.build(&mut wtxn)?;
+    wtxn.commit()?;
+
+    // search hnsw using a new lmdb read transaction
+    let rtxn = env.read_txn()?;
+    let reader = Reader::<Cosine>::open(&rtxn, 0, db)?;
+
+    let ef_search = 10;
+    let query = vec![1.0, 0.0, 0.0];
+    let nns = reader.nns(1, ef_search).by_vector(&rtxn, &query)?;
+
+    dbg!("{:?}", &nns);
+    Ok(())
+}
+```
+
+## 🚀 Roadmap
 - [x] add hnsw entrypoints to db `Node::Metadata`
 - [ ] update edge bitmap of re-indexed nodes
 - [ ] handle re-indexing case where new node may be on higher level
@@ -39,11 +86,3 @@ Some links:
 - product quantization `UnalignedVectorCodec`
 - cache layers 1->L in RAM (speeds up M*(L-1) reads) using a hash table storing raw byte offsets and lengths
 - *threadpool for `Reader` to parallelize searching neighbours
-
-## Comments:
-- `Reader::by_item` **much** faster in hnsw since we have a direct bitmap of neighbours
-- For a dataset with n=10e^6 elements the link bitmaps are always uncompressed (M is generally < 128 << 4096) & there's at most 10e^6 / 2^16 = 16 buckets. In the worst case the links are in unique buckets => M*4 bytes per node. If instead all links are in the same bucket this number is (2 + 2 * M). Typical M is M=16 so we can expect the size of the links to be between 64 and 128 bytes per layer (not including overhead of bitmap structure) since M0 is generally 2 * M.
-  - Each node is expected to be on 2-3 layers  & we store per link a key with size 8 bytes => we use between 2*(64+8) = 144 and 2*(128+8) = 272 bytes. This is within the range outlined in the paper (60-450 bytes per node) but is most likely slightly more efficient due to bitmaps
-  - With the number above the links take O(10^2) bytes per node => for 10e^6 elements we use 100's of MiB to store the links
-- if the hashmap of pointers to our lmdb can't fit in RAM we need some way of incrementally building. This is challenging since outgoing connections from a node in the insert bitmap may not fit in the frozzenreader
-  - For 10 million vectors though the overhead of the frozzenreader map is O(100) MB so running this on a dedicated machine _should_ be fine ...
