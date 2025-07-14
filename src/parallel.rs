@@ -1,4 +1,5 @@
 use core::slice;
+use std::borrow::Cow;
 use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::marker;
@@ -9,7 +10,7 @@ use hashbrown::HashMap;
 use heed::types::Bytes;
 use heed::{BytesDecode, BytesEncode, RoTxn};
 use memmap2::Mmap;
-use nohash::{BuildNoHashHasher, IntMap, IntSet};
+use nohash::IntMap;
 use roaring::RoaringBitmap;
 
 use crate::internals::{Item, KeyCodec};
@@ -298,6 +299,18 @@ impl<'t, D: Distance> ImmutableLinks<'t, D> {
         NodeCodec::bytes_decode(bytes)
             .map_err(heed::Error::Decoding)
             .map(|node: Node<'t, D>| node.links())
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = ((ItemId, u8), Cow<'_, RoaringBitmap>)> {
+        self.links.keys().map(|&k| {
+            let (item_id, level) = k;
+
+            let links = match self.get(item_id, level) {
+                Ok(Some(Links { links })) => links,
+                _ => panic!("fix me later"),
+            };
+            (k, links)
+        })
     }
 }
 

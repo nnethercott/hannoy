@@ -12,8 +12,8 @@ use crate::node::ItemIds;
 pub struct Metadata<'a> {
     pub dimensions: u32,
     pub items: RoaringBitmap,
-    pub entry_points: ItemIds<'a>,
     pub distance: &'a str,
+    pub entry_points: ItemIds<'a>,
     pub max_level: u8,
 }
 

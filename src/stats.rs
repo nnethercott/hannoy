@@ -1,6 +1,6 @@
 use crate::{
     key::{KeyCodec, Prefix, PrefixCodec},
-    node::{self, Links, Node},
+    node::{Links, Node},
     Database,
 };
 use hashbrown::HashMap;

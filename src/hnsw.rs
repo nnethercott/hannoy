@@ -14,6 +14,7 @@ use std::{
     marker::PhantomData,
 };
 use tinyvec::{array_vec, ArrayVec};
+use tracing::debug;
 
 use crate::{
     key::Key,
@@ -22,7 +23,7 @@ use crate::{
     parallel::{ImmutableItems, ImmutableLinks},
     stats::BuildStats,
     writer::{BuildOption, FrozzenReader},
-    Database, Distance, ItemId, Result,
+    Database, Distance, Error, ItemId, Result,
 };
 
 // TODO:
@@ -84,6 +85,16 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
         }
     }
 
+    pub fn with_entry_points(mut self, entry_points: Vec<ItemId>) -> Self {
+        self.entry_points = entry_points;
+        self
+    }
+
+    pub fn with_max_level(mut self, max_level: usize) -> Self {
+        self.max_level = max_level;
+        self
+    }
+
     /// build quantiles from an x ~ exp(1/ln(m))
     fn get_default_probas() -> Vec<f32> {
         let mut assign_probas = Vec::with_capacity(M);
@@ -114,7 +125,8 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
 
     pub fn build<R>(
         &mut self,
-        to_insert: RoaringBitmap,
+        mut to_insert: RoaringBitmap,
+        mut to_delete: RoaringBitmap,
         database: Database<D>,
         index: u16,
         wtxn: &mut RwTxn,
@@ -125,15 +137,28 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
     {
         let mut build_stats = BuildStats::new();
 
-        // generate a random level for each point
+        // Generate a random level for each point
+        let mut local_max_level = usize::MIN;
         let mut levels: Vec<_> = to_insert
             .iter()
             .map(|item_id| {
                 let level = self.get_random_level(rng);
-                self.max_level = self.max_level.max(level);
+                local_max_level = local_max_level.max(level);
                 (item_id, level)
             })
             .collect();
+
+        // If re-indexing new points and a random level is higher than before, then we need to clear the
+        // previous `entry_points`. However, to ensure the old graph gets updated we need to
+        // schedule these ids for re-indexing, otherwise we end up building a completely isolated
+        // sub-graph.
+        // The below is a no-op if the graph is being built for the first time.
+        if local_max_level > self.max_level {
+            levels.extend(self.entry_points.iter().map(|&id| (id, self.max_level)));
+            to_insert |= RoaringBitmap::from_iter(self.entry_points.iter());
+            self.entry_points.clear();
+        }
+        self.max_level = self.max_level.max(local_max_level);
 
         for _ in 0..=self.max_level {
             self.layers.push(HashMap::new());
@@ -146,13 +171,12 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
         }
 
         // setup concurrent lmdb reader
-        let items = ImmutableItems::new(wtxn, database, &to_insert, 0)?;
+        let items = ImmutableItems::new(wtxn, database, &to_insert, index)?;
         let nb_links = database.len(wtxn)? + to_insert.len();
-        let links = ImmutableLinks::new(wtxn, database, 0, nb_links)?;
-        let lmdb = FrozzenReader { items: &items, links: &links };
+        let links = ImmutableLinks::new(wtxn, database, index, nb_links)?;
+        let lmdb = FrozzenReader { index, items: &items, links: &links };
 
-        let mut level_groups: Vec<_> =
-            levels.linear_group_by(|(_, la), (_, lb)| la == lb).collect();
+        let level_groups: Vec<_> = levels.linear_group_by(|(_, la), (_, lb)| la == lb).collect();
 
         // insert layers L...0 multi-threaded
         level_groups.into_iter().for_each(|grp| {
@@ -163,6 +187,8 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
 
             build_stats.layer_dist.insert(grp[0].1, grp.len());
         });
+
+        self.maybe_resolve_links(&lmdb, to_delete)?;
 
         // single-threaded write to lmdb
         for lvl in 0..=self.max_level {
@@ -209,7 +235,7 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
 
         // Beam search with: ef = ef_construction
         for lvl in (0..=level).rev() {
-            let mut neighbours =
+            let neighbours =
                 self.explore_layer(&q, &eps, lvl, self.ef_construction, lmdb)?.into_vec();
 
             eps.clear();
@@ -226,6 +252,24 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
         Ok(())
     }
 
+    /// During incremental updates we store a working copy of potential links to the new items. At
+    /// the end of indexing we need to merge the old and new links and prune ones pointing to
+    /// deleted items.
+    fn maybe_resolve_links(&self, lmdb: &FrozzenReader<D>, to_delete: RoaringBitmap) -> Result<()> {
+        let links_in_db =
+            lmdb.links.iter().map(|((id, lvl), v)| ((id, lvl as usize), v.into_owned()));
+
+        links_in_db.for_each(|((id, lvl), mut bitmap)| {
+            // remove links to deleted
+            bitmap -= &to_delete;
+            // add links to new 
+            // bitmap &= self.layers[lvl].pin().get(&id)
+            todo!()
+        });
+
+        Ok(())
+    }
+
     /// Rather than simply insert, we'll make it a no-op so we can re-insert the same item without
     /// overwriting it's links in mem. This is useful in cases like Vanama build.
     fn add_in_layers_below(&self, item_id: ItemId, level: usize) {
@@ -234,28 +278,23 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
         }
     }
 
-    /// Returns only the Id's of our neighbours.
+    /// Returns only the Id's of our neighbours. Always check lmdb first.
     fn get_neighbours<'a>(
         &self,
         lmdb: &FrozzenReader<'a, D>,
         item_id: ItemId,
         level: usize,
     ) -> Result<Vec<ItemId>> {
-        // FIXME: should this be a Result<Option<Vec<_>> not Result<Vec<_>> ?
-        if level >= self.layers.len() {
-            let Links { links } = lmdb.get_links(item_id, level)?;
+        // O(1) from frozzenreader
+        if let Ok(Links { links }) = lmdb.get_links(item_id, level) {
             return Ok(links.iter().collect());
         }
+        // NOTE: we might wanna combine these sets ... (and subsample ?)
 
         // O(1)
         match self.layers[level].pin().get(&item_id) {
             Some(node_state) => return Ok(node_state.links.iter().map(|(_, i)| *i).collect()),
-
-            // O(log n)
-            None => {
-                let Links { links } = lmdb.get_links(item_id, level)?;
-                Ok(links.iter().collect())
-            }
+            None => unreachable!(),
         }
     }
 
@@ -282,7 +321,7 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
             visited.push(ep);
         }
 
-        while let Some(&(Reverse(OrderedFloat(f)), c)) = candidates.peek() {
+        while let Some(&(Reverse(OrderedFloat(f)), _)) = candidates.peek() {
             let &(OrderedFloat(f_max), _) = res.peek_max().unwrap();
             if f > f_max {
                 break;
@@ -295,12 +334,21 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
                 if !visited.insert(point) {
                     continue;
                 }
-                let dist = D::distance(query, &lmdb.get_item(point)?);
+                // if the item isn't in the frozzen reader it may have been deleted from the index,
+                // in which case its OK not to explore it
+                let item = match lmdb.get_item(point) {
+                    Ok(item) => item,
+                    Err(Error::MissingKey { index, mode: _, item, layer: _ }) => {
+                        debug!("item {item} was deleted from index {index}!");
+                        continue;
+                    }
+                    Err(e) => panic!("{}", e),
+                };
+                let dist = D::distance(query, &item);
 
                 if res.len() < ef || dist < f_max {
                     candidates.push((Reverse(OrderedFloat(dist)), point));
 
-                    // optimized insert & removal maintaining original len
                     if res.len() == ef {
                         let _ = res.push_pop_max((OrderedFloat(dist), point));
                     } else {
@@ -345,7 +393,9 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
             NodeState { links: new_links }
         };
 
-        map.update_or_insert_with(p, _add_link, || NodeState { links: array_vec![] });
+        map.update_or_insert_with(p, _add_link, || NodeState {
+            links: array_vec!([ScoredLink; M0] => q),
+        });
         Ok(())
     }
 

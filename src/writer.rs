@@ -10,12 +10,11 @@ use crate::hnsw::HnswBuilder;
 use crate::internals::KeyCodec;
 use crate::item_iter::ItemIter;
 use crate::node::{Item, ItemIds, Links};
-use crate::parallel::{ConcurrentNodeIds, ImmutableItems, ImmutableLinks};
+use crate::parallel::{ImmutableItems, ImmutableLinks};
 use crate::unaligned_vector::UnalignedVector;
 use crate::version::{Version, VersionCodec};
 use crate::{
-    Database, Error, ItemId, Key, LayerId, Metadata, MetadataCodec, Node, Prefix, PrefixCodec,
-    Result,
+    Database, Error, ItemId, Key, Metadata, MetadataCodec, Node, Prefix, PrefixCodec, Result,
 };
 
 /// The options available when building the arroy database.
@@ -194,7 +193,7 @@ impl<D: Distance> Writer<D> {
         // updated items can be an update, an addition or a removed item
         let updated_items = self.reset_and_retrieve_updated_items(wtxn, options)?;
 
-        let _to_delete = updated_items.clone();
+        let to_delete = updated_items.clone() - &item_indices;
         let to_insert = &item_indices & &updated_items;
 
         let metadata = self
@@ -202,22 +201,19 @@ impl<D: Distance> Writer<D> {
             .remap_data_type::<MetadataCodec>()
             .get(wtxn, &Key::metadata(self.index))?;
 
-        //NOTE: may need this for incrememntal index
-        // let entry_points = metadata
-        //     .as_ref()
-        //     .map_or_else(Vec::new, |metadata| metadata.entry_points.iter().collect());
-        // we should not keep a reference to the metadata since they're going to be moved by LMDB
+        let (entry_points, max_level) = metadata.as_ref().map_or_else(
+            || (Vec::new(), usize::MIN),
+            |metadata| (metadata.entry_points.iter().collect(), metadata.max_level as usize),
+        );
 
+        // we should not keep a reference to the metadata since they're going to be moved by LMDB
         drop(metadata);
 
-        tracing::debug!("Getting a reference to your {n_items} items...");
-        let used_node_ids = self.used_nodes(wtxn, options)?;
-        let concurrent_node_ids = ConcurrentNodeIds::new(used_node_ids);
+        let mut hnsw = HnswBuilder::<D, M, M0>::new(options)
+            .with_entry_points(entry_points)
+            .with_max_level(max_level);
 
-        // main build here
-        let mut hnsw = HnswBuilder::<D, M, M0>::new(options);
-        let _stats = hnsw.build(to_insert, self.database, self.index, wtxn, rng)?;
-        // dbg!("{:?}", stats);
+        let _ = hnsw.build(to_insert, to_delete, self.database, self.index, wtxn, rng)?;
 
         tracing::debug!("write the metadata...");
         let metadata = Metadata {
@@ -285,19 +281,20 @@ impl<D: Distance> Writer<D> {
 
 #[derive(Clone)]
 pub(crate) struct FrozzenReader<'a, D: Distance> {
+    pub index: u16,
     pub items: &'a ImmutableItems<'a, D>,
     pub links: &'a ImmutableLinks<'a, D>,
 }
 
 impl<'a, D: Distance> FrozzenReader<'a, D> {
     pub fn get_item(&self, item_id: ItemId) -> Result<Item<'a, D>> {
-        let key = Key::item(0, item_id);
+        let key = Key::item(self.index, item_id);
 
         // key is a `Key::item` so returned result must be a Node::Item
         Ok(self.items.get(item_id)?.ok_or(Error::missing_key(key))?)
     }
     pub fn get_links(&self, item_id: ItemId, level: usize) -> Result<Links<'a>> {
-        let key = Key::links(0, item_id, level as u8);
+        let key = Key::links(self.index, item_id, level as u8);
 
         // key is a `Key::item` so returned result must be a Node::Item
         Ok(self.links.get(item_id, level as u8)?.ok_or(Error::missing_key(key))?)
