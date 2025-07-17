@@ -1,4 +1,4 @@
-# benchmarks
+# arroy vs hannoy
 Results below ran on a machine with 8xIntel(R) Core(TM) i7-6900K CPUs @ 3.20GHz using [this branch](https://github.com/meilisearch/vector-store-relevancy-benchmark/compare/main...nnethercott:vector-store-relevancy-benchmark:arroy-hannoy) in [this repo](https://github.com/meilisearch/vector-store-relevancy-benchmark).
 
 ## datacomp-small-768
