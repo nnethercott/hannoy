@@ -5,12 +5,14 @@ use heed::EnvOpenOptions;
 use ordered_float::OrderedFloat;
 use rand::{rngs::StdRng, thread_rng, Rng, SeedableRng};
 use roaring::RoaringBitmap;
+use tempfile::env::temp_dir;
 
 fn main() -> Result<()> {
+    let temp_dir = temp_dir();
     let env = unsafe {
         EnvOpenOptions::new()
             .map_size(1024 * 1024 * 1024 * 2) // 2GiB
-            .open("./")
+            .open(temp_dir)
     }
     .unwrap();
 
