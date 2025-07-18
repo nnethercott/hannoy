@@ -205,7 +205,7 @@ impl<D: Distance> Writer<D> {
             || (Vec::new(), usize::MIN),
             |metadata| (metadata.entry_points.iter().collect(), metadata.max_level as usize),
         );
-        dbg!("{:?}", &metadata);
+        // dbg!("{:?}", &metadata);
 
         // we should not keep a reference to the metadata since they're going to be moved by LMDB
         drop(metadata);

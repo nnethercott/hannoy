@@ -147,14 +147,14 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
         // previous `entry_points`. However, to ensure the old graph gets updated we need to
         // schedule these ids for re-indexing, otherwise we end up building a completely isolated
         // sub-graph.
-        // The below is a no-op if the graph is being built for the first time.
+        levels.extend(self.entry_points.iter().map(|&id| (id, self.max_level)));
+        to_insert |= RoaringBitmap::from_iter(self.entry_points.iter());
+
         if local_max_level > self.max_level {
-            levels.extend(self.entry_points.iter().map(|&id| (id, self.max_level)));
-            to_insert |= RoaringBitmap::from_iter(self.entry_points.iter());
             self.entry_points.clear();
         }
-        self.max_level = self.max_level.max(local_max_level);
 
+        self.max_level = self.max_level.max(local_max_level);
         for _ in 0..=self.max_level {
             self.layers.push(HashMap::new());
         }
@@ -173,7 +173,7 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
         }
 
         // setup concurrent lmdb reader
-        let items = ImmutableItems::new(wtxn, database, &to_insert, index)?;
+        let items = ImmutableItems::new(wtxn, database, index)?;
         let nb_links = database.len(wtxn)? + to_insert.len();
         let links = ImmutableLinks::new(wtxn, database, index, nb_links)?;
         let lmdb = FrozzenReader { index, items: &items, links: &links };
@@ -206,12 +206,17 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
             }
         }
 
-        assert_eq!(
-            self.layers.iter().map(|m| m.len()).sum::<usize>(),
-            build_stats.layer_dist.iter().map(|(lvl, cnt)| { (lvl + 1) * cnt }).sum::<usize>()
-        );
+        // NOTE: this is only true for first-time builds. could be true if we add another `self.layers`
+        // for links to "old" items
+        // assert_eq!(
+        //     self.layers.iter().map(|m| m.len()).sum::<usize>(),
+        //     build_stats.layer_dist.iter().map(|(lvl, cnt)| { (lvl + 1) * cnt }).sum::<usize>()
+        // );
 
         build_stats.compute_mean_degree(wtxn, &database, index);
+        // for (e, layer) in self.layers.iter().enumerate() {
+        //     println!("{e}: {:?}", layer);
+        // }
         Ok(build_stats)
     }
 
@@ -266,31 +271,35 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
         let links_in_db =
             lmdb.links.iter().map(|((id, lvl), v)| ((id, lvl as usize), v.into_owned()));
 
-        for ((id, lvl), out_links) in links_in_db {
+        for ((id, lvl), links) in links_in_db {
+            let del_subset = &links & &to_delete;
+            let map_guard = self.layers[lvl].pin();
+            let mut new_links =
+                map_guard.get(&id).map(|state| state.links.to_vec()).unwrap_or(vec![]);
+
+            // no work to be done, continue
+            if del_subset.is_empty() && new_links.is_empty() {
+                continue;
+            }
+
+            // NOTE: are bitmaps like sets e.g. do we have deduplication ?
             let mut bitmap = RoaringBitmap::new();
-            for item_id in (&out_links & &to_delete).iter() {
+            for item_id in del_subset.iter() {
                 bitmap.extend(lmdb.get_links(item_id, lvl)?.iter());
             }
-            bitmap |= out_links;
+            bitmap |= links;
             bitmap -= &to_delete;
-
-            // now we need to recompute the distances since we didn't serialize those to disk
-            let candidates: Result<Vec<_>> = bitmap
+            bitmap
                 .into_iter()
                 .map(|other| {
                     let dist = D::distance(&lmdb.get_item(id)?, &lmdb.get_item(other)?);
                     Ok::<ScoredLink, Error>((OrderedFloat(dist), other))
                 })
-                .collect();
-            let mut candidates = candidates?;
-
-            // NOTE: don't need to worry about other threads contesting `id`
-            let map_guard = self.layers[lvl].pin();
-            candidates
-                .extend(map_guard.get(&id).map(|state| state.links.to_vec()).unwrap_or(vec![]));
+                .collect::<Result<Vec<_>>>()
+                .map(|nl| new_links.extend(nl));
 
             // finally prune and update
-            let pruned = self.select_sng(candidates, lvl, false, lmdb)?;
+            let pruned = self.select_sng(new_links, lvl, false, lmdb)?;
             let _ = map_guard.insert(id, NodeState { links: ArrayVec::from_iter(pruned) });
         }
 
@@ -306,23 +315,27 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
     }
 
     /// Returns only the Id's of our neighbours. Always check lmdb first.
+
     fn get_neighbours<'a>(
         &self,
         lmdb: &FrozzenReader<'a, D>,
         item_id: ItemId,
         level: usize,
     ) -> Result<Vec<ItemId>> {
+        let mut res = Vec::new();
+
         // O(1) from frozzenreader
         if let Ok(Links { links }) = lmdb.get_links(item_id, level) {
-            return Ok(links.iter().collect());
+            res.extend(links.iter());
         }
-        // NOTE: we might wanna combine these sets ... (and subsample ?)
 
-        // O(1)
+        // O(1) from self.layers
         match self.layers[level].pin().get(&item_id) {
-            Some(node_state) => return Ok(node_state.links.iter().map(|(_, i)| *i).collect()),
-            None => panic!("doesn't clean"),
+            Some(node_state) => res.extend(node_state.links.iter().map(|(_, i)| *i)),
+            None => ()
         }
+
+        Ok(res)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -366,7 +379,8 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
                 let item = match lmdb.get_item(point) {
                     Ok(item) => item,
                     Err(Error::MissingKey { index, mode: _, item, layer: _ }) => {
-                        debug!("item {item} was deleted from index {index}!");
+                        // debug!("item {item} was deleted from index {index}!");
+                        panic!("item {item} was deleted from index {index}!");
                         continue;
                     }
                     Err(e) => panic!("{}", e),
@@ -389,6 +403,8 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
     }
 
     /// Tries to add a new link between nodes in a single direction.
+    // TODO: prevent duplicate links the other way. I think this arises ONLY for entrypoints since
+    // we pre-emptively add them in each layer before
     fn add_link<'a>(
         &self,
         p: ItemId,

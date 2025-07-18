@@ -17,7 +17,7 @@ fn main() -> Result<()> {
     .unwrap();
 
     let dim = 768;
-    let n = 1000;
+    let n = 5000;
 
     let mut wtxn = env.write_txn().unwrap();
     let db: Database<Cosine> = env.create_database(&mut wtxn, None).unwrap();
@@ -31,7 +31,7 @@ fn main() -> Result<()> {
     // build hnsw
     let mut rng = StdRng::seed_from_u64(42);
     let mut builder = writer.builder(&mut rng);
-    builder.ef_construction(400);
+    builder.ef_construction(128);
 
     let now = Instant::now();
     builder.build::<16,32>(&mut wtxn)?;
@@ -44,7 +44,9 @@ fn main() -> Result<()> {
         // we were tryna reload some stuff
         writer.add_item(&mut wtxn, item_id as u32, &vec)?;
     }
-    builder.build::<4,8>(&mut wtxn)?;
+    let now = Instant::now();
+    builder.build::<16,32>(&mut wtxn)?;
+    println!("build: {:?}", now.elapsed());
     wtxn.commit()?;
 
     // search hnsw
