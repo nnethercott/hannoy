@@ -24,7 +24,7 @@ fn main() -> Result<()> {
     let writer: Writer<Cosine> = Writer::new(db, 0, dim);
 
     // generate some data & insert to hnsw
-    for (item_id, vec) in load_vectors(n){
+    for (item_id, vec) in load_vectors(n, 0){
         writer.add_item(&mut wtxn, item_id as u32, &vec)?;
     }
 
@@ -34,12 +34,21 @@ fn main() -> Result<()> {
     builder.ef_construction(400);
 
     let now = Instant::now();
-    builder.build::<4,8>(&mut wtxn)?;
+    builder.build::<16,32>(&mut wtxn)?;
     println!("build: {:?}", now.elapsed());
     wtxn.commit()?;
 
+    // add a few more with offsets
+    let mut wtxn = env.write_txn().unwrap();
+    for (item_id, vec) in load_vectors(n, n){
+        // we were tryna reload some stuff
+        writer.add_item(&mut wtxn, item_id as u32, &vec)?;
+    }
+    builder.build::<4,8>(&mut wtxn)?;
+    wtxn.commit()?;
+
     // search hnsw
-    let data = load_vectors(n);
+    let data = load_vectors(n, 0);
     let (qid, query) = data[thread_rng().gen::<usize>()%data.len()].clone();
     let rtxn = env.read_txn()?;
     let reader = Reader::<Cosine>::open(&rtxn, 0, db).unwrap();
@@ -83,7 +92,7 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-fn load_vectors(n: usize) -> Vec<(u32, Vec<f32>)>{
+fn load_vectors(n: usize, offset: usize) -> Vec<(u32, Vec<f32>)>{
     
     let file = File::open("./assets/vectors.txt").unwrap();
     let reader = BufReader::new(&file);
@@ -107,5 +116,5 @@ fn load_vectors(n: usize) -> Vec<(u32, Vec<f32>)>{
         None
     });
 
-    return it.take(n).collect();
+    return it.skip(offset).take(n).collect();
 }

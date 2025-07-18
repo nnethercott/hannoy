@@ -74,7 +74,7 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
             assign_probas,
             ef_construction: opts.ef_construction,
             max_level: 0,
-            entry_points: vec![],
+            entry_points: Vec::new(),
             layers: vec![],
             distance: PhantomData,
         }
@@ -174,9 +174,9 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
         let level_groups: Vec<_> = levels.linear_group_by(|(_, la), (_, lb)| la == lb).collect();
 
         // insert layers L...0 multi-threaded
+        // FIXME: make this log each point that fails. previously source of serious issue !
         level_groups.into_iter().for_each(|grp| {
             grp.into_par_iter().for_each(|&(item_id, lvl)| {
-                // FIXME: make this log each point that fails. previously source of serious issue !
                 self.insert(item_id, lvl, &lmdb, &build_stats).unwrap();
             });
 
@@ -263,7 +263,7 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
             bitmap |= out_links;
             bitmap -= &to_delete;
 
-            // now we need to recompute the distances ...
+            // now we need to recompute the distances since we didn't serialize those to disk
             let candidates: Result<Vec<_>> = bitmap
                 .into_iter()
                 .map(|other| {
@@ -310,7 +310,7 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
         // O(1)
         match self.layers[level].pin().get(&item_id) {
             Some(node_state) => return Ok(node_state.links.iter().map(|(_, i)| *i).collect()),
-            None => unreachable!(),
+            None => panic!("doesn't clean"),
         }
     }
 
@@ -350,7 +350,7 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
                 if !visited.insert(point) {
                     continue;
                 }
-                // if the item isn't in the frozzen reader it may have been deleted from the index,
+                // If the item isn't in the frozzen reader it must have been deleted from the index,
                 // in which case its OK not to explore it
                 let item = match lmdb.get_item(point) {
                     Ok(item) => item,

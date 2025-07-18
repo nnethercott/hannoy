@@ -17,8 +17,6 @@ use crate::Distance;
 pub(crate) struct BuildStats<D> {
     /// a counter to see how many times `HnswBuilder.add_link` is invoked
     pub n_links_added: AtomicUsize,
-    /// number of vector-vector comparisons
-    // pub n_vec_ops: AtomicUsize,
     /// average rank of a node, calculated at the end of build
     pub mean_degree: f32,
     /// number of elements per layer
