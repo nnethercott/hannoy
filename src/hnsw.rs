@@ -160,7 +160,14 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
         }
 
         levels.sort_unstable_by(|(_, a), (_, b)| b.cmp(a));
-        for &(item_id, _) in levels.iter().take_while(|(_, l)| *l == self.max_level) {
+
+        let upper_layer: Vec<_> = levels
+            .iter()
+            .take_while(|(_, l)| *l == self.max_level)
+            .filter(|&(item_id, _)| !self.entry_points.contains(item_id))
+            .collect();
+
+        for &(item_id, _) in upper_layer {
             self.entry_points.push(item_id);
             self.add_in_layers_below(item_id, self.max_level);
         }
@@ -174,7 +181,7 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
         let level_groups: Vec<_> = levels.linear_group_by(|(_, la), (_, lb)| la == lb).collect();
 
         // insert layers L...0 multi-threaded
-        // FIXME: make this log each point that fails. previously source of serious issue !
+        // FIXME: fix error handling here, previously was source of bug
         level_groups.into_iter().for_each(|grp| {
             grp.into_par_iter().for_each(|&(item_id, lvl)| {
                 self.insert(item_id, lvl, &lmdb, &build_stats).unwrap();
@@ -251,7 +258,11 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
     /// the end of indexing we need to merge the old and new links and prune ones pointing to
     /// deleted items.
     /// Algorithm 4 from FreshDiskANN paper.
-    fn maybe_patch_old_links(&self, lmdb: &FrozzenReader<D>, to_delete: RoaringBitmap) -> Result<()> {
+    fn maybe_patch_old_links(
+        &self,
+        lmdb: &FrozzenReader<D>,
+        to_delete: RoaringBitmap,
+    ) -> Result<()> {
         let links_in_db =
             lmdb.links.iter().map(|((id, lvl), v)| ((id, lvl as usize), v.into_owned()));
 
