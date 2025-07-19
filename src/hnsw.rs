@@ -233,7 +233,7 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
 
         // Greedy search with: ef = 1
         for lvl in (level + 1..=self.max_level).rev() {
-            let neighbours = self.explore_layer(&q, &eps, lvl, 1, lmdb)?;
+            let neighbours = self.explore_layer(&q, &eps, lvl, 1, lmdb, build_stats)?;
             let closest = neighbours.peek_min().map(|(_, n)| *n).expect("No neighbor was found");
             eps = vec![closest];
         }
@@ -243,7 +243,7 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
         // Beam search with: ef = ef_construction
         for lvl in (0..=level).rev() {
             let neighbours =
-                self.explore_layer(&q, &eps, lvl, self.ef_construction, lmdb)?.into_vec();
+                self.explore_layer(&q, &eps, lvl, self.ef_construction, lmdb, build_stats)?.into_vec();
 
             eps.clear();
             for (dist, n) in self.select_sng(neighbours, level, false, lmdb)? {
@@ -321,12 +321,15 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
         lmdb: &FrozzenReader<'a, D>,
         item_id: ItemId,
         level: usize,
+        build_stats: &BuildStats<D>,
     ) -> Result<Vec<ItemId>> {
         let mut res = Vec::new();
 
         // O(1) from frozzenreader
         if let Ok(Links { links }) = lmdb.get_links(item_id, level) {
+            build_stats.incr_lmdb_hits();
             res.extend(links.iter());
+            // return Ok(res);
         }
 
         // O(1) from self.layers
@@ -346,6 +349,7 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
         level: usize,
         ef: usize,
         lmdb: &FrozzenReader<'a, D>,
+        build_stats: &BuildStats<D>,
     ) -> Result<MinMaxHeap<ScoredLink>> {
         let mut candidates = BinaryHeap::new();
         let mut res = MinMaxHeap::with_capacity(ef);
@@ -369,7 +373,7 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
             let (_, c) = candidates.pop().unwrap(); // Now safe to pop
 
             // Get neighborhood of candidate either from self or LMDB
-            let proximity = self.get_neighbours(lmdb, c, level)?;
+            let proximity = self.get_neighbours(lmdb, c, level, build_stats)?;
             for point in proximity {
                 if !visited.insert(point) {
                     continue;
