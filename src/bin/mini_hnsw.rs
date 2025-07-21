@@ -5,39 +5,52 @@ use heed::EnvOpenOptions;
 use ordered_float::OrderedFloat;
 use rand::{rngs::StdRng, thread_rng, Rng, SeedableRng};
 use roaring::RoaringBitmap;
+use tempfile::env::temp_dir;
 
 fn main() -> Result<()> {
+    let temp_dir = temp_dir();
     let env = unsafe {
         EnvOpenOptions::new()
             .map_size(1024 * 1024 * 1024 * 2) // 2GiB
-            .open("./")
+            .open(temp_dir)
     }
     .unwrap();
 
     let dim = 768;
-    let n = 1000;
+    let n = 5000;
 
     let mut wtxn = env.write_txn().unwrap();
     let db: Database<Cosine> = env.create_database(&mut wtxn, None).unwrap();
     let writer: Writer<Cosine> = Writer::new(db, 0, dim);
 
     // generate some data & insert to hnsw
-    for (item_id, vec) in load_vectors(n){
+    for (item_id, vec) in load_vectors(19*n, 0){
         writer.add_item(&mut wtxn, item_id as u32, &vec)?;
     }
 
     // build hnsw
     let mut rng = StdRng::seed_from_u64(42);
     let mut builder = writer.builder(&mut rng);
-    builder.ef_construction(400);
+    builder.ef_construction(128);
 
     let now = Instant::now();
-    builder.build(&mut wtxn)?;
+    builder.build::<16,32>(&mut wtxn)?;
+    println!("build: {:?}", now.elapsed());
+    wtxn.commit()?;
+
+    // add a few more with offsets
+    let mut wtxn = env.write_txn().unwrap();
+    for (item_id, vec) in load_vectors(n, 19*n){
+        // we were tryna reload some stuff
+        writer.add_item(&mut wtxn, item_id as u32, &vec)?;
+    }
+    let now = Instant::now();
+    builder.build::<16,32>(&mut wtxn)?;
     println!("build: {:?}", now.elapsed());
     wtxn.commit()?;
 
     // search hnsw
-    let data = load_vectors(n);
+    let data = load_vectors(20*n, 0);
     let (qid, query) = data[thread_rng().gen::<usize>()%data.len()].clone();
     let rtxn = env.read_txn()?;
     let reader = Reader::<Cosine>::open(&rtxn, 0, db).unwrap();
@@ -81,7 +94,7 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-fn load_vectors(n: usize) -> Vec<(u32, Vec<f32>)>{
+fn load_vectors(n: usize, offset: usize) -> Vec<(u32, Vec<f32>)>{
     
     let file = File::open("./assets/vectors.txt").unwrap();
     let reader = BufReader::new(&file);
@@ -105,5 +118,5 @@ fn load_vectors(n: usize) -> Vec<(u32, Vec<f32>)>{
         None
     });
 
-    return it.take(n).collect();
+    return it.skip(offset).take(n).collect();
 }

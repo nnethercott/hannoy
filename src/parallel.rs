@@ -1,4 +1,5 @@
 use core::slice;
+use std::borrow::Cow;
 use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::marker;
@@ -198,27 +199,29 @@ pub struct ImmutableItems<'t, D> {
     _marker: marker::PhantomData<(&'t (), D)>,
 }
 
+// NOTE: this previously took an arg `items: &RoaringBitmap` which corresponded to the `to_insert`.
+// When building the hnsw in multiple dumps we need vecs from previous dumps in order to "glue"
+// things together.
+// To accomodate this we use a cursor over ALL Key::items in the db.
 impl<'t, D: Distance> ImmutableItems<'t, D> {
     /// Creates the structure by fetching all the leaf pointers
     /// and keeping the transaction making the pointers valid.
     /// Do not take more items than memory allows.
     /// Remove from the list of candidates all the items that were selected and return them.
-    pub fn new(
-        rtxn: &'t RoTxn,
-        database: Database<D>,
-        items: &RoaringBitmap,
-        index: u16,
-    ) -> heed::Result<Self> {
-        let mut map = HashMap::with_capacity(items.len() as usize);
+    pub fn new(rtxn: &'t RoTxn, database: Database<D>, index: u16) -> heed::Result<Self> {
+        let mut map = HashMap::with_capacity(database.len(rtxn)? as usize);
         let mut constant_length = None;
 
-        for item_id in items {
-            let bytes =
-                database.remap_data_type::<Bytes>().get(rtxn, &Key::item(index, item_id))?.unwrap();
-            assert_eq!(*constant_length.get_or_insert(bytes.len()), bytes.len());
+        let mut cursor = database
+            .remap_types::<PrefixCodec, Bytes>()
+            .prefix_iter(rtxn, &Prefix::item(index))?
+            .remap_key_type::<KeyCodec>();
 
+        for res in cursor {
+            let (item_id, bytes) = res?;
+            assert_eq!(*constant_length.get_or_insert(bytes.len()), bytes.len());
             let ptr = bytes.as_ptr();
-            map.insert(item_id, ptr);
+            map.insert(item_id.node.item, ptr);
         }
 
         Ok(ImmutableItems { items: map, constant_length, _marker: marker::PhantomData })
@@ -298,6 +301,18 @@ impl<'t, D: Distance> ImmutableLinks<'t, D> {
         NodeCodec::bytes_decode(bytes)
             .map_err(heed::Error::Decoding)
             .map(|node: Node<'t, D>| node.links())
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = ((ItemId, u8), Cow<'_, RoaringBitmap>)> {
+        self.links.keys().map(|&k| {
+            let (item_id, level) = k;
+
+            let links = match self.get(item_id, level) {
+                Ok(Some(Links { links })) => links,
+                _ => panic!("fix me later"),
+            };
+            (k, links)
+        })
     }
 }
 

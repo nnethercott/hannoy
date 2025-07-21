@@ -8,7 +8,7 @@ Many popular HNSW libraries are built in memory, meaning you need enough RAM to 
 - Supported metrics: [euclidean](https://en.wikipedia.org/wiki/Euclidean_distance#:~:text=In%20mathematics%2C%20the%20Euclidean%20distance,occasionally%20called%20the%20Pythagorean%20distance.), [cosine](https://en.wikipedia.org/wiki/Cosine_similarity#Cosine_distance), [manhattan](https://en.wikipedia.org/wiki/Taxicab_geometry), [hamming](https://en.wikipedia.org/wiki/Hamming_distance), as well as quantized counterparts.
 - Multithreaded builds using rayon
 - Small memory usage thanks to LMDB
-- [Compressed bitmaps](https://github.com/RoaringBitmap/roaring-rs) to store graph edges, adding overhead of only ~200 bytes per vector 
+- [Compressed bitmaps](https://github.com/RoaringBitmap/roaring-rs) to store graph edges, adding overhead of only ~200 bytes per vector
 
 # Usage
 Here's a quick demo:
@@ -43,7 +43,7 @@ fn main() -> Result<()> {
 
     let mut builder = writer.builder(&mut rng);
     builder.ef_construction(400);
-    builder.build(&mut wtxn)?;
+    builder.build::<16,32>(&mut wtxn)?;
     wtxn.commit()?;
 
     // search hnsw using a new lmdb read transaction
@@ -86,3 +86,17 @@ fn main() -> Result<()> {
 - product quantization `UnalignedVectorCodec`
 - cache layers 1->L in RAM (speeds up M*(L-1) reads) using a hash table storing raw byte offsets and lengths
 - *threadpool for `Reader` to parallelize searching neighbours
+
+- change Metadata.entry_points from `Vec<u32>` to a `RoaringBitmap` to avoid manually deduplicating entries
+
+- TODO: ask kero
+  - Currently I made ImmutableItems read in ALL items from db. In theory we could postpone distance calcs with on-disk vectors until the end of the build using a new ImmutableItems reader.
+    - then we'd store another HnswBuilder-like list of hashmaps for work we need to do later !
+  - actually just get his take/views on my approach for incremental indexing
+- I'm suspicious of the freshdiskann paper's 5% insert + 5% delete cycle -- i've noticed that at 50% insert the performance deteriorates significantly !
+  - wait nevermind apparently they do do that
+- TODO: check if using \alpha sng improves recall on incremental builds, e.g. with alpha=1.2 or something (single pass not twice over)
+  - id *does* but it also increases build time (if used for entire build). also not a magic bullet.
+- ask what's wrong with a global pool for doing vector-vector ops and sending back to search thread ?
+- could we also reindex points on levels > 0 during incremental build ?
+- need to try building whole index, then deleting & inserting instead of 2-phase build

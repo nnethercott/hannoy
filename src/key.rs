@@ -73,7 +73,7 @@ impl heed::BytesDecode<'_> for KeyCodec {
         let bytes = &bytes[size_of::<u16>()..];
         let mode = bytes[0].try_into()?;
         let bytes = &bytes[size_of::<u8>()..];
-        let layer = bytes[1];
+        let layer = bytes[0];
         let bytes = &bytes[size_of::<u8>()..];
         let item = BigEndian::read_u32(bytes);
         // We don't need to deserialize the unused space
@@ -129,7 +129,7 @@ impl<'a> heed::BytesEncode<'a> for PrefixCodec {
 
 #[cfg(test)]
 mod test {
-    use heed::BytesEncode;
+    use heed::{BytesDecode, BytesEncode};
 
     use super::*;
 
@@ -138,5 +138,15 @@ mod test {
         let key = Key::metadata(0);
         let encoded = KeyCodec::bytes_encode(&key).unwrap();
         assert_eq!(encoded.len(), size_of::<u64>());
+    }
+
+    // TODO: fuzz this
+    #[test]
+    fn test_links_key() {
+        let key = Key::links(0, 1, 42);
+        let bytes = KeyCodec::bytes_encode(&key).unwrap();
+        let key2 = KeyCodec::bytes_decode(&bytes).unwrap();
+        assert_eq!(key.node.item, key2.node.item);
+        assert_eq!(key.node.layer, key2.node.layer);
     }
 }
