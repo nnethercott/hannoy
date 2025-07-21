@@ -7,20 +7,20 @@ mod metadata;
 mod node;
 mod node_id;
 mod parallel;
+mod reader;
 mod roaring;
 mod spaces;
+mod stats;
 mod version;
 mod writer;
-mod reader;
-mod stats;
 
 mod ordered_float;
 mod unaligned_vector;
 
 pub use distance::Distance;
 pub use error::Error;
-pub use writer::Writer;
-pub use reader::Reader;
+pub use reader::{QueryBuilder, Reader};
+pub use writer::{HannoyBuilder, Writer};
 
 use key::{Key, Prefix, PrefixCodec};
 use metadata::{Metadata, MetadataCodec};
