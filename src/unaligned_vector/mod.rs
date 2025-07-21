@@ -6,10 +6,12 @@ use std::{
 };
 
 pub use binary_quantized::BinaryQuantized;
+pub use binary::Binary;
 
 use bytemuck::pod_collect_to_vec;
 
 mod binary_quantized;
+mod binary;
 mod f32;
 
 #[cfg(test)]

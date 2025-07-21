@@ -11,7 +11,8 @@ use std::{
     collections::BinaryHeap,
     f32,
     fmt::{self, Debug},
-    marker::PhantomData, panic,
+    marker::PhantomData,
+    panic,
 };
 use tinyvec::{array_vec, ArrayVec};
 use tracing::debug;
@@ -239,8 +240,9 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
 
         // Beam search with: ef = ef_construction
         for lvl in (0..=level).rev() {
-            let neighbours =
-                self.explore_layer(&q, &eps, lvl, self.ef_construction, lmdb, build_stats)?.into_vec();
+            let neighbours = self
+                .explore_layer(&q, &eps, lvl, self.ef_construction, lmdb, build_stats)?
+                .into_vec();
 
             eps.clear();
             for (dist, n) in self.select_sng(neighbours, level, false, lmdb)? {
@@ -331,8 +333,10 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
         match self.layers[level].pin().get(&item_id) {
             Some(node_state) => res.extend(node_state.links.iter().map(|(_, i)| *i)),
             None => {
-                if res.is_empty(){
-                    unreachable!("the links for `item_id` must exist in either self.layers, lmdb, or both")
+                if res.is_empty() {
+                    unreachable!(
+                        "the links for `item_id` must exist in either self.layers, lmdb, or both"
+                    )
                 }
             }
         }
@@ -493,18 +497,11 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
 #[cfg(test)]
 mod tests {
     use super::HnswBuilder;
-    use crate::{
-        distance::Cosine,
-        key::Key,
-        node::{Item, Node},
-        ordered_float::OrderedFloat,
-        writer::BuildOption,
-        Database,
-    };
-    use heed::EnvOpenOptions;
-    use rand::{rngs::StdRng, thread_rng, Rng, SeedableRng};
-    use roaring::RoaringBitmap;
-    use std::{collections::HashMap, time::Instant};
+    use crate::{distance::Cosine, writer::BuildOption};
+
+    use rand::{rngs::StdRng, SeedableRng};
+
+    use std::collections::HashMap;
 
     #[ignore = "just cause"]
     #[test]
