@@ -43,7 +43,7 @@ fn main() -> Result<()> {
 
     let mut builder = writer.builder(&mut rng);
     builder.ef_construction(400);
-    builder.build(&mut wtxn)?;
+    builder.build::<16,32>(&mut wtxn)?;
     wtxn.commit()?;
 
     // search hnsw using a new lmdb read transaction
