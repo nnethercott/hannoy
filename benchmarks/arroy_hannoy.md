@@ -18,6 +18,7 @@ Results below ran on a machine with 8xIntel(R) Core(TM) i7-6900K CPUs @ 3.20GHz 
 | 100K (hannoy)| 31.51 s    | 404.24 MiB  | 0.92     | 0.92     | 0.93      | 0.94      | 0.92       | 15.73 ms                                       |
 | 500K (hannoy)| 226.31 s   | 2.00 GiB    | 0.86     | 0.90     | 0.90      | 0.91      | 0.89       | 24.23 ms                                       |
 | 1M (hannoy)  | 506.41 s   | 4.03 GiB    | 0.95     | 0.93     | 0.94      | 0.94      | 0.94       | 29.89 ms                                       |
+| 10M (hannoy) | 7216.37 s  | 41.39 GiB   | 0.89     | 0.87     | 0.87      | 0.86      | 0.86       | 53.28 ms                                       |
 
 ## wikipedia-22-12-simple-768
 - hannoy: `M=16`, `ef_construction=48`, `ef_search=5*nns.min(100)`
