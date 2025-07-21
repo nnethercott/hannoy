@@ -17,14 +17,14 @@ fn main() -> Result<()> {
     .unwrap();
 
     let dim = 768;
-    let n = 1000;
+    let n = 5000;
 
     let mut wtxn = env.write_txn().unwrap();
     let db: Database<Cosine> = env.create_database(&mut wtxn, None).unwrap();
     let writer: Writer<Cosine> = Writer::new(db, 0, dim);
 
     // generate some data & insert to hnsw
-    for (item_id, vec) in load_vectors(n, 0){
+    for (item_id, vec) in load_vectors(19*n, 0){
         writer.add_item(&mut wtxn, item_id as u32, &vec)?;
     }
 
@@ -40,7 +40,7 @@ fn main() -> Result<()> {
 
     // add a few more with offsets
     let mut wtxn = env.write_txn().unwrap();
-    for (item_id, vec) in load_vectors(n, n){
+    for (item_id, vec) in load_vectors(n, 19*n){
         // we were tryna reload some stuff
         writer.add_item(&mut wtxn, item_id as u32, &vec)?;
     }
@@ -50,7 +50,7 @@ fn main() -> Result<()> {
     wtxn.commit()?;
 
     // search hnsw
-    let data = load_vectors(2*n, 0);
+    let data = load_vectors(20*n, 0);
     let (qid, query) = data[thread_rng().gen::<usize>()%data.len()].clone();
     let rtxn = env.read_txn()?;
     let reader = Reader::<Cosine>::open(&rtxn, 0, db).unwrap();

@@ -11,7 +11,7 @@ use std::{
     collections::BinaryHeap,
     f32,
     fmt::{self, Debug},
-    marker::PhantomData,
+    marker::PhantomData, panic,
 };
 use tinyvec::{array_vec, ArrayVec};
 use tracing::debug;
@@ -315,7 +315,6 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
     }
 
     /// Returns only the Id's of our neighbours. Always check lmdb first.
-
     fn get_neighbours<'a>(
         &self,
         lmdb: &FrozzenReader<'a, D>,
@@ -329,13 +328,16 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
         if let Ok(Links { links }) = lmdb.get_links(item_id, level) {
             build_stats.incr_lmdb_hits();
             res.extend(links.iter());
-            // return Ok(res);
         }
 
         // O(1) from self.layers
         match self.layers[level].pin().get(&item_id) {
             Some(node_state) => res.extend(node_state.links.iter().map(|(_, i)| *i)),
-            None => ()
+            None => {
+                if res.is_empty(){
+                    unreachable!("the links for `item_id` must exist in either self.layers, lmdb, or both")
+                }
+            }
         }
 
         Ok(res)
@@ -385,7 +387,6 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
                     Err(Error::MissingKey { index, mode: _, item, layer: _ }) => {
                         // debug!("item {item} was deleted from index {index}!");
                         panic!("item {item} was deleted from index {index}!");
-                        continue;
                     }
                     Err(e) => panic!("{}", e),
                 };

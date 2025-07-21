@@ -93,3 +93,10 @@ fn main() -> Result<()> {
   - Currently I made ImmutableItems read in ALL items from db. In theory we could postpone distance calcs with on-disk vectors until the end of the build using a new ImmutableItems reader.
     - then we'd store another HnswBuilder-like list of hashmaps for work we need to do later !
   - actually just get his take/views on my approach for incremental indexing
+- I'm suspicious of the freshdiskann paper's 5% insert + 5% delete cycle -- i've noticed that at 50% insert the performance deteriorates significantly !
+  - wait nevermind apparently they do do that
+- TODO: check if using \alpha sng improves recall on incremental builds, e.g. with alpha=1.2 or something (single pass not twice over)
+  - id *does* but it also increases build time (if used for entire build). also not a magic bullet.
+- ask what's wrong with a global pool for doing vector-vector ops and sending back to search thread ?
+- could we also reindex points on levels > 0 during incremental build ?
+- need to try building whole index, then deleting & inserting instead of 2-phase build
