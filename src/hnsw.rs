@@ -214,9 +214,6 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
         // );
 
         build_stats.compute_mean_degree(wtxn, &database, index);
-        // for (e, layer) in self.layers.iter().enumerate() {
-        //     println!("{e}: {:?}", layer);
-        // }
         Ok(build_stats)
     }
 
