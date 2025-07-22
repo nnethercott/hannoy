@@ -19,8 +19,8 @@ mod unaligned_vector;
 
 pub use distance::Distance;
 pub use error::Error;
-pub use reader::Reader;
-pub use writer::Writer;
+pub use reader::{QueryBuilder, Reader};
+pub use writer::{HannoyBuilder, Writer};
 
 use key::{Key, Prefix, PrefixCodec};
 use metadata::{Metadata, MetadataCodec};

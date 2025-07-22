@@ -52,6 +52,7 @@ impl<'a, D: Distance, R: Rng + SeedableRng> HannoyBuilder<'a, D, R> {
     }
 }
 
+
 /// A writer to store new items, remove existing ones,
 /// and build the search index to query the nearest
 /// neighbors to items or vectors.
