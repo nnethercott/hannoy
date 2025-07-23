@@ -273,9 +273,8 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
         // FIXME: avoid just unwrapping stuff, handle better
         links_in_db.into_par_iter().for_each(|((id, lvl), links)| {
             let del_subset = &links & &to_delete;
-            let map_guard = self.layers[lvl].pin();
             let mut new_links =
-                map_guard.get(&id).map(|state| state.links.to_vec()).unwrap_or(vec![]);
+                self.layers[lvl].pin().get(&id).map(|state| state.links.to_vec()).unwrap_or(vec![]);
 
             // no work to be done
             if del_subset.is_empty() && new_links.is_empty() {
@@ -292,7 +291,8 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
             bitmap
                 .into_iter()
                 .map(|other| {
-                    let dist = D::distance(&lmdb.get_item(id).unwrap(), &lmdb.get_item(other).unwrap());
+                    let dist =
+                        D::distance(&lmdb.get_item(id).unwrap(), &lmdb.get_item(other).unwrap());
                     Ok::<ScoredLink, Error>((OrderedFloat(dist), other))
                 })
                 .collect::<Result<Vec<_>>>()
@@ -300,7 +300,8 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
 
             // finally prune and update
             let pruned = self.select_sng(new_links, lvl, false, lmdb).unwrap();
-            let _ = map_guard.insert(id, NodeState { links: ArrayVec::from_iter(pruned) });
+            let _ =
+                self.layers[lvl].pin().insert(id, NodeState { links: ArrayVec::from_iter(pruned) });
         });
 
         Ok(())
