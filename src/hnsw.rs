@@ -267,40 +267,41 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
         lmdb: &FrozzenReader<D>,
         to_delete: RoaringBitmap,
     ) -> Result<()> {
-        let links_in_db =
-            lmdb.links.iter().map(|((id, lvl), v)| ((id, lvl as usize), v.into_owned()));
+        let links_in_db: Vec<_> =
+            lmdb.links.iter().map(|((id, lvl), v)| ((id, lvl as usize), v.into_owned())).collect();
 
-        for ((id, lvl), links) in links_in_db {
+        // FIXME: avoid just unwrapping stuff, handle better
+        links_in_db.into_par_iter().for_each(|((id, lvl), links)| {
             let del_subset = &links & &to_delete;
             let map_guard = self.layers[lvl].pin();
             let mut new_links =
                 map_guard.get(&id).map(|state| state.links.to_vec()).unwrap_or(vec![]);
 
-            // no work to be done, continue
+            // no work to be done
             if del_subset.is_empty() && new_links.is_empty() {
-                continue;
+                return;
             }
 
             // NOTE: are bitmaps like sets e.g. do we have deduplication ?
             let mut bitmap = RoaringBitmap::new();
             for item_id in del_subset.iter() {
-                bitmap.extend(lmdb.get_links(item_id, lvl)?.iter());
+                bitmap.extend(lmdb.get_links(item_id, lvl).unwrap().iter());
             }
             bitmap |= links;
             bitmap -= &to_delete;
             bitmap
                 .into_iter()
                 .map(|other| {
-                    let dist = D::distance(&lmdb.get_item(id)?, &lmdb.get_item(other)?);
+                    let dist = D::distance(&lmdb.get_item(id).unwrap(), &lmdb.get_item(other).unwrap());
                     Ok::<ScoredLink, Error>((OrderedFloat(dist), other))
                 })
                 .collect::<Result<Vec<_>>>()
                 .map(|nl| new_links.extend(nl));
 
             // finally prune and update
-            let pruned = self.select_sng(new_links, lvl, false, lmdb)?;
+            let pruned = self.select_sng(new_links, lvl, false, lmdb).unwrap();
             let _ = map_guard.insert(id, NodeState { links: ArrayVec::from_iter(pruned) });
-        }
+        });
 
         Ok(())
     }
