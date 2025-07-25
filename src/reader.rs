@@ -15,13 +15,12 @@ use crate::node::{Item, ItemIds, Links};
 use crate::ordered_float::OrderedFloat;
 use crate::unaligned_vector::UnalignedVector;
 use crate::version::{Version, VersionCodec};
-use crate::{
-    Database, Error, ItemId, Key, MetadataCodec, Node, Prefix, PrefixCodec, Result,
-};
+use crate::{Database, Error, ItemId, Key, MetadataCodec, Node, Prefix, PrefixCodec, Result};
 
 /// Options used to make a query against an arroy [`Reader`].
 pub struct QueryBuilder<'a, D: Distance> {
     reader: &'a Reader<'a, D>,
+    candidates: Option<&'a RoaringBitmap>,
     count: usize,
     ef: usize,
 }
@@ -38,7 +37,7 @@ impl<'a, D: Distance> QueryBuilder<'a, D> {
     /// # let (reader, rtxn): (Reader<Euclidean>, heed::RoTxn) = todo!();
     /// reader.nns(20).by_item(&rtxn, 5);
     /// ```
-    pub fn by_item(&self, rtxn: &RoTxn, item: ItemId) -> Result<Option<Vec<(ItemId, f32)>>> {
+    pub fn by_item(&self, _rtxn: &RoTxn, _item: ItemId) -> Result<Option<Vec<(ItemId, f32)>>> {
         todo!()
     }
 
@@ -64,6 +63,21 @@ impl<'a, D: Distance> QueryBuilder<'a, D> {
         let vector = UnalignedVector::from_slice(vector);
         let item = Item { header: D::new_header(&vector), vector };
         self.reader.nns_by_vec(rtxn, &item, self)
+    }
+
+    /// Specify a subset of candidates to inspect. Filters out everything else.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use arroy::{Reader, distances::Euclidean};
+    /// # let (reader, rtxn): (Reader<Euclidean>, heed::RoTxn) = todo!();
+    /// let candidates = roaring::RoaringBitmap::from_iter([1, 3, 4, 5, 6, 7, 8, 9, 15, 16]);
+    /// reader.nns(20).candidates(&candidates).by_item(&rtxn, 6);
+    /// ```
+    pub fn candidates(&mut self, candidates: &'a RoaringBitmap) -> &mut Self {
+        self.candidates = Some(candidates);
+        self
     }
 }
 
@@ -198,7 +212,7 @@ impl<'t, D: Distance> Reader<'t, D> {
     ///
     /// You must provide the number of items you want to receive.
     pub fn nns(&self, count: usize, ef: usize) -> QueryBuilder<D> {
-        QueryBuilder { reader: self, count, ef }
+        QueryBuilder { reader: self, candidates: None, count, ef }
     }
 
     /// Get a generic read node from the database using the version of the database found while creating the reader.
@@ -247,7 +261,8 @@ impl<'t, D: Distance> Reader<'t, D> {
                 if !visited.insert(point) {
                     continue;
                 }
-                let dist = D::distance(query, &get_item(self.database, self.index, rtxn, point)?.unwrap());
+                let dist =
+                    D::distance(query, &get_item(self.database, self.index, rtxn, point)?.unwrap());
 
                 if res.len() < ef || dist < f_max {
                     candidates.push((Reverse(OrderedFloat(dist)), point));
@@ -284,7 +299,9 @@ impl<'t, D: Distance> Reader<'t, D> {
 
         let mut nns = Vec::with_capacity(opt.count);
         while let Some((OrderedFloat(f), id)) = neighbours.pop_min() {
-            nns.push((id, f));
+            if opt.candidates.is_some_and(|candidates| candidates.contains(id)) {
+                nns.push((id, f));
+            }
             if nns.len() == opt.count {
                 break;
             }
