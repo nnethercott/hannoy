@@ -1,23 +1,19 @@
-use crate::{
-    key::{KeyCodec, Prefix, PrefixCodec},
-    node::{Links, Node},
-    Database,
-};
+use std::marker::PhantomData;
+use std::sync::atomic::{AtomicUsize, Ordering};
+
 use hashbrown::HashMap;
 use heed::{Result, RoTxn};
-use std::{
-    marker::PhantomData,
-    sync::atomic::{AtomicUsize, Ordering},
-};
 
-use crate::Distance;
+use crate::key::{KeyCodec, Prefix, PrefixCodec};
+use crate::node::{Links, Node};
+use crate::{Database, Distance};
 
 // TODO: ignore the phantom
 #[derive(Debug)]
 pub(crate) struct BuildStats<D> {
     /// a counter to see how many times `HnswBuilder.add_link` is invoked
     pub n_links_added: AtomicUsize,
-    /// a counter tracking how many times we hit lmdb 
+    /// a counter tracking how many times we hit lmdb
     pub lmdb_hits: AtomicUsize,
     /// average rank of a node, calculated at the end of build
     pub mean_degree: f32,
@@ -43,11 +39,16 @@ impl<D: Distance> BuildStats<D> {
     }
 
     pub fn incr_lmdb_hits(&self) {
-       self.lmdb_hits.fetch_add(1, Ordering::Relaxed);
+        self.lmdb_hits.fetch_add(1, Ordering::Relaxed);
     }
 
     /// iterate over all links in db and average out node rank
-    pub fn compute_mean_degree(&mut self, rtxn: &RoTxn, db: &Database<D>, index: u16) -> Result<()> {
+    pub fn compute_mean_degree(
+        &mut self,
+        rtxn: &RoTxn,
+        db: &Database<D>,
+        index: u16,
+    ) -> Result<()> {
         let iter = db
             .remap_key_type::<PrefixCodec>()
             .prefix_iter(rtxn, &Prefix::links(index))?
@@ -61,7 +62,7 @@ impl<D: Distance> BuildStats<D> {
 
             let links = match node {
                 Node::Links(Links { links }) => links,
-                Node::Item(item) => unreachable!(),
+                Node::Item(_) => unreachable!(),
             };
 
             total_links += links.len();

@@ -1,9 +1,13 @@
-use std::{fs::File, io::{BufRead, BufReader}, time::Instant};
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::time::Instant;
 
-use hannoy::{distances::Cosine, Database, Reader, Result, Writer};
+use hannoy::distances::Cosine;
+use hannoy::{Database, Reader, Result, Writer};
 use heed::EnvOpenOptions;
 use ordered_float::OrderedFloat;
-use rand::{rngs::StdRng, thread_rng, Rng, SeedableRng};
+use rand::rngs::StdRng;
+use rand::{thread_rng, Rng, SeedableRng};
 use roaring::RoaringBitmap;
 use tempfile::env::temp_dir;
 
@@ -24,8 +28,8 @@ fn main() -> Result<()> {
     let writer: Writer<Cosine> = Writer::new(db, 0, dim);
 
     // generate some data & insert to hnsw
-    for (item_id, vec) in load_vectors(19*n, 0){
-        writer.add_item(&mut wtxn, item_id as u32, &vec)?;
+    for (item_id, vec) in load_vectors(19 * n, 0) {
+        writer.add_item(&mut wtxn, item_id, &vec)?;
     }
 
     // build hnsw
@@ -34,24 +38,24 @@ fn main() -> Result<()> {
     builder.ef_construction(128);
 
     let now = Instant::now();
-    builder.build::<16,32>(&mut wtxn)?;
+    builder.build::<16, 32>(&mut wtxn)?;
     println!("build: {:?}", now.elapsed());
     wtxn.commit()?;
 
     // add a few more with offsets
     let mut wtxn = env.write_txn().unwrap();
-    for (item_id, vec) in load_vectors(n, 19*n){
+    for (item_id, vec) in load_vectors(n, 19 * n) {
         // we were tryna reload some stuff
-        writer.add_item(&mut wtxn, item_id as u32, &vec)?;
+        writer.add_item(&mut wtxn, item_id, &vec)?;
     }
     let now = Instant::now();
-    builder.build::<16,32>(&mut wtxn)?;
+    builder.build::<16, 32>(&mut wtxn)?;
     println!("build: {:?}", now.elapsed());
     wtxn.commit()?;
 
     // search hnsw
-    let data = load_vectors(20*n, 0);
-    let (qid, query) = data[thread_rng().gen::<usize>()%data.len()].clone();
+    let data = load_vectors(20 * n, 0);
+    let (_qid, query) = data[thread_rng().gen::<usize>() % data.len()].clone();
     let rtxn = env.read_txn()?;
     let reader = Reader::<Cosine>::open(&rtxn, 0, db).unwrap();
 
@@ -59,8 +63,7 @@ fn main() -> Result<()> {
     let nns = reader.nns(10, 10).by_vector(&rtxn, &query)?;
     println!("search: {:?}", now.elapsed());
 
-
-    // check some recall 
+    // check some recall
     fn l2_norm(vec: &[f32]) -> f32 {
         vec.iter().map(|x| x * x).sum::<f32>().sqrt()
     }
@@ -76,7 +79,7 @@ fn main() -> Result<()> {
             let dot: f32 = v.iter().zip(query.iter()).map(|(a, b)| a * b).sum();
             let denom = l2_norm(&v) * query_norm;
             let cosine_sim = dot / denom.max(1e-6); // avoid division by zero
-            (i as u32, 0.5 - 0.5 * cosine_sim)
+            (i, 0.5 - 0.5 * cosine_sim)
         })
         .collect();
 
@@ -85,7 +88,6 @@ fn main() -> Result<()> {
     // println!("{:?}", &opt[..nns.len()]);
     // println!("{:?}", &nns);
 
-    let recall = 0;
     let nearest = RoaringBitmap::from_iter(opt.iter().take(nns.len()).map(|(i, _)| *i));
     let retrieved = RoaringBitmap::from_iter(nns.iter().map(|(i, _)| *i));
 
@@ -94,8 +96,7 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-fn load_vectors(n: usize, offset: usize) -> Vec<(u32, Vec<f32>)>{
-    
+fn load_vectors(n: usize, offset: usize) -> Vec<(u32, Vec<f32>)> {
     let file = File::open("./assets/vectors.txt").unwrap();
     let reader = BufReader::new(&file);
 
@@ -118,5 +119,5 @@ fn load_vectors(n: usize, offset: usize) -> Vec<(u32, Vec<f32>)>{
         None
     });
 
-    return it.skip(offset).take(n).collect();
+    it.skip(offset).take(n).collect()
 }

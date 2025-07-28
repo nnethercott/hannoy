@@ -18,7 +18,7 @@ impl Eq for OrderedFloat {}
 
 impl PartialOrd for OrderedFloat {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        self.0.to_bits().partial_cmp(&other.0.to_bits())
+        Some(self.cmp(other))
     }
 }
 
@@ -30,8 +30,9 @@ impl Ord for OrderedFloat {
 
 #[cfg(test)]
 mod tests {
-    use crate::ordered_float::OrderedFloat;
     use proptest::prelude::*;
+
+    use crate::ordered_float::OrderedFloat;
 
     proptest! {
         #[test]

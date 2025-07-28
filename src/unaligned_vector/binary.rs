@@ -74,7 +74,7 @@ impl UnalignedVectorCodec for Binary {
 }
 
 pub(super) fn from_slice_non_optimized(slice: &[f32]) -> Vec<u8> {
-    let mut output = Vec::with_capacity((slice.len() + PACKED_WORD_BITS - 1) / PACKED_WORD_BITS);
+    let mut output = Vec::with_capacity(slice.len().div_ceil(PACKED_WORD_BITS));
     for chunk in slice.chunks(PACKED_WORD_BITS) {
         let mut word: BitPackedWord = 0;
         let mut bits: u32;

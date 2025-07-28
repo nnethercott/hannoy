@@ -1,31 +1,27 @@
+use std::borrow::Cow;
+use std::cmp::Reverse;
+use std::collections::BinaryHeap;
+use std::fmt::{self, Debug};
+use std::marker::PhantomData;
+use std::{f32, panic};
+
 use heed::RwTxn;
 use min_max_heap::MinMaxHeap;
 use papaya::HashMap;
-use rand::{distributions::WeightedIndex, prelude::Distribution, Rng};
+use rand::distributions::WeightedIndex;
+use rand::prelude::Distribution;
+use rand::Rng;
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
-use roaring::{bitmap, RoaringBitmap};
-use slice_group_by::GroupBy;
-use std::{
-    borrow::Cow,
-    cmp::Reverse,
-    collections::BinaryHeap,
-    f32,
-    fmt::{self, Debug},
-    marker::PhantomData,
-    panic,
-};
+use roaring::RoaringBitmap;
 use tinyvec::{array_vec, ArrayVec};
-use tracing::debug;
 
-use crate::{
-    key::Key,
-    node::{Item, Links, Node},
-    ordered_float::OrderedFloat,
-    parallel::{ImmutableItems, ImmutableLinks},
-    stats::BuildStats,
-    writer::{BuildOption, FrozzenReader},
-    Database, Distance, Error, ItemId, Result,
-};
+use crate::key::Key;
+use crate::node::{Item, Links, Node};
+use crate::ordered_float::OrderedFloat;
+use crate::parallel::{ImmutableItems, ImmutableLinks};
+use crate::stats::BuildStats;
+use crate::writer::{BuildOption, FrozenReader};
+use crate::{Database, Distance, Error, ItemId, Result};
 
 // TODO:
 // - add dedicated 0th layer with M0 and fix corresponding code
@@ -34,7 +30,7 @@ use crate::{
 pub(crate) type ScoredLink = (OrderedFloat, ItemId);
 
 /// State with stack-allocated graph edges
-struct NodeState<const M: usize> {
+pub struct NodeState<const M: usize> {
     links: ArrayVec<[ScoredLink; M]>,
 }
 
@@ -116,13 +112,13 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
         R: Rng + ?Sized,
     {
         let dist = WeightedIndex::new(&self.assign_probas).unwrap();
-        dist.sample(rng) as usize
+        dist.sample(rng)
     }
 
     pub fn build<R>(
         &mut self,
         mut to_insert: RoaringBitmap,
-        mut to_delete: RoaringBitmap,
+        to_delete: RoaringBitmap,
         database: Database<D>,
         index: u16,
         wtxn: &mut RwTxn,
@@ -177,9 +173,9 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
         let items = ImmutableItems::new(wtxn, database, index)?;
         let nb_links = database.len(wtxn)? + to_insert.len();
         let links = ImmutableLinks::new(wtxn, database, index, nb_links)?;
-        let lmdb = FrozzenReader { index, items: &items, links: &links };
+        let lmdb = FrozenReader { index, items: &items, links: &links };
 
-        let level_groups: Vec<_> = levels.linear_group_by(|(_, la), (_, lb)| la == lb).collect();
+        let level_groups: Vec<_> = levels.chunk_by(|(_, la), (_, lb)| la == lb).collect();
 
         // insert layers L...0 multi-threaded
         // FIXME: fix error handling here, previously was source of bug
@@ -214,15 +210,16 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
         //     build_stats.layer_dist.iter().map(|(lvl, cnt)| { (lvl + 1) * cnt }).sum::<usize>()
         // );
 
-        build_stats.compute_mean_degree(wtxn, &database, index);
+        build_stats.compute_mean_degree(wtxn, &database, index)?;
+
         Ok(build_stats)
     }
 
-    fn insert<'a>(
+    fn insert(
         &self,
         query: ItemId,
         level: usize,
-        lmdb: &FrozzenReader<'a, D>,
+        lmdb: &FrozenReader<'_, D>,
         build_stats: &BuildStats<D>,
     ) -> Result<()> {
         let mut eps = Vec::from_iter(self.entry_points.clone());
@@ -264,7 +261,7 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
     /// Algorithm 4 from FreshDiskANN paper.
     fn maybe_patch_old_links(
         &self,
-        lmdb: &FrozzenReader<D>,
+        lmdb: &FrozenReader<D>,
         to_delete: RoaringBitmap,
     ) -> Result<()> {
         let links_in_db =
@@ -274,7 +271,7 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
             let del_subset = &links & &to_delete;
             let map_guard = self.layers[lvl].pin();
             let mut new_links =
-                map_guard.get(&id).map(|state| state.links.to_vec()).unwrap_or(vec![]);
+                map_guard.get(&id).map(|state| state.links.to_vec()).unwrap_or_default();
 
             // no work to be done, continue
             if del_subset.is_empty() && new_links.is_empty() {
@@ -288,14 +285,11 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
             }
             bitmap |= links;
             bitmap -= &to_delete;
-            bitmap
-                .into_iter()
-                .map(|other| {
-                    let dist = D::distance(&lmdb.get_item(id)?, &lmdb.get_item(other)?);
-                    Ok::<ScoredLink, Error>((OrderedFloat(dist), other))
-                })
-                .collect::<Result<Vec<_>>>()
-                .map(|nl| new_links.extend(nl));
+
+            for other in bitmap {
+                let dist = D::distance(&lmdb.get_item(id)?, &lmdb.get_item(other)?);
+                new_links.push((OrderedFloat(dist), other));
+            }
 
             // finally prune and update
             let pruned = self.select_sng(new_links, lvl, false, lmdb)?;
@@ -314,9 +308,9 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
     }
 
     /// Returns only the Id's of our neighbours. Always check lmdb first.
-    fn get_neighbours<'a>(
+    fn get_neighbours(
         &self,
-        lmdb: &FrozzenReader<'a, D>,
+        lmdb: &FrozenReader<'_, D>,
         item_id: ItemId,
         level: usize,
         build_stats: &BuildStats<D>,
@@ -345,13 +339,13 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn explore_layer<'a>(
+    fn explore_layer(
         &self,
         query: &Item<D>,
         eps: &[ItemId],
         level: usize,
         ef: usize,
-        lmdb: &FrozzenReader<'a, D>,
+        lmdb: &FrozenReader<'_, D>,
         build_stats: &BuildStats<D>,
     ) -> Result<MinMaxHeap<ScoredLink>> {
         let mut candidates = BinaryHeap::new();
@@ -399,7 +393,7 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
                     if res.len() == ef {
                         let _ = res.push_pop_max((OrderedFloat(dist), point));
                     } else {
-                        let _ = res.push((OrderedFloat(dist), point));
+                        res.push((OrderedFloat(dist), point));
                     }
                 }
             }
@@ -411,12 +405,12 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
     /// Tries to add a new link between nodes in a single direction.
     // TODO: prevent duplicate links the other way. I think this arises ONLY for entrypoints since
     // we pre-emptively add them in each layer before
-    fn add_link<'a>(
+    fn add_link(
         &self,
         p: ItemId,
         q: ScoredLink,
         level: usize,
-        lmdb: &FrozzenReader<'a, D>,
+        lmdb: &FrozenReader<'_, D>,
     ) -> Result<()> {
         if p == q.1 {
             return Ok(());
@@ -426,7 +420,7 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
 
         // 'pure' links update function
         let _add_link = |node_state: &NodeState<M0>| {
-            let mut links = node_state.links.clone();
+            let mut links = node_state.links;
             let cap = if level == 0 { M0 } else { M };
 
             if links.len() < cap {
@@ -437,7 +431,7 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
             let new_links = self
                 .select_sng(links.to_vec(), level, false, lmdb)
                 .map(ArrayVec::from_iter)
-                .unwrap_or_else(|_| node_state.links.clone());
+                .unwrap_or_else(|_| node_state.links);
 
             NodeState { links: new_links }
         };
@@ -456,7 +450,7 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
         mut candidates: Vec<ScoredLink>,
         level: usize,
         keep_discarded: bool,
-        lmdb: &FrozzenReader<'_, D>,
+        lmdb: &FrozenReader<'_, D>,
     ) -> Result<Vec<ScoredLink>> {
         let cap = if level == 0 { M0 } else { M };
         candidates.sort_by(|a, b| b.cmp(a));
@@ -486,7 +480,7 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
             }
         }
 
-        while keep_discarded && selected.len() < cap && discared.len() > 0 {
+        while keep_discarded && selected.len() < cap && !discared.is_empty() {
             selected.push(discared.remove(0));
         }
 
@@ -496,12 +490,14 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
 
 #[cfg(test)]
 mod tests {
-    use super::HnswBuilder;
-    use crate::{distance::Cosine, writer::BuildOption};
-
-    use rand::{rngs::StdRng, SeedableRng};
-
     use std::collections::HashMap;
+
+    use rand::rngs::StdRng;
+    use rand::SeedableRng;
+
+    use super::HnswBuilder;
+    use crate::distance::Cosine;
+    use crate::writer::BuildOption;
 
     #[ignore = "just cause"]
     #[test]

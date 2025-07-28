@@ -1,17 +1,13 @@
 use std::fmt;
 
 pub use binary_quantized_cosine::{BinaryQuantizedCosine, NodeHeaderBinaryQuantizedCosine};
-pub use binary_quantized_euclidean::{
-    BinaryQuantizedEuclidean, NodeHeaderBinaryQuantizedEuclidean,
-};
-pub use binary_quantized_manhattan::{
-    BinaryQuantizedManhattan, NodeHeaderBinaryQuantizedManhattan,
-};
+pub use binary_quantized_euclidean::BinaryQuantizedEuclidean;
+pub use binary_quantized_manhattan::BinaryQuantizedManhattan;
 use bytemuck::{Pod, Zeroable};
 pub use cosine::{Cosine, NodeHeaderCosine};
 pub use euclidean::{Euclidean, NodeHeaderEuclidean};
-pub use hamming::{Hamming, NodeHeaderHamming};
-pub use manhattan::{Manhattan, NodeHeaderManhattan};
+pub use hamming::Hamming;
+pub use manhattan::Manhattan;
 
 use crate::node::Item;
 use crate::unaligned_vector::{UnalignedVector, UnalignedVectorCodec};
@@ -23,12 +19,6 @@ mod cosine;
 mod euclidean;
 mod hamming;
 mod manhattan;
-
-// FIXME: move elsewhere, also currently unused
-fn new_leaf<D: Distance>(vec: Vec<f32>) -> Item<'static, D> {
-    let vector = UnalignedVector::from_vec(vec);
-    Item { header: D::new_header(&vector), vector }
-}
 
 /// A trait used by arroy to compute the distances,
 /// compute the split planes, and normalize user vectors.
