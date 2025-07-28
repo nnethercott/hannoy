@@ -33,6 +33,7 @@ hashbrown = "0.15.4"
 tinyvec = { version = "1.9.0", features = ["rustc_1_55"]}
 ordered-float = "5.0.0"
 slice-group-by = "0.3.1"
+steppe = "0.4.0"
 
 [dev-dependencies]
 anyhow = "1.0.95"
