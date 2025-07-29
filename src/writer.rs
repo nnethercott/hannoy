@@ -11,6 +11,7 @@ use crate::internals::KeyCodec;
 use crate::item_iter::ItemIter;
 use crate::node::{Item, ItemIds, Links};
 use crate::parallel::{ImmutableItems, ImmutableLinks};
+use crate::reader::get_item;
 use crate::unaligned_vector::UnalignedVector;
 use crate::version::{Version, VersionCodec};
 use crate::{
@@ -94,6 +95,15 @@ impl<D: Distance> Writer<D> {
                 .remap_data_type::<DecodeIgnore>()
                 .get(rtxn, &Key::metadata(self.index))?
                 .is_none())
+    }
+
+    /// Returns an `Option`al vector previous stored in this database.
+    pub fn item_vector(&self, rtxn: &RoTxn, item: ItemId) -> Result<Option<Vec<f32>>> {
+        Ok(get_item(self.database, self.index, rtxn, item)?.map(|leaf| {
+            let mut vec = leaf.vector.to_vec();
+            vec.truncate(self.dimensions);
+            vec
+        }))
     }
 
     /// Returns `true` if the database contains the given item.
