@@ -21,7 +21,7 @@ tracing = "0.1.41"
 memmap2 = "0.9.5"
 rand = { version = "0.8.5", features = ["alloc"] }
 rayon = "1.10.0"
-roaring = "0.11.2"
+roaring = "0.10.9"
 tempfile = "3.15.0"
 thiserror = "2.0.9"
 nohash = "0.2.0"
