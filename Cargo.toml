@@ -1,9 +1,9 @@
 [package]
 name = "hannoy"
 description = "HNSW Approximate Nearest Neighbors in Rust, based on LMDB and optimized for memory usage"
-version = "0.7.0"
+version = "0.0.1"
 repository = "https://github.com/nnethercott/hannoy"
-keywords = ["HNSW", "Graph-algorithms", "Vector-Search", "Store"]
+keywords = ["HNSW", "Graph-algorithms", "Vector-Search", "Store", "Nearest-Neighbours"]
 categories = ["algorithms", "database", "data-structures", "science"]
 authors = [
     "Kerollmops <clement@meilisearch.com>",
@@ -46,9 +46,6 @@ tempfile = "3.15.0"
 
 [features]
 default = []
-
-# Enabling this feature provide a method on the reader that can plot its root node in the dot format.
-plot = []
 
 # Enabling this feature provide a method on the reader that assert its own validity.
 assert-reader-validity = []
