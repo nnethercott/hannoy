@@ -46,7 +46,6 @@ impl Distance for Hamming {
         hamming_bitwise_fast(p.vector.as_bytes(), q.vector.as_bytes())
     }
 
-
     fn norm_no_header(v: &UnalignedVector<Self::VectorCodec>) -> f32 {
         v.as_bytes().iter().map(|b| b.count_ones() as i32).sum::<i32>() as f32
     }

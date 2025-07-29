@@ -51,7 +51,6 @@ impl Distance for BinaryQuantizedEuclidean {
     fn norm_no_header(v: &UnalignedVector<Self::VectorCodec>) -> f32 {
         dot_product_binary_quantized(v, v).sqrt()
     }
-
 }
 
 /// For the binary quantized squared euclidean distance:

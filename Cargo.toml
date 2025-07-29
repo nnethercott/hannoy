@@ -55,7 +55,3 @@ assert-reader-validity = []
 
 [profile.dev]
 opt-level = 3
-
-[[bin]]
-name = "hnsw"
-path = "./src/bin/mini_hnsw.rs"
