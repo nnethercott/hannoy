@@ -1,11 +1,12 @@
-use heed::types::DecodeIgnore;
-use heed::RoTxn;
-use min_max_heap::MinMaxHeap;
-use roaring::RoaringBitmap;
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
 use std::marker;
 use std::num::NonZeroUsize;
+
+use heed::types::DecodeIgnore;
+use heed::RoTxn;
+use min_max_heap::MinMaxHeap;
+use roaring::RoaringBitmap;
 
 use crate::distance::Distance;
 use crate::hnsw::ScoredLink;
@@ -33,9 +34,10 @@ impl<'a, D: Distance> QueryBuilder<'a, D> {
     /// # Examples
     ///
     /// ```no_run
-    /// # use arroy::{Reader, distances::Euclidean};
+    /// # use hannoy::{Reader, distances::Euclidean};
     /// # let (reader, rtxn): (Reader<Euclidean>, heed::RoTxn) = todo!();
-    /// reader.nns(20).by_item(&rtxn, 5);
+    /// let ef = 100;
+    /// reader.nns(20, ef).by_item(&rtxn, 5);
     /// ```
     pub fn by_item(&self, _rtxn: &RoTxn, _item: ItemId) -> Result<Option<Vec<(ItemId, f32)>>> {
         todo!()
@@ -48,9 +50,10 @@ impl<'a, D: Distance> QueryBuilder<'a, D> {
     /// # Examples
     ///
     /// ```no_run
-    /// # use arroy::{Reader, distances::Euclidean};
+    /// # use hannoy::{Reader, distances::Euclidean};
     /// # let (reader, rtxn): (Reader<Euclidean>, heed::RoTxn) = todo!();
-    /// reader.nns(20).by_vector(&rtxn, &[1.25854, -0.75598, 0.58524]);
+    /// let ef = 100;
+    /// reader.nns(20, ef).by_vector(&rtxn, &[1.25854, -0.75598, 0.58524]);
     /// ```
     pub fn by_vector(&self, rtxn: &RoTxn, vector: &'a [f32]) -> Result<Vec<(ItemId, f32)>> {
         if vector.len() != self.reader.dimensions() {
@@ -70,10 +73,11 @@ impl<'a, D: Distance> QueryBuilder<'a, D> {
     /// # Examples
     ///
     /// ```no_run
-    /// # use arroy::{Reader, distances::Euclidean};
+    /// # use hannoy::{Reader, distances::Euclidean};
     /// # let (reader, rtxn): (Reader<Euclidean>, heed::RoTxn) = todo!();
     /// let candidates = roaring::RoaringBitmap::from_iter([1, 3, 4, 5, 6, 7, 8, 9, 15, 16]);
-    /// reader.nns(20).candidates(&candidates).by_item(&rtxn, 6);
+    /// let ef = 100;
+    /// reader.nns(20, ef).candidates(&candidates).by_item(&rtxn, 6);
     /// ```
     pub fn candidates(&mut self, candidates: &'a RoaringBitmap) -> &mut Self {
         self.candidates = Some(candidates);
@@ -217,11 +221,6 @@ impl<'t, D: Distance> Reader<'t, D> {
 
     /// Get a generic read node from the database using the version of the database found while creating the reader.
     /// Must be used every time we retrieve a node in this file.
-    fn database_get(&self, rtxn: &'t RoTxn, key: &Key) -> Result<Option<Node<D>>> {
-        // NOTE: if we ever get more versions we'll have to update this like arroy
-        Ok(self.database.get(rtxn, key)?)
-    }
-
     // FIXME: this is more or less a direct copy of the builder, except we use a single
     // RoTxn instead of a FrozzenReader
     fn explore_layer(
@@ -245,7 +244,8 @@ impl<'t, D: Distance> Reader<'t, D> {
             res.push((OrderedFloat(dist), ep));
             visited.push(ep);
         }
-        while let Some(&(Reverse(OrderedFloat(f)), c)) = candidates.peek() {
+
+        while let Some(&(Reverse(OrderedFloat(f)), _)) = candidates.peek() {
             let &(OrderedFloat(f_max), _) = res.peek_max().unwrap();
             if f > f_max {
                 break;
@@ -271,7 +271,7 @@ impl<'t, D: Distance> Reader<'t, D> {
                     if res.len() == ef {
                         let _ = res.push_pop_max((OrderedFloat(dist), point));
                     } else {
-                        let _ = res.push((OrderedFloat(dist), point));
+                        res.push((OrderedFloat(dist), point));
                     }
                 }
             }
@@ -289,13 +289,13 @@ impl<'t, D: Distance> Reader<'t, D> {
 
         // search layers L->1 with ef=1
         for lvl in (1..=self.max_level).rev() {
-            let neighbours = self.explore_layer(&query, &eps, lvl, 1, rtxn)?;
+            let neighbours = self.explore_layer(query, &eps, lvl, 1, rtxn)?;
             let closest = neighbours.peek_min().map(|(_, n)| n).expect("No neighbor was found");
             eps = vec![*closest];
         }
 
         // search layer 0 with ef=ef
-        let mut neighbours = self.explore_layer(&query, &eps, 0, opt.ef, rtxn)?;
+        let mut neighbours = self.explore_layer(query, &eps, 0, opt.ef, rtxn)?;
 
         let mut nns = Vec::with_capacity(opt.count);
         while let Some((OrderedFloat(f), id)) = neighbours.pop_min() {
@@ -308,15 +308,6 @@ impl<'t, D: Distance> Reader<'t, D> {
         }
 
         Ok(nns)
-    }
-
-    fn nns_by_item(
-        &self,
-        rtxn: &'t RoTxn,
-        query: ItemId,
-        opt: &QueryBuilder<D>,
-    ) -> Result<Vec<(ItemId, f32)>> {
-        todo!()
     }
 }
 
@@ -342,7 +333,7 @@ pub fn get_links<'a, D: Distance>(
 ) -> Result<Option<Links<'a>>> {
     match database.get(rtxn, &Key::links(index, item_id, level as u8))? {
         Some(Node::Links(links)) => Ok(Some(links)),
-        Some(Node::Item(item)) => Ok(None),
+        Some(Node::Item(_)) => Ok(None),
         None => Ok(None),
     }
 }

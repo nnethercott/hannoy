@@ -36,7 +36,7 @@ impl Default for BuildOption {
     }
 }
 
-impl<'a, D: Distance, R: Rng + SeedableRng> HannoyBuilder<'a, D, R> {
+impl<D: Distance, R: Rng + SeedableRng> HannoyBuilder<'_, D, R> {
     pub fn available_memory(&mut self, memory: usize) -> &mut Self {
         self.inner.available_memory = Some(memory);
         self
@@ -51,7 +51,6 @@ impl<'a, D: Distance, R: Rng + SeedableRng> HannoyBuilder<'a, D, R> {
         self.writer.build::<R, M, M0>(wtxn, self.rng, &self.inner)
     }
 }
-
 
 /// A writer to store new items, remove existing ones,
 /// and build the search index to query the nearest
@@ -165,19 +164,6 @@ impl<D: Distance> Writer<D> {
         Ok(())
     }
 
-    fn used_nodes(&self, rtxn: &RoTxn, options: &BuildOption) -> Result<RoaringBitmap> {
-        Ok(self
-            .database
-            .remap_key_type::<PrefixCodec>()
-            .prefix_iter(rtxn, &Prefix::links(self.index))?
-            .remap_types::<KeyCodec, DecodeIgnore>()
-            .try_fold(RoaringBitmap::new(), |mut bitmap, used| -> Result<RoaringBitmap> {
-                bitmap.insert(used?.0.node.item);
-                Ok(bitmap)
-            })
-            .unwrap_or_default())
-    }
-
     /// Returns an [`ArroyBuilder`] to configure the available options to build the database.
     pub fn builder<'a, R: Rng + SeedableRng>(&'a self, rng: &'a mut R) -> HannoyBuilder<'a, D, R> {
         HannoyBuilder { writer: self, rng, inner: BuildOption::default() }
@@ -190,7 +176,6 @@ impl<D: Distance> Writer<D> {
         options: &BuildOption,
     ) -> Result<()> {
         let item_indices = self.item_indices(wtxn, options)?;
-        let n_items = item_indices.len();
         // updated items can be an update, an addition or a removed item
         let updated_items = self.reset_and_retrieve_updated_items(wtxn, options)?;
 
@@ -242,7 +227,7 @@ impl<D: Distance> Writer<D> {
     fn reset_and_retrieve_updated_items(
         &self,
         wtxn: &mut RwTxn,
-        options: &BuildOption,
+        _options: &BuildOption,
     ) -> Result<RoaringBitmap, Error> {
         tracing::debug!("reset and retrieve the updated items...");
         let mut updated_items = RoaringBitmap::new();
@@ -263,7 +248,7 @@ impl<D: Distance> Writer<D> {
     }
 
     // Fetches the item's ids, not the tree nodes ones.
-    fn item_indices(&self, wtxn: &mut RwTxn, options: &BuildOption) -> Result<RoaringBitmap> {
+    fn item_indices(&self, wtxn: &mut RwTxn, _options: &BuildOption) -> Result<RoaringBitmap> {
         tracing::debug!("started retrieving all the items ids...");
 
         let mut indices = RoaringBitmap::new();
@@ -282,37 +267,22 @@ impl<D: Distance> Writer<D> {
 }
 
 #[derive(Clone)]
-pub(crate) struct FrozzenReader<'a, D: Distance> {
+pub(crate) struct FrozenReader<'a, D: Distance> {
     pub index: u16,
     pub items: &'a ImmutableItems<'a, D>,
     pub links: &'a ImmutableLinks<'a, D>,
 }
 
-impl<'a, D: Distance> FrozzenReader<'a, D> {
+impl<'a, D: Distance> FrozenReader<'a, D> {
     pub fn get_item(&self, item_id: ItemId) -> Result<Item<'a, D>> {
         let key = Key::item(self.index, item_id);
-
         // key is a `Key::item` so returned result must be a Node::Item
-        Ok(self.items.get(item_id)?.ok_or(Error::missing_key(key))?)
+        self.items.get(item_id)?.ok_or(Error::missing_key(key))
     }
+
     pub fn get_links(&self, item_id: ItemId, level: usize) -> Result<Links<'a>> {
         let key = Key::links(self.index, item_id, level as u8);
-
         // key is a `Key::item` so returned result must be a Node::Item
-        Ok(self.links.get(item_id, level as u8)?.ok_or(Error::missing_key(key))?)
+        self.links.get(item_id, level as u8)?.ok_or(Error::missing_key(key))
     }
-}
-
-fn clear_nodes<D: Distance>(wtxn: &mut RwTxn, database: Database<D>, index: u16) -> Result<()> {
-    database.delete(wtxn, &Key::metadata(index))?;
-    let mut cursor = database
-        .remap_types::<PrefixCodec, DecodeIgnore>()
-        .prefix_iter_mut(wtxn, &Prefix::links(index))?
-        .remap_key_type::<DecodeIgnore>();
-    while let Some((_id, _node)) = cursor.next().transpose()? {
-        // safety: we keep no reference into the database between operations
-        unsafe { cursor.del_current()? };
-    }
-
-    Ok(())
 }
