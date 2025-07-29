@@ -1,59 +1,59 @@
-# name: Rust CI
-#
-# on:
-#   push:
-#   pull_request:
-#   merge_group:
-#
-# env:
-#   CARGO_TERM_COLOR: always
-#   RUST_BACKTRACE: 1
-#   RUSTFLAGS: "-D warnings"
-#   RUSTDOCFLAGS: "-D warnings"
-#
-# jobs:
-#   test:
-#     runs-on: ${{ matrix.os }}
-#     strategy:
-#       matrix:
-#         os: [ubuntu-latest, macos-latest-xlarge, windows-latest]
-#         rust:
-#           - stable
-#           - beta
-#
-#     steps:
-#       - uses: actions/checkout@v1
-#       - uses: dtolnay/rust-toolchain@1.82
-#       - uses: actions-rs/cargo@v1
-#         with:
-#           command: build
-#           args: --all-targets ${{ matrix.features }}
-#       - uses: actions-rs/cargo@v1
-#         with:
-#           command: test
-#           args: --all-features
-#       - uses: actions-rs/cargo@v1
-#         with:
-#           command: test
-#
-#   lint:
-#     runs-on: ubuntu-latest
-#     steps:
-#       - uses: actions/checkout@v1
-#       - uses: dtolnay/rust-toolchain@1.82
-#         with:
-#           profile: minimal
-#           components: clippy, rustfmt
-#       - uses: actions-rs/cargo@v1
-#         with:
-#           command: fmt
-#           args: --all -- --check
-#       - uses: actions-rs/cargo@v1
-#         if: always()
-#         with:
-#           command: clippy
-#           args: --all-features
-#       - uses: actions-rs/cargo@v1
-#         if: always()
-#         with:
-#           command: doc
+name: Rust CI
+
+on:
+  pull_request:
+    braches:
+      - main
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  RUSTFLAGS: "-D warnings"
+  RUSTDOCFLAGS: "-D warnings"
+
+jobs:
+  test:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        rust:
+          - stable
+          - beta
+
+    steps:
+      - uses: actions/checkout@v1
+      - uses: dtolnay/rust-toolchain@1.82
+      - uses: actions-rs/cargo@v1
+        with:
+          command: build
+          args: --all-targets ${{ matrix.features }}
+      - uses: actions-rs/cargo@v1
+        with:
+          command: test
+          args: --all-features
+      - uses: actions-rs/cargo@v1
+        with:
+          command: test
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v1
+      - uses: dtolnay/rust-toolchain@1.82
+        with:
+          profile: minimal
+          components: clippy, rustfmt
+      - uses: actions-rs/cargo@v1
+        with:
+          command: fmt
+          args: --all -- --check
+      - uses: actions-rs/cargo@v1
+        if: always()
+        with:
+          command: clippy
+          args: --all-features
+      - uses: actions-rs/cargo@v1
+        if: always()
+        with:
+          command: doc
