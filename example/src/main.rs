@@ -21,7 +21,7 @@ fn main() -> Result<()> {
     .unwrap();
 
     let dim = 768;
-    let n = 5000;
+    let n = 500;
 
     let mut wtxn = env.write_txn().unwrap();
     let db: Database<Cosine> = env.create_database(&mut wtxn, None).unwrap();
@@ -55,7 +55,7 @@ fn main() -> Result<()> {
 
     // search hnsw
     let data = load_vectors(20 * n, 0);
-    let (_qid, query) = data[thread_rng().gen::<usize>() % data.len()].clone();
+    let (_qid, query) = data[thread_rng().r#gen::<usize>() % data.len()].clone();
     let rtxn = env.read_txn()?;
     let reader = Reader::<Cosine>::open(&rtxn, 0, db).unwrap();
 

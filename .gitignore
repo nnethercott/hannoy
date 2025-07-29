@@ -1,5 +1,5 @@
 Cargo.lock
-/target
+target
 /assets/test.tree
 *.out
 *.tree
