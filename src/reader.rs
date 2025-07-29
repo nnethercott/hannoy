@@ -39,8 +39,11 @@ impl<'a, D: Distance> QueryBuilder<'a, D> {
     /// let ef = 100;
     /// reader.nns(20, ef).by_item(&rtxn, 5);
     /// ```
-    pub fn by_item(&self, _rtxn: &RoTxn, _item: ItemId) -> Result<Option<Vec<(ItemId, f32)>>> {
-        todo!()
+    pub fn by_item(&self, rtxn: &RoTxn, item: ItemId) -> Result<Option<Vec<(ItemId, f32)>>> {
+        match self.reader.item_vector(rtxn, item)? {
+            Some(vector) => self.by_vector(rtxn, &vector).map(Some),
+            None => Ok(None),
+        }
     }
 
     /// Returns the closest items from the provided `vector`.
