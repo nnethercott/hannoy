@@ -164,7 +164,7 @@ impl<D: Distance> Writer<D> {
         Ok(())
     }
 
-    /// Returns an [`ArroyBuilder`] to configure the available options to build the database.
+    /// Returns an [`HannoyBuilder`] to configure the available options to build the database.
     pub fn builder<'a, R: Rng + SeedableRng>(&'a self, rng: &'a mut R) -> HannoyBuilder<'a, D, R> {
         HannoyBuilder { writer: self, rng, inner: BuildOption::default() }
     }
