@@ -14,6 +14,7 @@ use rand::Rng;
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use roaring::RoaringBitmap;
 use tinyvec::{array_vec, ArrayVec};
+use tracing::error;
 
 use crate::key::Key;
 use crate::node::{Item, Links, Node};
@@ -328,9 +329,10 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
             Some(node_state) => res.extend(node_state.links.iter().map(|(_, i)| *i)),
             None => {
                 if res.is_empty() {
-                    unreachable!(
+                    error!(
                         "the links for `item_id` must exist in either self.layers, lmdb, or both"
-                    )
+                    );
+                    build_stats.incr_link_misses();
                 }
             }
         }
