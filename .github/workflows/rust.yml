@@ -2,6 +2,7 @@ name: Rust CI
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled, edited]
     branches:
       - main
 
@@ -12,7 +13,7 @@ env:
   RUSTDOCFLAGS: "-D warnings"
 
 jobs:
-  if: ${{ !contains(toJson(github), 'wip') }}
+  if: github.event.pull_request.labels.*.name !contains 'wip'
   test:
     runs-on: ${{ matrix.os }}
     strategy:
