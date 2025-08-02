@@ -36,8 +36,7 @@ impl<'a, D: Distance> QueryBuilder<'a, D> {
     /// ```no_run
     /// # use hannoy::{Reader, distances::Euclidean};
     /// # let (reader, rtxn): (Reader<Euclidean>, heed::RoTxn) = todo!();
-    /// let ef = 100;
-    /// reader.nns(20, ef).by_item(&rtxn, 5);
+    /// reader.nns(20).by_item(&rtxn, 5);
     /// ```
     pub fn by_item(&self, rtxn: &RoTxn, item: ItemId) -> Result<Option<Vec<(ItemId, f32)>>> {
         match self.reader.item_vector(rtxn, item)? {
@@ -55,8 +54,7 @@ impl<'a, D: Distance> QueryBuilder<'a, D> {
     /// ```no_run
     /// # use hannoy::{Reader, distances::Euclidean};
     /// # let (reader, rtxn): (Reader<Euclidean>, heed::RoTxn) = todo!();
-    /// let ef = 100;
-    /// reader.nns(20, ef).by_vector(&rtxn, &[1.25854, -0.75598, 0.58524]);
+    /// reader.nns(20).by_vector(&rtxn, &[1.25854, -0.75598, 0.58524]);
     /// ```
     pub fn by_vector(&self, rtxn: &RoTxn, vector: &'a [f32]) -> Result<Vec<(ItemId, f32)>> {
         if vector.len() != self.reader.dimensions() {
@@ -79,11 +77,24 @@ impl<'a, D: Distance> QueryBuilder<'a, D> {
     /// # use hannoy::{Reader, distances::Euclidean};
     /// # let (reader, rtxn): (Reader<Euclidean>, heed::RoTxn) = todo!();
     /// let candidates = roaring::RoaringBitmap::from_iter([1, 3, 4, 5, 6, 7, 8, 9, 15, 16]);
-    /// let ef = 100;
-    /// reader.nns(20, ef).candidates(&candidates).by_item(&rtxn, 6);
+    /// reader.nns(20).candidates(&candidates).by_item(&rtxn, 6);
     /// ```
     pub fn candidates(&mut self, candidates: &'a RoaringBitmap) -> &mut Self {
         self.candidates = Some(candidates);
+        self
+    }
+
+    /// Specify a search buffer size from which the closest elements are returned
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use hannoy::{Reader, distances::Euclidean};
+    /// # let (reader, rtxn): (Reader<Euclidean>, heed::RoTxn) = todo!();
+    /// reader.nns(20).ef_search(21).by_item(&rtxn, 6);
+    /// ```
+    pub fn ef_search(&mut self, ef: usize) -> &mut Self {
+        self.ef = ef;
         self
     }
 }
@@ -218,8 +229,8 @@ impl<'t, D: Distance> Reader<'t, D> {
     /// Return a [`QueryBuilder`] that lets you configure and execute a search request.
     ///
     /// You must provide the number of items you want to receive.
-    pub fn nns(&self, count: usize, ef: usize) -> QueryBuilder<D> {
-        QueryBuilder { reader: self, candidates: None, count, ef }
+    pub fn nns(&self, count: usize) -> QueryBuilder<D> {
+        QueryBuilder { reader: self, candidates: None, count, ef: count }
     }
 
     /// Get a generic read node from the database using the version of the database found while creating the reader.
@@ -297,8 +308,8 @@ impl<'t, D: Distance> Reader<'t, D> {
             eps = vec![*closest];
         }
 
-        // search layer 0 with ef=ef
-        let mut neighbours = self.explore_layer(query, &eps, 0, opt.ef, rtxn)?;
+        // search layer 0 with ef=max(ef, count)
+        let mut neighbours = self.explore_layer(query, &eps, 0, opt.ef.max(opt.count), rtxn)?;
 
         let mut nns = Vec::with_capacity(opt.count);
         while let Some((OrderedFloat(f), id)) = neighbours.pop_min() {
