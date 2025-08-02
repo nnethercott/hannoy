@@ -14,6 +14,9 @@ mod stats;
 mod version;
 mod writer;
 
+#[cfg(test)]
+mod tests;
+
 mod ordered_float;
 mod unaligned_vector;
 

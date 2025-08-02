@@ -312,6 +312,59 @@ impl<'t, D: Distance> Reader<'t, D> {
 
         Ok(nns)
     }
+
+    /// NOTE: a [`crate::Reader`] can't be opened unless updates are commited through a build !
+    /// Verify that the whole reader is correctly formed:
+    /// - All items are linked.
+    /// - All links contain only items in the db (e.g. no previously deleted!).
+    /// - All the entrypoints exist.
+    /// This function should always be called in tests and on the latest version of the database which means
+    /// we don't need to care about the version.
+    #[cfg(any(test, feature = "assert-reader-validity"))]
+    pub fn assert_validity(&self, rtxn: &RoTxn) -> Result<()> {
+        // 1. Compare items in db with bitmap from metadata
+        use crate::node::NodeCodec;
+        let mut item_ids = RoaringBitmap::new();
+        for result in self
+            .database
+            .remap_types::<PrefixCodec, DecodeIgnore>()
+            .prefix_iter(rtxn, &Prefix::item(self.index))?
+            .remap_key_type::<KeyCodec>()
+        {
+            let (i, _) = result?;
+            item_ids.push(i.node.unwrap_item());
+        }
+        assert_eq!(item_ids, self.items);
+
+        // 2. Check links are valid
+        let mut link_ids = RoaringBitmap::new();
+        for result in self
+            .database
+            .remap_types::<PrefixCodec, NodeCodec<D>>()
+            .prefix_iter(rtxn, &Prefix::links(self.index))?
+            .remap_key_type::<KeyCodec>()
+        {
+            let (k, node) = result?;
+            link_ids.push(k.node.unwrap_item());
+
+            let Links { links } = match node {
+                Node::Links(links) => links,
+                _ => unreachable!(),
+            };
+
+            // this fails if links contains an item_id not in the db
+            assert!(links.is_subset(&item_ids));
+        }
+        // each item should have one or more links
+        assert_eq!(item_ids, link_ids);
+
+        // 3. check entry points
+        for ep in self.entry_points.iter() {
+            assert!(item_ids.contains(ep));
+        }
+
+        Ok(())
+    }
 }
 
 pub fn get_item<'a, D: Distance>(
