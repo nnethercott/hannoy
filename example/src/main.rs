@@ -7,7 +7,7 @@ use hannoy::{Database, Reader, Result, Writer};
 use heed::EnvOpenOptions;
 use ordered_float::OrderedFloat;
 use rand::rngs::StdRng;
-use rand::{thread_rng, Rng, SeedableRng};
+use rand::{Rng, SeedableRng, thread_rng};
 use roaring::RoaringBitmap;
 use tempfile::env::temp_dir;
 

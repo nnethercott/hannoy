@@ -58,8 +58,8 @@ impl<'a> heed::BytesEncode<'a> for KeyCodec {
         let mut output = Vec::with_capacity(size_of::<u64>());
         output.extend_from_slice(&item.index.to_be_bytes());
         output.extend_from_slice(&(item.node.mode as u8).to_be_bytes());
-        output.extend_from_slice(&(item.node.layer).to_be_bytes());
         output.extend_from_slice(&item.node.item.to_be_bytes());
+        output.extend_from_slice(&(item.node.layer).to_be_bytes());
 
         Ok(Cow::Owned(output))
     }
@@ -73,10 +73,9 @@ impl heed::BytesDecode<'_> for KeyCodec {
         let bytes = &bytes[size_of::<u16>()..];
         let mode = bytes[0].try_into()?;
         let bytes = &bytes[size_of::<u8>()..];
-        let layer = bytes[0];
-        let bytes = &bytes[size_of::<u8>()..];
         let item = BigEndian::read_u32(bytes);
-        // We don't need to deserialize the unused space
+        let bytes = &bytes[size_of::<u32>()..];
+        let layer = bytes[0];
 
         Ok(Key { index: prefix, node: NodeId { mode, item, layer } })
     }
@@ -148,5 +147,16 @@ mod test {
         let key2 = KeyCodec::bytes_decode(&bytes).unwrap();
         assert_eq!(key.node.item, key2.node.item);
         assert_eq!(key.node.layer, key2.node.layer);
+        assert_eq!(key.node.mode, key2.node.mode);
+    }
+
+    #[test]
+    fn test_item_key() {
+        let key = Key::item(0, 42);
+        let bytes = KeyCodec::bytes_encode(&key).unwrap();
+        let key2 = KeyCodec::bytes_decode(&bytes).unwrap();
+        assert_eq!(key.node.item, key2.node.item);
+        assert_eq!(key.node.layer, key2.node.layer);
+        assert_eq!(key.node.mode, key2.node.mode);
     }
 }

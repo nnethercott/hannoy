@@ -92,17 +92,17 @@ impl NodeId {
         let mut output = [0; 6];
 
         output[0] = self.mode as u8;
+        output[1] = self.layer;
         let item_bytes = self.item.to_be_bytes();
-        output[1..=4].copy_from_slice(&item_bytes);
-        output[5] = self.layer;
+        output[2..=5].copy_from_slice(&item_bytes);
 
         output
     }
 
     pub fn from_bytes(bytes: &[u8]) -> (Self, &[u8]) {
         let mode = NodeMode::try_from(bytes[0]).expect("Could not parse the node mode");
-        let item = BigEndian::read_u32(&bytes[1..4]);
-        let layer = bytes[5];
+        let layer = bytes[1];
+        let item = BigEndian::read_u32(&bytes[2..]);
 
         (Self { mode, item, layer }, &bytes[size_of::<NodeMode>() + size_of::<ItemId>()..])
     }
