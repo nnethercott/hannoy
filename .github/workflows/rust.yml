@@ -13,8 +13,8 @@ env:
   RUSTDOCFLAGS: "-D warnings"
 
 jobs:
-  if: github.event.pull_request.labels.*.name !contains 'wip'
   test:
+    if: ${{ !contains(toJson(github), 'wip') }}
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
