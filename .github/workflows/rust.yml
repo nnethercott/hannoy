@@ -14,7 +14,7 @@ env:
 
 jobs:
   test:
-    if: github.event.pull_request.labels.*.name !contains 'wip'
+    if: !contains(github.event.pull_request.labels.*.name, 'wip')
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
