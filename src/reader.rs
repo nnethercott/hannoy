@@ -345,7 +345,7 @@ impl<'t, D: Distance> Reader<'t, D> {
             .remap_key_type::<KeyCodec>()
         {
             let (k, node) = result?;
-            link_ids.push(k.node.unwrap_item());
+            link_ids.push(k.node.item);
 
             let Links { links } = match node {
                 Node::Links(links) => links,

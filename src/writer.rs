@@ -158,7 +158,7 @@ impl<D: Distance> Writer<D> {
         }
     }
 
-    /// Removes everything in the database, user items and internal tree nodes.
+    /// Removes everything in the database, user items and internal graph links.
     pub fn clear(&self, wtxn: &mut RwTxn) -> Result<()> {
         let mut cursor = self
             .database
