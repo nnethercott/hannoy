@@ -1,13 +1,25 @@
+use std::cmp::Reverse;
+use std::collections::BinaryHeap;
+use std::fmt;
+
 use crate::version::VersionCodec;
 use crate::{Database, Distance, MetadataCodec, NodeCodec, NodeMode, Reader};
 use heed::types::LazyDecode;
 use heed::{Env, EnvOpenOptions, WithTls};
 use rand::rngs::StdRng;
 use rand::SeedableRng;
-use std::fmt;
 use tempfile::TempDir;
 
-mod writer;
+use crate::version::VersionCodec;
+use crate::{Database, Distance, MetadataCodec, NodeCodec, NodeMode, Reader};
+
+// our test files
+// mod binary_quantized;
+// mod fit_in_memory;
+// mod reader;
+// mod tmp_nodes;
+// mod upgrade;
+// mod writer;
 
 pub struct DatabaseHandle<D> {
     pub env: Env<WithTls>,
