@@ -1,14 +1,13 @@
-use std::cmp::Reverse;
-use std::collections::BinaryHeap;
 use std::fmt;
 
-use crate::version::VersionCodec;
-use crate::{Database, Distance, MetadataCodec, NodeCodec, NodeMode, Reader};
 use heed::types::LazyDecode;
 use heed::{Env, EnvOpenOptions, WithTls};
 use rand::rngs::StdRng;
 use rand::SeedableRng;
 use tempfile::TempDir;
+
+use crate::version::VersionCodec;
+use crate::{Database, Distance, MetadataCodec, NodeCodec, NodeMode, Reader};
 
 mod writer;
 
