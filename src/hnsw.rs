@@ -509,7 +509,7 @@ mod tests {
         let mut hnsw = HnswBuilder::<Cosine, 32, 48>::new(&BuildOption::default());
 
         let mut bins = HashMap::new();
-        (0..10000).into_iter().for_each(|_| {
+        (0..10000).for_each(|_| {
             let level = hnsw.get_random_level(&mut rng);
             *bins.entry(level).or_insert(0) += 1;
         });

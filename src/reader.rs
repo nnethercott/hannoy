@@ -318,6 +318,7 @@ impl<'t, D: Distance> Reader<'t, D> {
     /// - All items are linked.
     /// - All links contain only items in the db (e.g. no previously deleted!).
     /// - All the entrypoints exist.
+    ///
     /// This function should always be called in tests and on the latest version of the database which means
     /// we don't need to care about the version.
     #[cfg(any(test, feature = "assert-reader-validity"))]
