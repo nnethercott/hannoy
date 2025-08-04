@@ -50,7 +50,7 @@ pub struct Item<'a, D: Distance> {
 
 impl<D: Distance> fmt::Debug for Item<'_, D> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Leaf").field("header", &self.header).field("vector", &self.vector).finish()
+        f.debug_struct("Item").field("header", &self.header).field("vector", &self.vector).finish()
     }
 }
 
