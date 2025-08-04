@@ -123,7 +123,7 @@ impl<'a, D: Distance, const M: usize, const M0: usize> HnswBuilder<'a, D, M, M0>
     pub fn build<R>(
         &mut self,
         mut to_insert: RoaringBitmap,
-        to_delete: RoaringBitmap,
+        to_delete: &RoaringBitmap,
         database: Database<D>,
         index: u16,
         wtxn: &mut RwTxn,
@@ -133,6 +133,10 @@ impl<'a, D: Distance, const M: usize, const M0: usize> HnswBuilder<'a, D, M, M0>
         R: Rng + ?Sized,
     {
         let mut build_stats = BuildStats::new();
+
+        let items = ImmutableItems::new(wtxn, database, index)?;
+        let links = ImmutableLinks::new(wtxn, database, index, database.len(wtxn)?)?;
+        let lmdb = FrozenReader { index, items: &items, links: &links };
 
         // Generate a random level for each point
         let mut local_max_level = usize::MIN;
@@ -145,47 +149,12 @@ impl<'a, D: Distance, const M: usize, const M0: usize> HnswBuilder<'a, D, M, M0>
             })
             .collect();
 
-        // FIXME: handle deleted entrypoints BEFORE adding them to the level groups, maybe abstract
-        // this logic into a new helper resolve_entry_points(&mut self) ...
-        //
-        // If re-indexing new points and a random level is higher than before, then we need to clear the
-        // previous `entry_points`. However, to ensure the old graph gets updated we need to
-        // schedule these ids for re-indexing, otherwise we end up building a completely isolated
-        // sub-graph.
-        levels.extend(self.entry_points.iter().map(|&id| (id, self.max_level)));
-        to_insert |= RoaringBitmap::from_iter(self.entry_points.iter());
-
-        if local_max_level > self.max_level {
-            self.entry_points.clear();
-        }
-
-        self.max_level = self.max_level.max(local_max_level);
-        for _ in 0..=self.max_level {
-            self.layers.push(HashMap::new());
-        }
-
-        levels.sort_unstable_by(|(_, a), (_, b)| b.cmp(a));
-
-        let upper_layer: Vec<_> = levels
-            .iter()
-            .take_while(|(_, l)| *l == self.max_level)
-            .filter(|&(item_id, _)| !self.entry_points.contains(item_id))
-            .collect();
-
-        for &(item_id, _) in upper_layer {
-            self.entry_points.push(item_id);
-            self.add_in_layers_below(item_id, self.max_level);
-        }
-
-        // setup concurrent lmdb reader
-        let items = ImmutableItems::new(wtxn, database, index)?;
-        let nb_links = database.len(wtxn)? + to_insert.len();
-        let links = ImmutableLinks::new(wtxn, database, index, nb_links)?;
-        let lmdb = FrozenReader { index, items: &items, links: &links };
+        let ok_eps = self.prepare_entry_points(&mut levels, local_max_level, to_delete, &lmdb)?;
+        to_insert |= ok_eps;
 
         let level_groups: Vec<_> = levels.chunk_by(|(_, la), (_, lb)| la == lb).collect();
 
-        // insert layers L...0 multi-threaded
+        // Insert layers L...0 multi-threaded
         let cancel_index = AtomicUsize::new(0);
         level_groups.into_iter().try_for_each(|grp| {
             grp.into_par_iter().try_for_each(|&(item_id, lvl)| {
@@ -205,7 +174,7 @@ impl<'a, D: Distance, const M: usize, const M0: usize> HnswBuilder<'a, D, M, M0>
 
         self.maybe_patch_old_links(&lmdb, to_delete)?;
 
-        // single-threaded write to lmdb
+        // Single-threaded write to lmdb
         let mut cancellation_index = 0;
         for lvl in 0..=self.max_level {
             for (item_id, node_state) in &self.layers[lvl].pin() {
@@ -225,16 +194,62 @@ impl<'a, D: Distance, const M: usize, const M0: usize> HnswBuilder<'a, D, M, M0>
             }
         }
 
-        // NOTE: this is only true for first-time builds. could be true if we add another `self.layers`
-        // for links to "old" items
-        // assert_eq!(
-        //     self.layers.iter().map(|m| m.len()).sum::<usize>(),
-        //     build_stats.layer_dist.iter().map(|(lvl, cnt)| { (lvl + 1) * cnt }).sum::<usize>()
-        // );
-
         build_stats.compute_mean_degree(wtxn, &database, index)?;
-
         Ok(build_stats)
+    }
+
+    /// This function resolves several nasty edge cases that can occur, namely : deleted
+    /// or partially deleted entrypoints, new indexed points assigned to higher layers, ensuring
+    /// entry points are present on all layers before build
+    fn prepare_entry_points(
+        &mut self,
+        levels: &mut Vec<(u32, usize)>,
+        local_max_level: usize,
+        to_delete: &RoaringBitmap,
+        lmdb: &FrozenReader<D>,
+    ) -> Result<RoaringBitmap> {
+        let old_eps = RoaringBitmap::from_iter(self.entry_points.iter());
+        let mut ok_eps = &old_eps - to_delete;
+
+        let promote_point = |item_id: u32, bitmap: &mut RoaringBitmap| {
+            loop {
+                todo!()
+                // stop condition is when we exhaust neighbours or find a valid one
+            }
+        };
+
+        for root in (old_eps & to_delete).iter() {
+            promote_point(root, &mut ok_eps);
+        }
+
+        // If re-indexing new points and a random level is higher than before, then we need to clear the
+        // previous `entry_points`. However, to ensure the old graph gets updated we need to
+        // schedule these ids for re-indexing, otherwise we end up building a completely isolated
+        // sub-graph.
+        levels.extend(ok_eps.iter().map(|id| (id, self.max_level)));
+
+        if local_max_level > self.max_level {
+            self.entry_points.clear();
+        }
+        self.max_level = self.max_level.max(local_max_level);
+        for _ in 0..=self.max_level {
+            self.layers.push(HashMap::new());
+        }
+
+        levels.sort_unstable_by(|(_, a), (_, b)| b.cmp(a));
+
+        let upper_layer: Vec<_> = levels
+            .iter()
+            .take_while(|(_, l)| *l == self.max_level)
+            .filter(|&(item_id, _)| !self.entry_points.contains(item_id))
+            .collect();
+
+        for &(item_id, _) in upper_layer {
+            self.entry_points.push(item_id);
+            self.add_in_layers_below(item_id, self.max_level);
+        }
+
+        Ok(ok_eps)
     }
 
     fn insert(
@@ -284,7 +299,7 @@ impl<'a, D: Distance, const M: usize, const M0: usize> HnswBuilder<'a, D, M, M0>
     fn maybe_patch_old_links(
         &self,
         lmdb: &FrozenReader<D>,
-        to_delete: RoaringBitmap,
+        to_delete: &RoaringBitmap,
     ) -> Result<()> {
         let links_in_db =
             lmdb.links.iter().map(|((id, lvl), v)| ((id, lvl as usize), v.into_owned()));
@@ -294,31 +309,30 @@ impl<'a, D: Distance, const M: usize, const M0: usize> HnswBuilder<'a, D, M, M0>
                 return Err(Error::BuildCancelled);
             }
 
-            let del_subset = &links & &to_delete;
+            let del_subset = &links & to_delete;
             let map_guard = self.layers[lvl].pin();
-            let mut new_links =
+            let mut links_to_new =
                 map_guard.get(&id).map(|state| state.links.to_vec()).unwrap_or_default();
 
             // no work to be done, continue
-            if del_subset.is_empty() && new_links.is_empty() {
+            if del_subset.is_empty() && links_to_new.is_empty() {
                 continue;
             }
 
-            // NOTE: are bitmaps like sets e.g. do we have deduplication ?
+            // iter through each of the deleted, and explore his neighbours
             let mut bitmap = RoaringBitmap::new();
             for item_id in del_subset.iter() {
                 bitmap.extend(lmdb.get_links(item_id, lvl)?.iter());
             }
             bitmap |= links;
-            bitmap -= &to_delete;
+            bitmap -= to_delete;
 
+            // NOTE: Same setup as general layer exploration, could generalize this bit
             for other in bitmap {
                 let dist = D::distance(&lmdb.get_item(id)?, &lmdb.get_item(other)?);
-                new_links.push((OrderedFloat(dist), other));
+                links_to_new.push((OrderedFloat(dist), other));
             }
-
-            // finally prune and update
-            let pruned = self.select_sng(new_links, lvl, false, lmdb)?;
+            let pruned = self.select_sng(links_to_new, lvl, false, lmdb)?;
             let _ = map_guard.insert(id, NodeState { links: ArrayVec::from_iter(pruned) });
         }
 

@@ -81,6 +81,7 @@ pub struct ImmutableLinks<'t, D> {
     _marker: marker::PhantomData<(&'t (), D)>,
 }
 
+
 impl<'t, D: Distance> ImmutableLinks<'t, D> {
     /// Creates the structure by fetching all the root pointers
     /// and keeping the transaction making the pointers valid.

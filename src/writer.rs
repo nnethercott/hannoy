@@ -314,9 +314,13 @@ impl<D: Distance> Writer<D> {
             .with_entry_points(entry_points)
             .with_max_level(max_level);
 
-        let stats = hnsw.build(to_insert, to_delete, self.database, self.index, wtxn, rng)?;
+        let stats = hnsw.build(to_insert, &to_delete, self.database, self.index, wtxn, rng)?;
         tracing::info!("{stats:?}");
-        // FIXME: do something with `to_delete`; probably a prefix iter and such
+
+        // Remove deleted links from lmdb AFTER build; in DiskANN we use a deleted item's
+        // neighbours when filling in the "gaps" left in the graph from deletions. See
+        // [`HnswBuilder::maybe_patch_old_links`] for more details.
+        self.delete_links_from_db(to_delete, wtxn)?;
 
         tracing::debug!("write the metadata...");
         let metadata = Metadata {
@@ -392,6 +396,25 @@ impl<D: Distance> Writer<D> {
         }
 
         Ok(indices)
+    }
+
+    // Iterates over links in lmdb and deletes those in `to_delete`. There can be several links
+    // with the same NodeId.item, each differing by their layer
+    fn delete_links_from_db(&self, to_delete: RoaringBitmap, wtxn: &mut RwTxn) -> Result<()> {
+        let mut cursor = self
+            .database
+            .remap_key_type::<PrefixCodec>()
+            .prefix_iter_mut(wtxn, &Prefix::links(self.index))?
+            .remap_types::<KeyCodec, DecodeIgnore>();
+
+        while let Some((key, _)) = cursor.next().transpose()? {
+            if to_delete.contains(key.node.item) {
+                // SAFETY: todo !
+                unsafe { cursor.del_current() }?;
+            }
+        }
+
+        Ok(())
     }
 }
 
