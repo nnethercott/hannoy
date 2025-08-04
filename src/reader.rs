@@ -84,7 +84,10 @@ impl<'a, D: Distance> QueryBuilder<'a, D> {
         self
     }
 
-    /// Specify a search buffer size from which the closest elements are returned
+    /// Specify a search buffer size from which the closest elements are returned. Increasing this
+    /// value improves the search relevancy but increases latency as more neighbours need to be
+    /// searched.
+    /// In an ideal graph `ef`=`count` would suffice.
     ///
     /// # Examples
     ///
@@ -94,7 +97,7 @@ impl<'a, D: Distance> QueryBuilder<'a, D> {
     /// reader.nns(20).ef_search(21).by_item(&rtxn, 6);
     /// ```
     pub fn ef_search(&mut self, ef: usize) -> &mut Self {
-        self.ef = ef;
+        self.ef = ef.max(self.count);
         self
     }
 }
@@ -309,7 +312,7 @@ impl<'t, D: Distance> Reader<'t, D> {
         }
 
         // search layer 0 with ef=max(ef, count)
-        let mut neighbours = self.explore_layer(query, &eps, 0, opt.ef.max(opt.count), rtxn)?;
+        let mut neighbours = self.explore_layer(query, &eps, 0, opt.ef, rtxn)?;
 
         let mut nns = Vec::with_capacity(opt.count);
         while let Some((OrderedFloat(f), id)) = neighbours.pop_min() {
