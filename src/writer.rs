@@ -316,6 +316,7 @@ impl<D: Distance> Writer<D> {
 
         let stats = hnsw.build(to_insert, to_delete, self.database, self.index, wtxn, rng)?;
         tracing::info!("{stats:?}");
+        // FIXME: do something with `to_delete`; probably a prefix iter and such
 
         tracing::debug!("write the metadata...");
         let metadata = Metadata {

@@ -145,6 +145,9 @@ impl<'a, D: Distance, const M: usize, const M0: usize> HnswBuilder<'a, D, M, M0>
             })
             .collect();
 
+        // FIXME: handle deleted entrypoints BEFORE adding them to the level groups, maybe abstract
+        // this logic into a new helper resolve_entry_points(&mut self) ...
+        //
         // If re-indexing new points and a random level is higher than before, then we need to clear the
         // previous `entry_points`. However, to ensure the old graph gets updated we need to
         // schedule these ids for re-indexing, otherwise we end up building a completely isolated
