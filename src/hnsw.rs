@@ -189,14 +189,14 @@ impl<'a, D: Distance, const M: usize, const M0: usize> HnswBuilder<'a, D, M, M0>
         let level_groups: Vec<_> = levels.chunk_by(|(_, la), (_, lb)| la == lb).collect();
 
         // insert layers L...0 multi-threaded
-        let cancellation_index = AtomicUsize::new(0);
+        let cancel_index = AtomicUsize::new(0);
         level_groups.into_iter().try_for_each(|grp| {
             grp.into_par_iter().try_for_each(|&(item_id, lvl)| {
-                if cancellation_index.load(Relaxed) % CANCELLATION_PROBING == 0 && (self.cancel)() {
+                if cancel_index.fetch_add(1, Relaxed) % CANCELLATION_PROBING == 0 && (self.cancel)()
+                {
                     Err(Error::BuildCancelled)
                 } else {
                     self.insert(item_id, lvl, &lmdb, &build_stats)?;
-                    cancellation_index.fetch_add(1, Relaxed);
                     Ok(())
                 }
             })?;
