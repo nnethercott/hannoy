@@ -138,17 +138,12 @@ impl<'a, D: Distance, const M: usize, const M0: usize> HnswBuilder<'a, D, M, M0>
         let mut local_max_level = usize::MIN;
         let mut levels: Vec<_> = to_insert
             .iter()
-            .enumerate()
-            .map(|(index, item_id)| {
-                if index % CANCELLATION_PROBING == 0 && (self.cancel)() {
-                    Err(Error::BuildCancelled)
-                } else {
-                    let level = self.get_random_level(rng);
-                    local_max_level = local_max_level.max(level);
-                    Ok((item_id, level))
-                }
+            .map(|item_id| {
+                let level = self.get_random_level(rng);
+                local_max_level = local_max_level.max(level);
+                (item_id, level)
             })
-            .collect::<Result<_, _>>()?;
+            .collect();
 
         // If re-indexing new points and a random level is higher than before, then we need to clear the
         // previous `entry_points`. However, to ensure the old graph gets updated we need to
