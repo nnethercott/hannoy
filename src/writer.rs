@@ -16,10 +16,8 @@ use crate::unaligned_vector::UnalignedVector;
 use crate::version::{Version, VersionCodec};
 use crate::{
     Database, Error, ItemId, Key, Metadata, MetadataCodec, Node, Prefix, PrefixCodec, Result,
+    CANCELLATION_PROBING,
 };
-
-/// The number of iterations to process before checking if the indexing process should be cancelled.
-pub(crate) const CANCELLATION_PROBING: usize = 10000;
 
 /// The options available when building the arroy database.
 pub struct HannoyBuilder<'a, D: Distance, R: Rng + SeedableRng> {

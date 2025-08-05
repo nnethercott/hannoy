@@ -18,14 +18,13 @@ use roaring::RoaringBitmap;
 use tinyvec::{array_vec, ArrayVec};
 use tracing::error;
 
-use super::writer::CANCELLATION_PROBING;
 use crate::key::Key;
 use crate::node::{Item, Links, Node};
 use crate::ordered_float::OrderedFloat;
 use crate::parallel::{ImmutableItems, ImmutableLinks};
 use crate::stats::BuildStats;
 use crate::writer::{BuildOption, FrozenReader};
-use crate::{Database, Distance, Error, ItemId, Result};
+use crate::{Database, Distance, Error, ItemId, Result, CANCELLATION_PROBING};
 
 // TODO:
 // - add dedicated 0th layer with M0 and fix corresponding code
