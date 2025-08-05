@@ -22,24 +22,33 @@ use crate::{
 pub struct HannoyBuilder<'a, D: Distance, R: Rng + SeedableRng> {
     writer: &'a Writer<D>,
     rng: &'a mut R,
-    inner: BuildOption,
+    inner: BuildOption<'a>,
 }
 
 /// The options available when building the arroy database.
-pub(crate) struct BuildOption {
+pub(crate) struct BuildOption<'a> {
     pub(crate) ef_construction: usize,
     pub(crate) available_memory: Option<usize>,
+    pub(crate) cancel: Box<dyn Fn() -> bool + 'a + Sync + Send>,
 }
 
-impl Default for BuildOption {
+impl Default for BuildOption<'_> {
     fn default() -> Self {
-        Self { ef_construction: 100, available_memory: None }
+        Self { ef_construction: 100, available_memory: None, cancel: Box::new(|| false) }
     }
 }
 
-impl<D: Distance, R: Rng + SeedableRng> HannoyBuilder<'_, D, R> {
+impl<'a, D: Distance, R: Rng + SeedableRng> HannoyBuilder<'a, D, R> {
     pub fn available_memory(&mut self, memory: usize) -> &mut Self {
         self.inner.available_memory = Some(memory);
+        self
+    }
+
+    /// Provide a closure that can cancel the indexing process early if needed. There is no guarantee on when the process is going to cancel itself, but arroy will try to stop as soon as possible once the closure returns true.
+    ///
+    /// Since the closure is not mutable and will be called from multiple threads at the same time it’s encouraged to make it quick to execute. A common way to use it is to fetch an AtomicBool inside it that can be set from another thread without lock.
+    pub fn cancel(&mut self, cancel: impl Fn() -> bool + 'a + Sync + Send) -> &mut Self {
+        self.inner.cancel = Box::new(cancel);
         self
     }
 
