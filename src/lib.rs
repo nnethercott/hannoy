@@ -7,6 +7,7 @@ mod metadata;
 mod node;
 mod node_id;
 mod parallel;
+mod progress;
 mod reader;
 mod roaring;
 mod spaces;
@@ -22,13 +23,12 @@ mod unaligned_vector;
 
 pub use distance::Distance;
 pub use error::Error;
-pub use reader::{QueryBuilder, Reader};
-pub use writer::{HannoyBuilder, Writer};
-
 use key::{Key, Prefix, PrefixCodec};
 use metadata::{Metadata, MetadataCodec};
 use node::{Node, NodeCodec};
 use node_id::{NodeId, NodeMode};
+pub use reader::{QueryBuilder, Reader};
+pub use writer::{HannoyBuilder, Writer};
 
 /// The set of types used by the [`Distance`] trait.
 pub mod internals {
