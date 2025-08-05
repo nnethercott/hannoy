@@ -30,6 +30,11 @@ pub trait Distance: Send + Sync + Sized + Clone + fmt::Debug + 'static {
     type Header: Pod + Zeroable + fmt::Debug;
     type VectorCodec: UnalignedVectorCodec;
 
+    /// The name of the distance.
+    ///
+    /// Note that the name is used to identify the distance and will help some performance improvements.
+    /// For example, the "cosine" distance is matched against the "binary quantized cosine" to avoid
+    /// recomputing links when moving from the former to the latter distance.
     fn name() -> &'static str;
 
     fn new_header(vector: &UnalignedVector<Self::VectorCodec>) -> Self::Header;
