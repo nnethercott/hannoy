@@ -18,6 +18,9 @@ use crate::{
     Database, Error, ItemId, Key, Metadata, MetadataCodec, Node, Prefix, PrefixCodec, Result,
 };
 
+/// The number of iterations to process before checking if the indexing process should be cancelled.
+pub(crate) const CANCELLATION_PROBING: usize = 10000;
+
 /// The options available when building the arroy database.
 pub struct HannoyBuilder<'a, D: Distance, R: Rng + SeedableRng> {
     writer: &'a Writer<D>,
@@ -246,7 +249,7 @@ impl<D: Distance> Writer<D> {
     fn reset_and_retrieve_updated_items(
         &self,
         wtxn: &mut RwTxn,
-        _options: &BuildOption,
+        options: &BuildOption,
     ) -> Result<RoaringBitmap, Error> {
         tracing::debug!("reset and retrieve the updated items...");
         let mut updated_items = RoaringBitmap::new();
@@ -255,28 +258,41 @@ impl<D: Distance> Writer<D> {
             .remap_types::<PrefixCodec, DecodeIgnore>()
             .prefix_iter_mut(wtxn, &Prefix::updated(self.index))?
             .remap_key_type::<KeyCodec>();
+
+        let mut index = 0;
         while let Some((key, _)) = updated_iter.next().transpose()? {
+            if index % CANCELLATION_PROBING == 0 && (options.cancel)() {
+                return Err(Error::BuildCancelled);
+            }
+
             let inserted = updated_items.push(key.node.item);
             debug_assert!(inserted, "The keys should be sorted by LMDB");
             // Safe because we don't hold any reference to the database currently
             unsafe {
                 updated_iter.del_current()?;
             }
+
+            index += 1;
         }
         Ok(updated_items)
     }
 
     // Fetches the item's ids, not the tree nodes ones.
-    fn item_indices(&self, wtxn: &mut RwTxn, _options: &BuildOption) -> Result<RoaringBitmap> {
+    fn item_indices(&self, wtxn: &mut RwTxn, options: &BuildOption) -> Result<RoaringBitmap> {
         tracing::debug!("started retrieving all the items ids...");
 
         let mut indices = RoaringBitmap::new();
-        for result in self
+        for (index, result) in self
             .database
             .remap_types::<PrefixCodec, DecodeIgnore>()
             .prefix_iter(wtxn, &Prefix::item(self.index))?
             .remap_key_type::<KeyCodec>()
+            .enumerate()
         {
+            if index % CANCELLATION_PROBING == 0 && (options.cancel)() {
+                return Err(Error::BuildCancelled);
+            }
+
             let (i, _) = result?;
             indices.push(i.node.unwrap_item());
         }
