@@ -50,9 +50,8 @@ fn main() -> Result<()> {
     let rtxn = env.read_txn()?;
     let reader = Reader::<Cosine>::open(&rtxn, 0, db)?;
 
-    let ef_search = 10;
     let query = vec![1.0, 0.0, 0.0];
-    let nns = reader.nns(1, ef_search).by_vector(&rtxn, &query)?;
+    let nns = reader.nns(1).ef_search(10).by_vector(&rtxn, &query)?;
 
     dbg!("{:?}", &nns);
     Ok(())
