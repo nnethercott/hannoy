@@ -60,7 +60,7 @@ impl<const M: usize> Debug for NodeState<M> {
 pub struct HnswBuilder<'a, D, const M: usize, const M0: usize> {
     assign_probas: Vec<f32>,
     ef_construction: usize,
-    cancel: &'a Box<dyn Fn() -> bool + 'a + Sync + Send>,
+    cancel: &'a (dyn Fn() -> bool + 'a + Sync + Send),
     pub max_level: usize,
     pub entry_points: Vec<ItemId>,
     pub layers: Vec<HashMap<ItemId, NodeState<M0>>>,
