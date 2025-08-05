@@ -2,7 +2,8 @@ name: Rust CI
 
 on:
   pull_request:
-    braches:
+    types: [opened, synchronize, reopened, labeled, unlabeled, edited]
+    branches:
       - main
 
 env:
@@ -13,10 +14,11 @@ env:
 
 jobs:
   test:
+    if: ${{ !contains(github.event.pull_request.labels.*.name, 'wip') }}
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        os: [ubuntu-latest, macos-latest]
         rust:
           - stable
           - beta

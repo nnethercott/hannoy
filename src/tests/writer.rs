@@ -1,0 +1,319 @@
+use super::{create_database, rng};
+use crate::distance::{Cosine, Euclidean};
+use crate::tests::DatabaseHandle;
+use crate::{Reader, Writer};
+use proptest::proptest;
+use rand::{rngs::StdRng, seq::SliceRandom, thread_rng, Rng, SeedableRng};
+
+const M: usize = 3;
+const M0: usize = 3;
+
+// do i add edge-cases for the build, e.g. M = e.ciel() as usize ?
+
+#[test]
+fn clear_small_database() {
+    let DatabaseHandle { env, database, tempdir: _ } = create_database::<Cosine>();
+    let mut wtxn = env.write_txn().unwrap();
+
+    let zero_writer = Writer::new(database, 0, 3);
+    zero_writer.add_item(&mut wtxn, 0, &[0.0, 1.0, 2.0]).unwrap();
+    zero_writer.clear(&mut wtxn).unwrap();
+    zero_writer.builder(&mut rng()).build::<M, M0>(&mut wtxn).unwrap();
+
+    let one_writer = Writer::new(database, 1, 3);
+    one_writer.add_item(&mut wtxn, 0, &[1.0, 2.0, 3.0]).unwrap();
+    one_writer.builder(&mut rng()).build::<M, M0>(&mut wtxn).unwrap();
+    wtxn.commit().unwrap();
+
+    let mut wtxn = env.write_txn().unwrap();
+    let zero_writer = Writer::new(database, 0, 3);
+    zero_writer.clear(&mut wtxn).unwrap();
+
+    let one_reader = Reader::open(&wtxn, 1, database).unwrap();
+    assert_eq!(one_reader.item_vector(&wtxn, 0).unwrap().unwrap(), vec![1.0, 2.0, 3.0]);
+    wtxn.commit().unwrap();
+}
+
+#[test]
+fn use_u32_max_minus_one_for_a_vec() {
+    let handle = create_database::<Euclidean>();
+    let mut wtxn = handle.env.write_txn().unwrap();
+    let writer = Writer::new(handle.database, 0, 3);
+    writer.add_item(&mut wtxn, u32::MAX - 1, &[0.0, 1.0, 2.0]).unwrap();
+
+    writer.builder(&mut rng()).build::<M, M0>(&mut wtxn).unwrap();
+    wtxn.commit().unwrap();
+
+    insta::assert_snapshot!(handle, @r#"
+    ==================
+    Dumping index 0
+    Root: Metadata { dimensions: 3, items: RoaringBitmap<[4294967294]>, distance: "euclidean", entry_points: [4294967294], max_level: 1 }
+    Version: Version { major: 0, minor: 0, patch: 2 }
+    Links 4294967294: Links(Links { links: RoaringBitmap<[]> })
+    Links 4294967294: Links(Links { links: RoaringBitmap<[]> })
+    Item 4294967294: Item(Item { header: NodeHeaderEuclidean { bias: "0.0000" }, vector: [0.0000, 1.0000, 2.0000] })
+    "#);
+}
+
+#[test]
+fn use_u32_max_for_a_vec() {
+    let handle = create_database::<Euclidean>();
+    let mut wtxn = handle.env.write_txn().unwrap();
+    let writer = Writer::new(handle.database, 0, 3);
+    writer.add_item(&mut wtxn, u32::MAX, &[0.0, 1.0, 2.0]).unwrap();
+
+    writer.builder(&mut rng()).build::<M, M0>(&mut wtxn).unwrap();
+    wtxn.commit().unwrap();
+
+    insta::assert_snapshot!(handle, @r#"
+    ==================
+    Dumping index 0
+    Root: Metadata { dimensions: 3, items: RoaringBitmap<[4294967295]>, distance: "euclidean", entry_points: [4294967295], max_level: 1 }
+    Version: Version { major: 0, minor: 0, patch: 2 }
+    Links 4294967295: Links(Links { links: RoaringBitmap<[]> })
+    Links 4294967295: Links(Links { links: RoaringBitmap<[]> })
+    Item 4294967295: Item(Item { header: NodeHeaderEuclidean { bias: "0.0000" }, vector: [0.0000, 1.0000, 2.0000] })
+    "#);
+}
+
+#[test]
+fn write_one_vector() {
+    let handle = create_database::<Euclidean>();
+    let mut wtxn = handle.env.write_txn().unwrap();
+    let writer = Writer::new(handle.database, 0, 3);
+    writer.add_item(&mut wtxn, 0, &[0.0, 1.0, 2.0]).unwrap();
+
+    writer.builder(&mut rng()).build::<M, M0>(&mut wtxn).unwrap();
+    wtxn.commit().unwrap();
+
+    insta::assert_snapshot!(handle, @r#"
+    ==================
+    Dumping index 0
+    Root: Metadata { dimensions: 3, items: RoaringBitmap<[0]>, distance: "euclidean", entry_points: [0], max_level: 1 }
+    Version: Version { major: 0, minor: 0, patch: 2 }
+    Links 0: Links(Links { links: RoaringBitmap<[]> })
+    Links 0: Links(Links { links: RoaringBitmap<[]> })
+    Item 0: Item(Item { header: NodeHeaderEuclidean { bias: "0.0000" }, vector: [0.0000, 1.0000, 2.0000] })
+    "#);
+}
+
+#[test]
+fn write_and_update_lot_of_random_points_with_snapshot() {
+    let handle = create_database::<Euclidean>();
+    let mut wtxn = handle.env.write_txn().unwrap();
+    let writer = Writer::new(handle.database, 0, 30);
+    let mut rng = rng();
+    for id in 0..100 {
+        let vector: [f32; 30] = std::array::from_fn(|_| rng.gen());
+        writer.add_item(&mut wtxn, id, &vector).unwrap();
+    }
+
+    writer.builder(&mut rng).build::<M, M0>(&mut wtxn).unwrap();
+    wtxn.commit().unwrap();
+    insta::assert_snapshot!(handle);
+
+    let mut wtxn = handle.env.write_txn().unwrap();
+    let writer = Writer::new(handle.database, 0, 30);
+    for id in (0..100).step_by(2) {
+        let vector: [f32; 30] = std::array::from_fn(|_| rng.gen());
+        writer.add_item(&mut wtxn, id, &vector).unwrap();
+    }
+    writer.builder(&mut rng).build::<M, M0>(&mut wtxn).unwrap();
+    wtxn.commit().unwrap();
+
+    insta::assert_snapshot!(handle);
+}
+
+#[test]
+fn write_multiple_indexes() {
+    let handle = create_database::<Euclidean>();
+    let mut wtxn = handle.env.write_txn().unwrap();
+
+    for i in 0..5 {
+        let writer = Writer::new(handle.database, i, 3);
+        writer.add_item(&mut wtxn, 0, &[0.0, 1.0, 2.0]).unwrap();
+        writer.builder(&mut rng()).build::<M, M0>(&mut wtxn).unwrap();
+    }
+    wtxn.commit().unwrap();
+
+    insta::assert_snapshot!(handle, @r#"
+    ==================
+    Dumping index 0
+    Root: Metadata { dimensions: 3, items: RoaringBitmap<[0]>, distance: "euclidean", entry_points: [0], max_level: 1 }
+    Version: Version { major: 0, minor: 0, patch: 2 }
+    Links 0: Links(Links { links: RoaringBitmap<[]> })
+    Links 0: Links(Links { links: RoaringBitmap<[]> })
+    Item 0: Item(Item { header: NodeHeaderEuclidean { bias: "0.0000" }, vector: [0.0000, 1.0000, 2.0000] })
+    ==================
+    Dumping index 1
+    Root: Metadata { dimensions: 3, items: RoaringBitmap<[0]>, distance: "euclidean", entry_points: [0], max_level: 1 }
+    Version: Version { major: 0, minor: 0, patch: 2 }
+    Links 0: Links(Links { links: RoaringBitmap<[]> })
+    Links 0: Links(Links { links: RoaringBitmap<[]> })
+    Item 0: Item(Item { header: NodeHeaderEuclidean { bias: "0.0000" }, vector: [0.0000, 1.0000, 2.0000] })
+    ==================
+    Dumping index 2
+    Root: Metadata { dimensions: 3, items: RoaringBitmap<[0]>, distance: "euclidean", entry_points: [0], max_level: 1 }
+    Version: Version { major: 0, minor: 0, patch: 2 }
+    Links 0: Links(Links { links: RoaringBitmap<[]> })
+    Links 0: Links(Links { links: RoaringBitmap<[]> })
+    Item 0: Item(Item { header: NodeHeaderEuclidean { bias: "0.0000" }, vector: [0.0000, 1.0000, 2.0000] })
+    ==================
+    Dumping index 3
+    Root: Metadata { dimensions: 3, items: RoaringBitmap<[0]>, distance: "euclidean", entry_points: [0], max_level: 1 }
+    Version: Version { major: 0, minor: 0, patch: 2 }
+    Links 0: Links(Links { links: RoaringBitmap<[]> })
+    Links 0: Links(Links { links: RoaringBitmap<[]> })
+    Item 0: Item(Item { header: NodeHeaderEuclidean { bias: "0.0000" }, vector: [0.0000, 1.0000, 2.0000] })
+    ==================
+    Dumping index 4
+    Root: Metadata { dimensions: 3, items: RoaringBitmap<[0]>, distance: "euclidean", entry_points: [0], max_level: 1 }
+    Version: Version { major: 0, minor: 0, patch: 2 }
+    Links 0: Links(Links { links: RoaringBitmap<[]> })
+    Links 0: Links(Links { links: RoaringBitmap<[]> })
+    Item 0: Item(Item { header: NodeHeaderEuclidean { bias: "0.0000" }, vector: [0.0000, 1.0000, 2.0000] })
+    "#);
+}
+
+#[test]
+fn write_random_vectors_to_random_indexes() {
+    let handle = create_database::<Euclidean>();
+    let mut rng = rng();
+    let mut wtxn = handle.env.write_txn().unwrap();
+
+    let mut indexes: Vec<u16> = (0..10).collect();
+    indexes.shuffle(&mut rng);
+
+    for index in indexes {
+        let writer = Writer::new(handle.database, index, 10);
+
+        // We're going to write 10 vectors per index
+        for i in 0..10 {
+            let vector: [f32; 10] = std::array::from_fn(|_| rng.gen());
+            writer.add_item(&mut wtxn, i, &vector).unwrap();
+        }
+        writer.builder(&mut rng).build::<M, M0>(&mut wtxn).unwrap();
+    }
+    wtxn.commit().unwrap();
+}
+
+#[test]
+fn overwrite_one_item_incremental() {
+    let handle = create_database::<Euclidean>();
+    let mut rng = rng();
+    let mut wtxn = handle.env.write_txn().unwrap();
+    let writer = Writer::new(handle.database, 0, 2);
+
+    for i in 0..6 {
+        writer.add_item(&mut wtxn, i, &[i as f32, 0.]).unwrap();
+    }
+    writer.builder(&mut rng).build::<M, M0>(&mut wtxn).unwrap();
+    wtxn.commit().unwrap();
+
+    insta::assert_snapshot!(handle, @r#"
+    ==================
+    Dumping index 0
+    Root: Metadata { dimensions: 2, items: RoaringBitmap<[0, 1, 2, 3, 4, 5]>, distance: "euclidean", entry_points: [0, 2, 3], max_level: 1 }
+    Version: Version { major: 0, minor: 0, patch: 2 }
+    Links 0: Links(Links { links: RoaringBitmap<[1, 2]> })
+    Links 0: Links(Links { links: RoaringBitmap<[2]> })
+    Links 1: Links(Links { links: RoaringBitmap<[0, 2]> })
+    Links 2: Links(Links { links: RoaringBitmap<[0, 1, 3]> })
+    Links 2: Links(Links { links: RoaringBitmap<[0, 3]> })
+    Links 3: Links(Links { links: RoaringBitmap<[2, 4]> })
+    Links 3: Links(Links { links: RoaringBitmap<[2]> })
+    Links 4: Links(Links { links: RoaringBitmap<[3, 5]> })
+    Links 5: Links(Links { links: RoaringBitmap<[4]> })
+    Item 0: Item(Item { header: NodeHeaderEuclidean { bias: "0.0000" }, vector: [0.0000, 0.0000] })
+    Item 1: Item(Item { header: NodeHeaderEuclidean { bias: "0.0000" }, vector: [1.0000, 0.0000] })
+    Item 2: Item(Item { header: NodeHeaderEuclidean { bias: "0.0000" }, vector: [2.0000, 0.0000] })
+    Item 3: Item(Item { header: NodeHeaderEuclidean { bias: "0.0000" }, vector: [3.0000, 0.0000] })
+    Item 4: Item(Item { header: NodeHeaderEuclidean { bias: "0.0000" }, vector: [4.0000, 0.0000] })
+    Item 5: Item(Item { header: NodeHeaderEuclidean { bias: "0.0000" }, vector: [5.0000, 0.0000] })
+    "#);
+
+    let mut wtxn = handle.env.write_txn().unwrap();
+    let writer = Writer::new(handle.database, 0, 2);
+    writer.add_item(&mut wtxn, 3, &[6., 0.]).unwrap();
+
+    writer.builder(&mut rng).build::<M, M0>(&mut wtxn).unwrap();
+    wtxn.commit().unwrap();
+
+    insta::assert_snapshot!(handle, @r#"
+    ==================
+    Dumping index 0
+    Root: Metadata { dimensions: 2, items: RoaringBitmap<[0, 1, 2, 3, 4, 5]>, distance: "euclidean", entry_points: [0, 2, 3], max_level: 1 }
+    Version: Version { major: 0, minor: 0, patch: 2 }
+    Links 0: Links(Links { links: RoaringBitmap<[1]> })
+    Links 0: Links(Links { links: RoaringBitmap<[2]> })
+    Links 1: Links(Links { links: RoaringBitmap<[0, 2]> })
+    Links 2: Links(Links { links: RoaringBitmap<[1, 4]> })
+    Links 2: Links(Links { links: RoaringBitmap<[0, 3]> })
+    Links 3: Links(Links { links: RoaringBitmap<[5]> })
+    Links 3: Links(Links { links: RoaringBitmap<[2]> })
+    Links 4: Links(Links { links: RoaringBitmap<[2, 5]> })
+    Links 5: Links(Links { links: RoaringBitmap<[3, 4]> })
+    Item 0: Item(Item { header: NodeHeaderEuclidean { bias: "0.0000" }, vector: [0.0000, 0.0000] })
+    Item 1: Item(Item { header: NodeHeaderEuclidean { bias: "0.0000" }, vector: [1.0000, 0.0000] })
+    Item 2: Item(Item { header: NodeHeaderEuclidean { bias: "0.0000" }, vector: [2.0000, 0.0000] })
+    Item 3: Item(Item { header: NodeHeaderEuclidean { bias: "0.0000" }, vector: [6.0000, 0.0000] })
+    Item 4: Item(Item { header: NodeHeaderEuclidean { bias: "0.0000" }, vector: [4.0000, 0.0000] })
+    Item 5: Item(Item { header: NodeHeaderEuclidean { bias: "0.0000" }, vector: [5.0000, 0.0000] })
+    "#);
+}
+
+// NOTE: this will fail while our deletions aren't properly handled
+#[test]
+#[ignore = "not ready"]
+fn delete_one_item_in_a_one_item_db() {
+    let handle = create_database::<Euclidean>();
+    let mut rng = rng();
+    let mut wtxn = handle.env.write_txn().unwrap();
+    let writer = Writer::new(handle.database, 0, 2);
+
+    writer.add_item(&mut wtxn, 0, &[0., 0.]).unwrap();
+    writer.builder(&mut rng).build::<M, M0>(&mut wtxn).unwrap();
+    wtxn.commit().unwrap();
+
+    insta::assert_snapshot!(handle, @r#"
+    ==================
+    Dumping index 0
+    Root: Metadata { dimensions: 2, items: RoaringBitmap<[0]>, distance: "euclidean", entry_points: [0], max_level: 1 }
+    Version: Version { major: 0, minor: 0, patch: 2 }
+    Links 0: Links(Links { links: RoaringBitmap<[]> })
+    Links 0: Links(Links { links: RoaringBitmap<[]> })
+    Item 0: Item(Item { header: NodeHeaderEuclidean { bias: "0.0000" }, vector: [0.0000, 0.0000] })
+    "#);
+
+    // new transaction for the delete
+    let mut wtxn = handle.env.write_txn().unwrap();
+    let writer = Writer::new(handle.database, 0, 2);
+
+    writer.del_item(&mut wtxn, 0).unwrap();
+    writer.builder(&mut rng).build::<M, M0>(&mut wtxn).unwrap();
+    wtxn.commit().unwrap();
+
+    insta::assert_snapshot!(handle, @r#"
+    "#);
+
+    let rtxn = handle.env.read_txn().unwrap();
+    let one_reader = Reader::open(&rtxn, 0, handle.database).unwrap();
+    assert!(one_reader.item_vector(&rtxn, 0).unwrap().is_none());
+}
+
+proptest! {
+    #[test]
+    fn fuzz_writer(n in 1..=1000u32, dim in 1..=100usize) {
+        let handle = create_database::<Euclidean>();
+        let mut rng = StdRng::from_seed(thread_rng().gen());
+        let mut wtxn = handle.env.write_txn().unwrap();
+
+        let writer = Writer::new(handle.database, 0, dim);
+
+        for i in 1..=n {
+            let vector: Vec<f32> = (0..dim).map(|_| rng.gen()).collect();
+            writer.add_item(&mut wtxn, i, &vector).unwrap();
+        }
+        writer.builder(&mut rng).build::<M, M0>(&mut wtxn).unwrap();
+    }
+}
