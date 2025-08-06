@@ -316,7 +316,7 @@ impl<'t, D: Distance> Reader<'t, D> {
 
         let mut nns = Vec::with_capacity(opt.count);
         while let Some((OrderedFloat(f), id)) = neighbours.pop_min() {
-            if opt.candidates.is_some_and(|candidates| candidates.contains(id)) {
+            if opt.candidates.map_or(true, |candidates| candidates.contains(id)) {
                 nns.push((id, f));
             }
             if nns.len() == opt.count {
