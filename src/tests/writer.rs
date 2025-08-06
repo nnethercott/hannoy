@@ -466,7 +466,7 @@ fn delete_one_item_in_a_single_document_database() {
 }
 
 #[test]
-fn nate_delete_one_item() {
+fn delete_one_item() {
     let handle = create_database::<Euclidean>();
     let mut rng = rng();
     let mut wtxn = handle.env.write_txn().unwrap();
