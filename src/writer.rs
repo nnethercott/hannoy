@@ -314,8 +314,8 @@ impl<D: Distance> Writer<D> {
             .with_entry_points(entry_points)
             .with_max_level(max_level);
 
-        let _stats = hnsw.build(to_insert, to_delete, self.database, self.index, wtxn, rng)?;
-        // dbg!("{:?}", stats);
+        let stats = hnsw.build(to_insert, to_delete, self.database, self.index, wtxn, rng)?;
+        tracing::info!("{stats:?}");
 
         tracing::debug!("write the metadata...");
         let metadata = Metadata {
