@@ -153,9 +153,6 @@ impl<'a, D: Distance, const M: usize, const M0: usize> HnswBuilder<'a, D, M, M0>
             self.prepare_levels_and_entry_points(&mut levels, cur_max_level, to_delete, &lmdb)?;
         to_insert |= ok_eps;
 
-        // FIXME: remove
-        dbg!("{:?}", &self.entry_points);
-
         let level_groups: Vec<_> = levels.chunk_by(|(_, la), (_, lb)| la == lb).collect();
 
         // Insert layers L...0 multi-threaded
@@ -319,7 +316,6 @@ impl<'a, D: Distance, const M: usize, const M0: usize> HnswBuilder<'a, D, M, M0>
     ) -> Result<()> {
         let links_in_db =
             lmdb.links.iter().map(|((id, lvl), v)| ((id, lvl as usize), v.into_owned()));
-        println!("DELETING THESE GUYS: {:?}", &to_delete);
 
         for (index, ((id, lvl), links)) in links_in_db.into_iter().enumerate() {
             if index % CANCELLATION_PROBING == 0 && (self.cancel)() {
