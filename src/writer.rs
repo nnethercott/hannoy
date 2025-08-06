@@ -87,9 +87,12 @@ impl<D: Distance> Writer<D> {
     /// for the new [`Distance`] format to be able to modify items safely.
     pub fn prepare_changing_distance<ND: Distance>(self, wtxn: &mut RwTxn) -> Result<Writer<ND>> {
         if TypeId::of::<ND>() != TypeId::of::<D>() {
-            // If we are moving from a distance to a binary quantized distance
-            // we do not need to clear links, otherwise we do.
-            if ND::name().strip_prefix("binary quantized ") != Some(D::name()) {
+            // If we are moving from a distance to the same but binary quantized
+            // distance we do not need to clear links, otherwise we do.
+            if ND::name()
+                .strip_prefix("binary quantized ")
+                .map_or(true, |raw_name| raw_name != D::name())
+            {
                 clear_links(wtxn, self.database, self.index)?;
             }
 
