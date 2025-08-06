@@ -11,6 +11,7 @@ use crate::hnsw::HnswBuilder;
 use crate::internals::KeyCodec;
 use crate::item_iter::ItemIter;
 use crate::node::{Item, ItemIds, Links, NodeCodec};
+use crate::node_id::{NodeId, NodeMode};
 use crate::parallel::{ImmutableItems, ImmutableLinks};
 use crate::reader::get_item;
 use crate::unaligned_vector::UnalignedVector;
@@ -79,8 +80,58 @@ pub struct Writer<D: Distance> {
 impl<D: Distance> Writer<D> {
     /// Creates a new writer from a database, index and dimensions.
     pub fn new(database: Database<D>, index: u16, dimensions: usize) -> Writer<D> {
-        let database: Database<D> = database.remap_data_type();
         Writer { database, index, dimensions, tmpdir: None }
+    }
+
+    /// After opening an arroy database this function will prepare it for conversion,
+    /// cleanup the arroy database and only keep the items/vectors entries.
+    pub fn prepare_arroy_conversion(&self, wtxn: &mut RwTxn) -> Result<()> {
+        let mut iter = self
+            .database
+            .remap_key_type::<PrefixCodec>()
+            .prefix_iter_mut(wtxn, &Prefix::all(self.index))?
+            .remap_key_type::<KeyCodec>();
+
+        let mut new_items = RoaringBitmap::new();
+        while let Some(result) = iter.next() {
+            match result {
+                Ok((
+                    Key { index: _, node: NodeId { mode: NodeMode::Item, item, .. } },
+                    Node::Item(Item { header: _, vector }),
+                )) => {
+                    // We only take care of the entries that can be decoded as Node Items (vectors) and
+                    // mark them as newly inserted so the Writer::build method can compute the links for them.
+                    new_items.insert(item);
+                    if vector.len() != self.dimensions {
+                        return Err(Error::InvalidVecDimension {
+                            expected: self.dimensions,
+                            received: vector.len(),
+                        });
+                    }
+                }
+                Ok((Key { .. }, _)) | Err(heed::Error::Decoding(_)) => unsafe {
+                    // Every other entry that fails to decode can be considered as something
+                    // else than an item, is useless for the conversion and is deleted.
+                    iter.del_current()?;
+                },
+                // If there is another error (lmdb...), it is returned.
+                Err(e) => return Err(e.into()),
+            }
+        }
+
+        drop(iter);
+
+        // We mark all the items as updated so
+        // the Writer::build method can handle them.
+        for item in new_items {
+            self.database.remap_data_type::<Unit>().put(
+                wtxn,
+                &Key::updated(self.index, item),
+                &(),
+            )?;
+        }
+
+        Ok(())
     }
 
     /// Returns a writer after having deleted the tree nodes and rewrote all the items
