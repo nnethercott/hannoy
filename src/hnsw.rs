@@ -244,7 +244,7 @@ impl<'a, D: Distance, const M: usize, const M0: usize> HnswBuilder<'a, D, M, M0>
 
         if cur_max_level > self.max_level {
             self.entry_points.clear();
-        } 
+        }
 
         self.max_level = self.max_level.max(cur_max_level);
         for _ in 0..=self.max_level {
@@ -437,7 +437,7 @@ impl<'a, D: Distance, const M: usize, const M0: usize> HnswBuilder<'a, D, M, M0>
                 // in which case its OK not to explore it
                 let item = match lmdb.get_item(point) {
                     Ok(item) => item,
-                    Err(Error::MissingKey { index, mode: _, item, layer: _ }) => {
+                    Err(Error::MissingKey { index: _, mode: _, item: _, layer: _ }) => {
                         continue;
                     }
                     Err(e) => panic!("{}", e),

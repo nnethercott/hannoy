@@ -379,7 +379,7 @@ fn delete_document_in_an_empty_index_74() {
     let writer = Writer::new(handle.database, 0, 2);
     writer.del_item(&mut wtxn, 0).unwrap();
     writer.add_item(&mut wtxn, 0, &[0., 0.]).unwrap();
-    writer.builder(&mut rng).build::<M,M0>(&mut wtxn).unwrap();
+    writer.builder(&mut rng).build::<M, M0>(&mut wtxn).unwrap();
 
     wtxn.commit().unwrap();
 
@@ -401,8 +401,8 @@ fn delete_document_in_an_empty_index_74() {
     let writer2 = Writer::new(handle.database, 1, 2);
     writer2.del_item(&mut wtxn, 0).unwrap();
 
-    writer1.builder(&mut rng).build::<M,M0>(&mut wtxn).unwrap();
-    writer2.builder(&mut rng).build::<M,M0>(&mut wtxn).unwrap();
+    writer1.builder(&mut rng).build::<M, M0>(&mut wtxn).unwrap();
+    writer2.builder(&mut rng).build::<M, M0>(&mut wtxn).unwrap();
 
     let reader = Reader::open(&wtxn, 1, handle.database).unwrap();
     let ret = reader.nns(10).by_vector(&wtxn, &[0., 0.]).unwrap();
@@ -436,7 +436,7 @@ fn delete_one_item_in_a_single_document_database() {
 
     // first, insert a bunch of elements
     writer.add_item(&mut wtxn, 0, &[0., 0.]).unwrap();
-    writer.builder(&mut rng).build::<M,M0>(&mut wtxn).unwrap();
+    writer.builder(&mut rng).build::<M, M0>(&mut wtxn).unwrap();
     wtxn.commit().unwrap();
 
     insta::assert_snapshot!(handle, @r#"
@@ -454,7 +454,7 @@ fn delete_one_item_in_a_single_document_database() {
 
     writer.del_item(&mut wtxn, 0).unwrap();
 
-    writer.builder(&mut rng).build::<M,M0>(&mut wtxn).unwrap();
+    writer.builder(&mut rng).build::<M, M0>(&mut wtxn).unwrap();
     wtxn.commit().unwrap();
 
     insta::assert_snapshot!(handle, @r#"
@@ -476,7 +476,7 @@ fn delete_one_item() {
     for i in 0..6 {
         writer.add_item(&mut wtxn, i, &[i as f32, 0.]).unwrap();
     }
-    writer.builder(&mut rng).build::<3,3>(&mut wtxn).unwrap();
+    writer.builder(&mut rng).build::<3, 3>(&mut wtxn).unwrap();
     wtxn.commit().unwrap();
 
     insta::assert_snapshot!(handle, @r#"
@@ -506,7 +506,7 @@ fn delete_one_item() {
 
     writer.del_item(&mut wtxn, 3).unwrap();
 
-    writer.builder(&mut rng).build::<3,3>(&mut wtxn).unwrap();
+    writer.builder(&mut rng).build::<3, 3>(&mut wtxn).unwrap();
     wtxn.commit().unwrap();
 
     insta::assert_snapshot!(handle, @r#"
@@ -535,7 +535,7 @@ fn delete_one_item() {
 
     writer.del_item(&mut wtxn, 1).unwrap();
 
-    writer.builder(&mut rng).build::<3,3>(&mut wtxn).unwrap();
+    writer.builder(&mut rng).build::<3, 3>(&mut wtxn).unwrap();
     wtxn.commit().unwrap();
 
     insta::assert_snapshot!(handle, @r#"
