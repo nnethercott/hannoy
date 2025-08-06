@@ -153,6 +153,9 @@ impl<'a, D: Distance, const M: usize, const M0: usize> HnswBuilder<'a, D, M, M0>
             self.prepare_levels_and_entry_points(&mut levels, cur_max_level, to_delete, &lmdb)?;
         to_insert |= ok_eps;
 
+        // FIXME: remove
+        dbg!("{:?}", &self.entry_points);
+
         let level_groups: Vec<_> = levels.chunk_by(|(_, la), (_, lb)| la == lb).collect();
 
         // Insert layers L...0 multi-threaded
@@ -241,7 +244,8 @@ impl<'a, D: Distance, const M: usize, const M0: usize> HnswBuilder<'a, D, M, M0>
 
         if cur_max_level > self.max_level {
             self.entry_points.clear();
-        }
+        } 
+
         self.max_level = self.max_level.max(cur_max_level);
         for _ in 0..=self.max_level {
             self.layers.push(HashMap::new());
@@ -256,10 +260,11 @@ impl<'a, D: Distance, const M: usize, const M0: usize> HnswBuilder<'a, D, M, M0>
             .collect();
 
         for &(item_id, _) in upper_layer {
-            self.entry_points.push(item_id);
+            ok_eps.push(item_id);
             self.add_in_layers_below(item_id, self.max_level);
         }
 
+        self.entry_points = ok_eps.iter().collect();
         Ok(ok_eps)
     }
 
@@ -314,6 +319,7 @@ impl<'a, D: Distance, const M: usize, const M0: usize> HnswBuilder<'a, D, M, M0>
     ) -> Result<()> {
         let links_in_db =
             lmdb.links.iter().map(|((id, lvl), v)| ((id, lvl as usize), v.into_owned()));
+        println!("DELETING THESE GUYS: {:?}", &to_delete);
 
         for (index, ((id, lvl), links)) in links_in_db.into_iter().enumerate() {
             if index % CANCELLATION_PROBING == 0 && (self.cancel)() {
@@ -432,8 +438,7 @@ impl<'a, D: Distance, const M: usize, const M0: usize> HnswBuilder<'a, D, M, M0>
                 let item = match lmdb.get_item(point) {
                     Ok(item) => item,
                     Err(Error::MissingKey { index, mode: _, item, layer: _ }) => {
-                        // debug!("item {item} was deleted from index {index}!");
-                        panic!("item {item} was deleted from index {index}!");
+                        continue;
                     }
                     Err(e) => panic!("{}", e),
                 };

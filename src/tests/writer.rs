@@ -328,7 +328,7 @@ fn overwrite_one_item_incremental() {
 
 // NOTE: this will fail while our deletions aren't properly handled
 #[test]
-#[ignore = "not ready"]
+// #[ignore = "not ready"]
 fn delete_one_item_in_a_one_item_db() {
     let handle = create_database::<Euclidean>();
     let mut rng = rng();
@@ -358,11 +358,203 @@ fn delete_one_item_in_a_one_item_db() {
     wtxn.commit().unwrap();
 
     insta::assert_snapshot!(handle, @r#"
+    ==================
+    Dumping index 0
+    Root: Metadata { dimensions: 2, items: RoaringBitmap<[]>, distance: "euclidean", entry_points: [], max_level: 0 }
+    Version: Version { major: 0, minor: 0, patch: 2 }
     "#);
 
     let rtxn = handle.env.read_txn().unwrap();
     let one_reader = Reader::open(&rtxn, 0, handle.database).unwrap();
     assert!(one_reader.item_vector(&rtxn, 0).unwrap().is_none());
+}
+
+#[test]
+fn delete_document_in_an_empty_index_74() {
+    // See https://github.com/meilisearch/arroy/issues/74
+    let handle = create_database::<Euclidean>();
+    let mut rng = rng();
+    let mut wtxn = handle.env.write_txn().unwrap();
+
+    let writer = Writer::new(handle.database, 0, 2);
+    writer.del_item(&mut wtxn, 0).unwrap();
+    writer.add_item(&mut wtxn, 0, &[0., 0.]).unwrap();
+    writer.builder(&mut rng).build::<M,M0>(&mut wtxn).unwrap();
+
+    wtxn.commit().unwrap();
+
+    insta::assert_snapshot!(handle, @r#"
+    ==================
+    Dumping index 0
+    Root: Metadata { dimensions: 2, items: RoaringBitmap<[0]>, distance: "euclidean", entry_points: [0], max_level: 1 }
+    Version: Version { major: 0, minor: 0, patch: 2 }
+    Links 0: Links(Links { links: RoaringBitmap<[]> })
+    Links 0: Links(Links { links: RoaringBitmap<[]> })
+    Item 0: Item(Item { header: NodeHeaderEuclidean { bias: "0.0000" }, vector: [0.0000, 0.0000] })
+    "#);
+
+    let mut wtxn = handle.env.write_txn().unwrap();
+
+    let writer1 = Writer::new(handle.database, 0, 2);
+    writer1.del_item(&mut wtxn, 0).unwrap();
+
+    let writer2 = Writer::new(handle.database, 1, 2);
+    writer2.del_item(&mut wtxn, 0).unwrap();
+
+    writer1.builder(&mut rng).build::<M,M0>(&mut wtxn).unwrap();
+    writer2.builder(&mut rng).build::<M,M0>(&mut wtxn).unwrap();
+
+    let reader = Reader::open(&wtxn, 1, handle.database).unwrap();
+    let ret = reader.nns(10).by_vector(&wtxn, &[0., 0.]).unwrap();
+    insta::assert_debug_snapshot!(ret, @"[]");
+
+    wtxn.commit().unwrap();
+
+    insta::assert_snapshot!(handle, @r#"
+    ==================
+    Dumping index 0
+    Root: Metadata { dimensions: 2, items: RoaringBitmap<[]>, distance: "euclidean", entry_points: [], max_level: 0 }
+    Version: Version { major: 0, minor: 0, patch: 2 }
+    ==================
+    Dumping index 1
+    Root: Metadata { dimensions: 2, items: RoaringBitmap<[]>, distance: "euclidean", entry_points: [], max_level: 0 }
+    Version: Version { major: 0, minor: 0, patch: 2 }
+    "#);
+
+    let rtxn = handle.env.read_txn().unwrap();
+    let reader = Reader::open(&rtxn, 1, handle.database).unwrap();
+    let ret = reader.nns(10).by_vector(&rtxn, &[0., 0.]).unwrap();
+    insta::assert_debug_snapshot!(ret, @"[]");
+}
+
+#[test]
+fn delete_one_item_in_a_single_document_database() {
+    let handle = create_database::<Cosine>();
+    let mut rng = rng();
+    let mut wtxn = handle.env.write_txn().unwrap();
+    let writer = Writer::new(handle.database, 0, 2);
+
+    // first, insert a bunch of elements
+    writer.add_item(&mut wtxn, 0, &[0., 0.]).unwrap();
+    writer.builder(&mut rng).build::<M,M0>(&mut wtxn).unwrap();
+    wtxn.commit().unwrap();
+
+    insta::assert_snapshot!(handle, @r#"
+    ==================
+    Dumping index 0
+    Root: Metadata { dimensions: 2, items: RoaringBitmap<[0]>, distance: "cosine", entry_points: [0], max_level: 1 }
+    Version: Version { major: 0, minor: 0, patch: 2 }
+    Links 0: Links(Links { links: RoaringBitmap<[]> })
+    Links 0: Links(Links { links: RoaringBitmap<[]> })
+    Item 0: Item(Item { header: NodeHeaderCosine { norm: "0.0000" }, vector: [0.0000, 0.0000] })
+    "#);
+
+    let mut wtxn = handle.env.write_txn().unwrap();
+    let writer = Writer::new(handle.database, 0, 2);
+
+    writer.del_item(&mut wtxn, 0).unwrap();
+
+    writer.builder(&mut rng).build::<M,M0>(&mut wtxn).unwrap();
+    wtxn.commit().unwrap();
+
+    insta::assert_snapshot!(handle, @r#"
+    ==================
+    Dumping index 0
+    Root: Metadata { dimensions: 2, items: RoaringBitmap<[]>, distance: "cosine", entry_points: [], max_level: 0 }
+    Version: Version { major: 0, minor: 0, patch: 2 }
+    "#);
+}
+
+#[test]
+fn nate_delete_one_item() {
+    let handle = create_database::<Euclidean>();
+    let mut rng = rng();
+    let mut wtxn = handle.env.write_txn().unwrap();
+    let writer = Writer::new(handle.database, 0, 2);
+
+    // first, insert a bunch of elements
+    for i in 0..6 {
+        writer.add_item(&mut wtxn, i, &[i as f32, 0.]).unwrap();
+    }
+    writer.builder(&mut rng).build::<3,3>(&mut wtxn).unwrap();
+    wtxn.commit().unwrap();
+
+    insta::assert_snapshot!(handle, @r#"
+    ==================
+    Dumping index 0
+    Root: Metadata { dimensions: 2, items: RoaringBitmap<[0, 1, 2, 3, 4, 5]>, distance: "euclidean", entry_points: [0, 2, 3], max_level: 1 }
+    Version: Version { major: 0, minor: 0, patch: 2 }
+    Links 0: Links(Links { links: RoaringBitmap<[1, 2]> })
+    Links 0: Links(Links { links: RoaringBitmap<[2]> })
+    Links 1: Links(Links { links: RoaringBitmap<[0, 2]> })
+    Links 2: Links(Links { links: RoaringBitmap<[0, 1, 3]> })
+    Links 2: Links(Links { links: RoaringBitmap<[0, 3]> })
+    Links 3: Links(Links { links: RoaringBitmap<[2, 4]> })
+    Links 3: Links(Links { links: RoaringBitmap<[2]> })
+    Links 4: Links(Links { links: RoaringBitmap<[3, 5]> })
+    Links 5: Links(Links { links: RoaringBitmap<[4]> })
+    Item 0: Item(Item { header: NodeHeaderEuclidean { bias: "0.0000" }, vector: [0.0000, 0.0000] })
+    Item 1: Item(Item { header: NodeHeaderEuclidean { bias: "0.0000" }, vector: [1.0000, 0.0000] })
+    Item 2: Item(Item { header: NodeHeaderEuclidean { bias: "0.0000" }, vector: [2.0000, 0.0000] })
+    Item 3: Item(Item { header: NodeHeaderEuclidean { bias: "0.0000" }, vector: [3.0000, 0.0000] })
+    Item 4: Item(Item { header: NodeHeaderEuclidean { bias: "0.0000" }, vector: [4.0000, 0.0000] })
+    Item 5: Item(Item { header: NodeHeaderEuclidean { bias: "0.0000" }, vector: [5.0000, 0.0000] })
+    "#);
+
+    let mut wtxn = handle.env.write_txn().unwrap();
+    let writer = Writer::new(handle.database, 0, 2);
+
+    writer.del_item(&mut wtxn, 3).unwrap();
+
+    writer.builder(&mut rng).build::<3,3>(&mut wtxn).unwrap();
+    wtxn.commit().unwrap();
+
+    insta::assert_snapshot!(handle, @r#"
+    ==================
+    Dumping index 0
+    Root: Metadata { dimensions: 2, items: RoaringBitmap<[0, 1, 2, 4, 5]>, distance: "euclidean", entry_points: [0, 2, 4], max_level: 1 }
+    Version: Version { major: 0, minor: 0, patch: 2 }
+    Links 0: Links(Links { links: RoaringBitmap<[1]> })
+    Links 0: Links(Links { links: RoaringBitmap<[2]> })
+    Links 1: Links(Links { links: RoaringBitmap<[0, 2]> })
+    Links 2: Links(Links { links: RoaringBitmap<[1, 2, 4]> })
+    Links 2: Links(Links { links: RoaringBitmap<[0, 2, 4]> })
+    Links 4: Links(Links { links: RoaringBitmap<[2, 4, 5]> })
+    Links 4: Links(Links { links: RoaringBitmap<[2]> })
+    Links 5: Links(Links { links: RoaringBitmap<[4]> })
+    Item 0: Item(Item { header: NodeHeaderEuclidean { bias: "0.0000" }, vector: [0.0000, 0.0000] })
+    Item 1: Item(Item { header: NodeHeaderEuclidean { bias: "0.0000" }, vector: [1.0000, 0.0000] })
+    Item 2: Item(Item { header: NodeHeaderEuclidean { bias: "0.0000" }, vector: [2.0000, 0.0000] })
+    Item 4: Item(Item { header: NodeHeaderEuclidean { bias: "0.0000" }, vector: [4.0000, 0.0000] })
+    Item 5: Item(Item { header: NodeHeaderEuclidean { bias: "0.0000" }, vector: [5.0000, 0.0000] })
+    "#);
+
+    // delete the last item in a descendants node
+    let mut wtxn = handle.env.write_txn().unwrap();
+    let writer = Writer::new(handle.database, 0, 2);
+
+    writer.del_item(&mut wtxn, 1).unwrap();
+
+    writer.builder(&mut rng).build::<3,3>(&mut wtxn).unwrap();
+    wtxn.commit().unwrap();
+
+    insta::assert_snapshot!(handle, @r#"
+    ==================
+    Dumping index 0
+    Root: Metadata { dimensions: 2, items: RoaringBitmap<[0, 2, 4, 5]>, distance: "euclidean", entry_points: [0, 2, 4], max_level: 1 }
+    Version: Version { major: 0, minor: 0, patch: 2 }
+    Links 0: Links(Links { links: RoaringBitmap<[0, 2]> })
+    Links 0: Links(Links { links: RoaringBitmap<[2]> })
+    Links 2: Links(Links { links: RoaringBitmap<[0, 2, 4]> })
+    Links 2: Links(Links { links: RoaringBitmap<[0, 2, 4]> })
+    Links 4: Links(Links { links: RoaringBitmap<[2, 4, 5]> })
+    Links 4: Links(Links { links: RoaringBitmap<[2]> })
+    Links 5: Links(Links { links: RoaringBitmap<[4]> })
+    Item 0: Item(Item { header: NodeHeaderEuclidean { bias: "0.0000" }, vector: [0.0000, 0.0000] })
+    Item 2: Item(Item { header: NodeHeaderEuclidean { bias: "0.0000" }, vector: [2.0000, 0.0000] })
+    Item 4: Item(Item { header: NodeHeaderEuclidean { bias: "0.0000" }, vector: [4.0000, 0.0000] })
+    Item 5: Item(Item { header: NodeHeaderEuclidean { bias: "0.0000" }, vector: [5.0000, 0.0000] })
+    "#);
 }
 
 proptest! {
