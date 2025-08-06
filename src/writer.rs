@@ -1,7 +1,8 @@
+use std::any::TypeId;
 use std::path::PathBuf;
 
 use heed::types::{DecodeIgnore, Unit};
-use heed::{RoTxn, RwTxn};
+use heed::{PutFlags, RoTxn, RwTxn};
 use rand::{Rng, SeedableRng};
 use roaring::RoaringBitmap;
 
@@ -9,7 +10,7 @@ use crate::distance::Distance;
 use crate::hnsw::HnswBuilder;
 use crate::internals::KeyCodec;
 use crate::item_iter::ItemIter;
-use crate::node::{Item, ItemIds, Links};
+use crate::node::{Item, ItemIds, Links, NodeCodec};
 use crate::parallel::{ImmutableItems, ImmutableLinks};
 use crate::reader::get_item;
 use crate::unaligned_vector::UnalignedVector;
@@ -80,6 +81,49 @@ impl<D: Distance> Writer<D> {
     pub fn new(database: Database<D>, index: u16, dimensions: usize) -> Writer<D> {
         let database: Database<D> = database.remap_data_type();
         Writer { database, index, dimensions, tmpdir: None }
+    }
+
+    /// Returns a writer after having deleted the tree nodes and rewrote all the items
+    /// for the new [`Distance`] format to be able to modify items safely.
+    pub fn prepare_changing_distance<ND: Distance>(self, wtxn: &mut RwTxn) -> Result<Writer<ND>> {
+        if TypeId::of::<ND>() != TypeId::of::<D>() {
+            // If we are moving from a distance to the same but binary quantized
+            // distance we do not need to clear links, otherwise we do.
+            if ND::name()
+                .strip_prefix("binary quantized ")
+                .map_or(true, |raw_name| raw_name != D::name())
+            {
+                clear_links(wtxn, self.database, self.index)?;
+            }
+
+            let mut cursor = self
+                .database
+                .remap_key_type::<PrefixCodec>()
+                .prefix_iter_mut(wtxn, &Prefix::item(self.index))?
+                .remap_key_type::<KeyCodec>();
+
+            while let Some((item_id, node)) = cursor.next().transpose()? {
+                match node {
+                    Node::Item(Item { header: _, vector }) => {
+                        let vector = vector.to_vec();
+                        let vector = UnalignedVector::from_vec(vector);
+                        let new_leaf = Node::Item(Item { header: ND::new_header(&vector), vector });
+                        unsafe {
+                            // safety: We do not keep a reference to the current value, we own it.
+                            cursor.put_current_with_options::<NodeCodec<ND>>(
+                                PutFlags::empty(),
+                                &item_id,
+                                &new_leaf,
+                            )?
+                        };
+                    }
+                    Node::Links(_) => panic!(),
+                }
+            }
+        }
+
+        let Writer { database, index, dimensions, tmpdir } = self;
+        Ok(Writer { database: database.remap_data_type(), index, dimensions, tmpdir })
     }
 
     pub fn set_tmpdir(&mut self, path: impl Into<PathBuf>) {
@@ -318,4 +362,20 @@ impl<'a, D: Distance> FrozenReader<'a, D> {
         // key is a `Key::item` so returned result must be a Node::Item
         self.links.get(item_id, level as u8)?.ok_or(Error::missing_key(key))
     }
+}
+
+/// Clears all the links. Starts from the last node and stops at the first leaf.
+fn clear_links<D: Distance>(wtxn: &mut RwTxn, database: Database<D>, index: u16) -> Result<()> {
+    database.delete(wtxn, &Key::metadata(index))?;
+    let mut cursor = database
+        .remap_types::<PrefixCodec, DecodeIgnore>()
+        .prefix_iter_mut(wtxn, &Prefix::links(index))?
+        .remap_key_type::<DecodeIgnore>();
+
+    while let Some((_id, _node)) = cursor.next().transpose()? {
+        // safety: we keep no reference into the database between operations
+        unsafe { cursor.del_current()? };
+    }
+
+    Ok(())
 }
