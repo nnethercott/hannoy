@@ -139,17 +139,18 @@ impl<'a, D: Distance, const M: usize, const M0: usize> HnswBuilder<'a, D, M, M0>
         let lmdb = FrozenReader { index, items: &items, links: &links };
 
         // Generate a random level for each point
-        let mut local_max_level = usize::MIN;
+        let mut cur_max_level = usize::MIN;
         let mut levels: Vec<_> = to_insert
             .iter()
             .map(|item_id| {
                 let level = self.get_random_level(rng);
-                local_max_level = local_max_level.max(level);
+                cur_max_level = cur_max_level.max(level);
                 (item_id, level)
             })
             .collect();
 
-        let ok_eps = self.prepare_entry_points(&mut levels, local_max_level, to_delete, &lmdb)?;
+        let ok_eps =
+            self.prepare_levels_and_entry_points(&mut levels, cur_max_level, to_delete, &lmdb)?;
         to_insert |= ok_eps;
 
         let level_groups: Vec<_> = levels.chunk_by(|(_, la), (_, lb)| la == lb).collect();
@@ -201,37 +202,43 @@ impl<'a, D: Distance, const M: usize, const M0: usize> HnswBuilder<'a, D, M, M0>
     /// This function resolves several nasty edge cases that can occur, namely : deleted
     /// or partially deleted entrypoints, new indexed points assigned to higher layers, ensuring
     /// entry points are present on all layers before build
-    fn prepare_entry_points(
+    fn prepare_levels_and_entry_points(
         &mut self,
         levels: &mut Vec<(u32, usize)>,
-        local_max_level: usize,
+        cur_max_level: usize,
         to_delete: &RoaringBitmap,
         lmdb: &FrozenReader<D>,
     ) -> Result<RoaringBitmap> {
         let old_eps = RoaringBitmap::from_iter(self.entry_points.iter());
         let mut ok_eps = &old_eps - to_delete;
 
-        let promote_point = |item_id: u32, bitmap: &mut RoaringBitmap| {
+        // If any old entry points were deleted we need to replace them with valid points in the
+        // new graph
+        for _ in (old_eps & to_delete).iter() {
+            let mut l = self.max_level;
             loop {
-                todo!()
-                // stop condition is when we exhaust neighbours or find a valid one
-            }
-        };
+                for ((item_id, _), _) in lmdb.links.iter_layer(l as u8) {
+                    if !to_delete.contains(item_id) && ok_eps.insert(item_id) {
+                        break;
+                    }
+                }
 
-        for root in (old_eps & to_delete).iter() {
-            promote_point(root, &mut ok_eps);
+                // no points found in layer, continue to next one
+                l = match l.checked_sub(1) {
+                    Some(new_level) => new_level,
+                    None => break,
+                };
+            }
         }
 
-        // If re-indexing new points and a random level is higher than before, then we need to clear the
-        // previous `entry_points`. However, to ensure the old graph gets updated we need to
-        // schedule these ids for re-indexing, otherwise we end up building a completely isolated
-        // sub-graph.
+        // Schedule old entry point ids for re-indexing, otherwise we end up building a completely
+        // isolated sub-graph.
         levels.extend(ok_eps.iter().map(|id| (id, self.max_level)));
 
-        if local_max_level > self.max_level {
+        if cur_max_level > self.max_level {
             self.entry_points.clear();
         }
-        self.max_level = self.max_level.max(local_max_level);
+        self.max_level = self.max_level.max(cur_max_level);
         for _ in 0..=self.max_level {
             self.layers.push(HashMap::new());
         }

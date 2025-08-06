@@ -81,7 +81,6 @@ pub struct ImmutableLinks<'t, D> {
     _marker: marker::PhantomData<(&'t (), D)>,
 }
 
-
 impl<'t, D: Distance> ImmutableLinks<'t, D> {
     /// Creates the structure by fetching all the root pointers
     /// and keeping the transaction making the pointers valid.
@@ -133,6 +132,25 @@ impl<'t, D: Distance> ImmutableLinks<'t, D> {
                 _ => panic!("fix me later"),
             };
             (k, links)
+        })
+    }
+
+    /// `Iter`s only over links in a given level
+    pub fn iter_layer(
+        &self,
+        layer: u8,
+    ) -> impl Iterator<Item = ((ItemId, u8), Cow<'_, RoaringBitmap>)> {
+        self.links.keys().filter_map(move |&k| {
+            let (item_id, level) = k;
+            if level != layer {
+                return None;
+            }
+
+            let links = match self.get(item_id, level) {
+                Ok(Some(Links { links })) => links,
+                _ => panic!("fix me later"),
+            };
+            Some((k, links))
         })
     }
 }

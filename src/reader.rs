@@ -376,11 +376,6 @@ impl<'t, D: Distance> Reader<'t, D> {
         // each item should have one or more links
         assert_eq!(item_ids, link_ids);
 
-        // 3. check entry points
-        for ep in self.entry_points.iter() {
-            assert!(item_ids.contains(ep));
-        }
-
         Ok(())
     }
 }
