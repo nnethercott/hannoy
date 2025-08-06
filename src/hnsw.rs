@@ -3,6 +3,8 @@ use std::cmp::Reverse;
 use std::collections::BinaryHeap;
 use std::fmt::{self, Debug};
 use std::marker::PhantomData;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering::Relaxed;
 use std::{f32, panic};
 
 use heed::RwTxn;
@@ -22,7 +24,7 @@ use crate::ordered_float::OrderedFloat;
 use crate::parallel::{ImmutableItems, ImmutableLinks};
 use crate::stats::BuildStats;
 use crate::writer::{BuildOption, FrozenReader};
-use crate::{Database, Distance, Error, ItemId, Result};
+use crate::{Database, Distance, Error, ItemId, Result, CANCELLATION_PROBING};
 
 // TODO:
 // - add dedicated 0th layer with M0 and fix corresponding code
@@ -55,22 +57,24 @@ impl<const M: usize> Debug for NodeState<M> {
     }
 }
 
-pub struct HnswBuilder<D, const M: usize, const M0: usize> {
+pub struct HnswBuilder<'a, D, const M: usize, const M0: usize> {
     assign_probas: Vec<f32>,
     ef_construction: usize,
+    cancel: &'a (dyn Fn() -> bool + 'a + Sync + Send),
     pub max_level: usize,
     pub entry_points: Vec<ItemId>,
     pub layers: Vec<HashMap<ItemId, NodeState<M0>>>,
     distance: PhantomData<D>,
 }
 
-impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
-    pub fn new(opts: &BuildOption) -> Self {
+impl<'a, D: Distance, const M: usize, const M0: usize> HnswBuilder<'a, D, M, M0> {
+    pub fn new(opts: &'a BuildOption) -> Self {
         let assign_probas = Self::get_default_probas();
 
         Self {
             assign_probas,
             ef_construction: opts.ef_construction,
+            cancel: &opts.cancel,
             max_level: 0,
             entry_points: Vec::new(),
             layers: vec![],
@@ -179,20 +183,33 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
         let level_groups: Vec<_> = levels.chunk_by(|(_, la), (_, lb)| la == lb).collect();
 
         // insert layers L...0 multi-threaded
-        // FIXME: fix error handling here, previously was source of bug
-        level_groups.into_iter().for_each(|grp| {
-            grp.into_par_iter().for_each(|&(item_id, lvl)| {
-                self.insert(item_id, lvl, &lmdb, &build_stats).unwrap();
-            });
+        let cancel_index = AtomicUsize::new(0);
+        level_groups.into_iter().try_for_each(|grp| {
+            grp.into_par_iter().try_for_each(|&(item_id, lvl)| {
+                if cancel_index.fetch_add(1, Relaxed) % CANCELLATION_PROBING == 0 && (self.cancel)()
+                {
+                    Err(Error::BuildCancelled)
+                } else {
+                    self.insert(item_id, lvl, &lmdb, &build_stats)?;
+                    Ok(())
+                }
+            })?;
 
             build_stats.layer_dist.insert(grp[0].1, grp.len());
-        });
+
+            Ok(()) as Result<(), Error>
+        })?;
 
         self.maybe_patch_old_links(&lmdb, to_delete)?;
 
         // single-threaded write to lmdb
+        let mut cancellation_index = 0;
         for lvl in 0..=self.max_level {
             for (item_id, node_state) in &self.layers[lvl].pin() {
+                if cancellation_index % CANCELLATION_PROBING == 0 && (self.cancel)() {
+                    return Err(Error::BuildCancelled);
+                }
+
                 let key = Key::links(index, *item_id, lvl as u8);
                 let links = Links {
                     links: Cow::Owned(RoaringBitmap::from_iter(
@@ -201,6 +218,7 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
                 };
 
                 database.put(wtxn, &key, &Node::Links(links))?;
+                cancellation_index += 1;
             }
         }
 
@@ -268,7 +286,11 @@ impl<D: Distance, const M: usize, const M0: usize> HnswBuilder<D, M, M0> {
         let links_in_db =
             lmdb.links.iter().map(|((id, lvl), v)| ((id, lvl as usize), v.into_owned()));
 
-        for ((id, lvl), links) in links_in_db {
+        for (index, ((id, lvl), links)) in links_in_db.into_iter().enumerate() {
+            if index % CANCELLATION_PROBING == 0 && (self.cancel)() {
+                return Err(Error::BuildCancelled);
+            }
+
             let del_subset = &links & &to_delete;
             let map_guard = self.layers[lvl].pin();
             let mut new_links =
@@ -506,7 +528,8 @@ mod tests {
     // should be like: https://www.pinecone.io/learn/series/faiss/hnsw/
     fn check_distribution_shape() {
         let mut rng = StdRng::seed_from_u64(42);
-        let mut hnsw = HnswBuilder::<Cosine, 32, 48>::new(&BuildOption::default());
+        let build_option = BuildOption::default();
+        let mut hnsw = HnswBuilder::<Cosine, 32, 48>::new(&build_option);
 
         let mut bins = HashMap::new();
         (0..10000).for_each(|_| {

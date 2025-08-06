@@ -16,30 +16,40 @@ use crate::unaligned_vector::UnalignedVector;
 use crate::version::{Version, VersionCodec};
 use crate::{
     Database, Error, ItemId, Key, Metadata, MetadataCodec, Node, Prefix, PrefixCodec, Result,
+    CANCELLATION_PROBING,
 };
 
 /// The options available when building the arroy database.
 pub struct HannoyBuilder<'a, D: Distance, R: Rng + SeedableRng> {
     writer: &'a Writer<D>,
     rng: &'a mut R,
-    inner: BuildOption,
+    inner: BuildOption<'a>,
 }
 
 /// The options available when building the arroy database.
-pub(crate) struct BuildOption {
+pub(crate) struct BuildOption<'a> {
     pub(crate) ef_construction: usize,
     pub(crate) available_memory: Option<usize>,
+    pub(crate) cancel: Box<dyn Fn() -> bool + 'a + Sync + Send>,
 }
 
-impl Default for BuildOption {
+impl Default for BuildOption<'_> {
     fn default() -> Self {
-        Self { ef_construction: 100, available_memory: None }
+        Self { ef_construction: 100, available_memory: None, cancel: Box::new(|| false) }
     }
 }
 
-impl<D: Distance, R: Rng + SeedableRng> HannoyBuilder<'_, D, R> {
+impl<'a, D: Distance, R: Rng + SeedableRng> HannoyBuilder<'a, D, R> {
     pub fn available_memory(&mut self, memory: usize) -> &mut Self {
         self.inner.available_memory = Some(memory);
+        self
+    }
+
+    /// Provide a closure that can cancel the indexing process early if needed. There is no guarantee on when the process is going to cancel itself, but hannoy will try to stop as soon as possible once the closure returns true.
+    ///
+    /// Since the closure is not mutable and will be called from multiple threads at the same time it’s encouraged to make it quick to execute. A common way to use it is to fetch an AtomicBool inside it that can be set from another thread without lock.
+    pub fn cancel(&mut self, cancel: impl Fn() -> bool + 'a + Sync + Send) -> &mut Self {
+        self.inner.cancel = Box::new(cancel);
         self
     }
 
@@ -237,7 +247,7 @@ impl<D: Distance> Writer<D> {
     fn reset_and_retrieve_updated_items(
         &self,
         wtxn: &mut RwTxn,
-        _options: &BuildOption,
+        options: &BuildOption,
     ) -> Result<RoaringBitmap, Error> {
         tracing::debug!("reset and retrieve the updated items...");
         let mut updated_items = RoaringBitmap::new();
@@ -246,28 +256,41 @@ impl<D: Distance> Writer<D> {
             .remap_types::<PrefixCodec, DecodeIgnore>()
             .prefix_iter_mut(wtxn, &Prefix::updated(self.index))?
             .remap_key_type::<KeyCodec>();
+
+        let mut index = 0;
         while let Some((key, _)) = updated_iter.next().transpose()? {
+            if index % CANCELLATION_PROBING == 0 && (options.cancel)() {
+                return Err(Error::BuildCancelled);
+            }
+
             let inserted = updated_items.push(key.node.item);
             debug_assert!(inserted, "The keys should be sorted by LMDB");
             // Safe because we don't hold any reference to the database currently
             unsafe {
                 updated_iter.del_current()?;
             }
+
+            index += 1;
         }
         Ok(updated_items)
     }
 
     // Fetches the item's ids, not the tree nodes ones.
-    fn item_indices(&self, wtxn: &mut RwTxn, _options: &BuildOption) -> Result<RoaringBitmap> {
+    fn item_indices(&self, wtxn: &mut RwTxn, options: &BuildOption) -> Result<RoaringBitmap> {
         tracing::debug!("started retrieving all the items ids...");
 
         let mut indices = RoaringBitmap::new();
-        for result in self
+        for (index, result) in self
             .database
             .remap_types::<PrefixCodec, DecodeIgnore>()
             .prefix_iter(wtxn, &Prefix::item(self.index))?
             .remap_key_type::<KeyCodec>()
+            .enumerate()
         {
+            if index % CANCELLATION_PROBING == 0 && (options.cancel)() {
+                return Err(Error::BuildCancelled);
+            }
+
             let (i, _) = result?;
             indices.push(i.node.unwrap_item());
         }

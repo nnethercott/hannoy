@@ -22,17 +22,15 @@ mod unaligned_vector;
 
 pub use distance::Distance;
 pub use error::Error;
-pub use reader::{QueryBuilder, Reader};
-pub use writer::{HannoyBuilder, Writer};
-
 use key::{Key, Prefix, PrefixCodec};
 use metadata::{Metadata, MetadataCodec};
 use node::{Node, NodeCodec};
 use node_id::{NodeId, NodeMode};
+pub use reader::{QueryBuilder, Reader};
+pub use writer::{HannoyBuilder, Writer};
 
 /// The set of types used by the [`Distance`] trait.
 pub mod internals {
-
     pub use crate::distance::{
         NodeHeaderBinaryQuantizedCosine, NodeHeaderCosine, NodeHeaderEuclidean,
     };
@@ -58,3 +56,6 @@ pub type Database<D> = heed::Database<internals::KeyCodec, NodeCodec<D>>;
 /// An identifier for the items stored in the database.
 pub type ItemId = u32;
 pub type LayerId = u8;
+
+/// The number of iterations to process before checking if the indexing process should be cancelled.
+const CANCELLATION_PROBING: usize = 10000;
