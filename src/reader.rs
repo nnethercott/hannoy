@@ -18,6 +18,9 @@ use crate::unaligned_vector::UnalignedVector;
 use crate::version::{Version, VersionCodec};
 use crate::{Database, Error, ItemId, Key, MetadataCodec, Node, Prefix, PrefixCodec, Result};
 
+/// A good default value for the `ef` parameter.
+const DEFAULT_EF_SEARCH: usize = 100;
+
 /// Options used to make a query against an arroy [`Reader`].
 pub struct QueryBuilder<'a, D: Distance> {
     reader: &'a Reader<'a, D>,
@@ -233,7 +236,7 @@ impl<'t, D: Distance> Reader<'t, D> {
     ///
     /// You must provide the number of items you want to receive.
     pub fn nns(&self, count: usize) -> QueryBuilder<D> {
-        QueryBuilder { reader: self, candidates: None, count, ef: count }
+        QueryBuilder { reader: self, candidates: None, count, ef: DEFAULT_EF_SEARCH }
     }
 
     /// Get a generic read node from the database using the version of the database found while creating the reader.
