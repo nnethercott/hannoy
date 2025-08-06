@@ -164,7 +164,24 @@ impl<'a, D: Distance> BytesDecode<'a> for NodeCodec<D> {
                 Ok(Node::Links(Links { links }))
             }
 
-            unknown => panic!("Did not recognize node tag type: {unknown:?}"),
+            [unknown_tag, ..] => {
+                Err(Box::new(InvalidNodeDecoding { unknown_tag: Some(*unknown_tag) }))
+            }
+            [] => Err(Box::new(InvalidNodeDecoding { unknown_tag: None })),
+        }
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub struct InvalidNodeDecoding {
+    unknown_tag: Option<u8>,
+}
+
+impl fmt::Display for InvalidNodeDecoding {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.unknown_tag {
+            Some(unknown_tag) => write!(f, "Invalid node decoding: unknown tag {unknown_tag}"),
+            None => write!(f, "Invalid node decoding: empty array of bytes"),
         }
     }
 }
