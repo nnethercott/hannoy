@@ -324,11 +324,11 @@ impl<'a, D: Distance, const M: usize, const M0: usize> HnswBuilder<'a, D, M, M0>
 
             let del_subset = &links & to_delete;
             let map_guard = self.layers[lvl].pin();
-            let mut links_to_new =
+            let mut new_links =
                 map_guard.get(&id).map(|state| state.links.to_vec()).unwrap_or_default();
 
             // no work to be done, continue
-            if del_subset.is_empty() && links_to_new.is_empty() {
+            if del_subset.is_empty() && new_links.is_empty() {
                 continue;
             }
 
@@ -343,9 +343,9 @@ impl<'a, D: Distance, const M: usize, const M0: usize> HnswBuilder<'a, D, M, M0>
             // NOTE: Same setup as general layer exploration, could generalize this bit
             for other in bitmap {
                 let dist = D::distance(&lmdb.get_item(id)?, &lmdb.get_item(other)?);
-                links_to_new.push((OrderedFloat(dist), other));
+                new_links.push((OrderedFloat(dist), other));
             }
-            let pruned = self.select_sng(links_to_new, lvl, false, lmdb)?;
+            let pruned = self.select_sng(new_links, lvl, false, lmdb)?;
             let _ = map_guard.insert(id, NodeState { links: ArrayVec::from_iter(pruned) });
         }
 
