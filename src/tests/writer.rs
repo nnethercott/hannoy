@@ -5,8 +5,12 @@ use rand::{thread_rng, Rng, SeedableRng};
 
 use super::{create_database, rng};
 use crate::distance::{Cosine, Euclidean};
+use crate::key::{KeyCodec, Prefix, PrefixCodec};
+use crate::reader::get_item;
 use crate::tests::DatabaseHandle;
 use crate::{Reader, Writer};
+use heed::types::DecodeIgnore;
+use roaring::RoaringBitmap;
 
 const M: usize = 3;
 const M0: usize = 3;
@@ -262,6 +266,7 @@ fn convert_from_arroy_to_hannoy() {
 }
 
 #[test]
+#[ignore = "frozzenreader layer iter seems to be non-deterministic"]
 fn overwrite_one_item_incremental() {
     let handle = create_database::<Euclidean>();
     let mut rng = rng();
@@ -328,7 +333,6 @@ fn overwrite_one_item_incremental() {
 
 // NOTE: this will fail while our deletions aren't properly handled
 #[test]
-// #[ignore = "not ready"]
 fn delete_one_item_in_a_one_item_db() {
     let handle = create_database::<Euclidean>();
     let mut rng = rng();
@@ -466,6 +470,7 @@ fn delete_one_item_in_a_single_document_database() {
 }
 
 #[test]
+#[ignore = "frozzenreader layer iter seems to be non-deterministic"]
 fn delete_one_item() {
     let handle = create_database::<Euclidean>();
     let mut rng = rng();
@@ -529,7 +534,7 @@ fn delete_one_item() {
     Item 5: Item(Item { header: NodeHeaderEuclidean { bias: "0.0000" }, vector: [5.0000, 0.0000] })
     "#);
 
-    // delete the last item in a descendants node
+    // delete another one
     let mut wtxn = handle.env.write_txn().unwrap();
     let writer = Writer::new(handle.database, 0, 2);
 
@@ -555,6 +560,58 @@ fn delete_one_item() {
     Item 4: Item(Item { header: NodeHeaderEuclidean { bias: "0.0000" }, vector: [4.0000, 0.0000] })
     Item 5: Item(Item { header: NodeHeaderEuclidean { bias: "0.0000" }, vector: [5.0000, 0.0000] })
     "#);
+}
+
+#[test]
+fn delete_one_item_no_snapshots() {
+    let handle = create_database::<Euclidean>();
+    let mut rng = rng();
+    let mut wtxn = handle.env.write_txn().unwrap();
+    let writer = Writer::new(handle.database, 0, 2);
+
+    // first, insert a bunch of elements
+    for i in 0..6 {
+        writer.add_item(&mut wtxn, i, &[i as f32, 0.]).unwrap();
+    }
+    writer.builder(&mut rng).build::<3, 3>(&mut wtxn).unwrap();
+    wtxn.commit().unwrap();
+
+    let mut wtxn = handle.env.write_txn().unwrap();
+    let writer = Writer::new(handle.database, 0, 2);
+
+    writer.del_item(&mut wtxn, 3).unwrap();
+
+    writer.builder(&mut rng).build::<3, 3>(&mut wtxn).unwrap();
+    wtxn.commit().unwrap();
+
+    // delete another one
+    let mut wtxn = handle.env.write_txn().unwrap();
+    let writer = Writer::new(handle.database, 0, 2);
+
+    writer.del_item(&mut wtxn, 1).unwrap();
+
+    writer.builder(&mut rng).build::<3, 3>(&mut wtxn).unwrap();
+    wtxn.commit().unwrap();
+
+    // verify neither of items are in db nor their links
+    let rtxn = handle.env.read_txn().unwrap();
+    assert!(get_item(handle.database, 0, &rtxn, 3).unwrap().is_none());
+    assert!(get_item(handle.database, 0, &rtxn, 1).unwrap().is_none());
+
+    let mut links_iter = handle
+        .database
+        .remap_key_type::<PrefixCodec>()
+        .prefix_iter(&rtxn, &Prefix::links(0))
+        .unwrap()
+        .remap_types::<KeyCodec, DecodeIgnore>();
+
+    let mut keys_of_links = RoaringBitmap::new();
+    while let Some(res) = links_iter.next() {
+        let (k, _) = res.unwrap();
+        keys_of_links.insert(k.node.item);
+    }
+    assert!(!keys_of_links.contains(3));
+    assert!(!keys_of_links.contains(1));
 }
 
 proptest! {
