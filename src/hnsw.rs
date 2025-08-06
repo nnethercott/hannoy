@@ -77,7 +77,7 @@ impl<'a, D: Distance, const M: usize, const M0: usize> HnswBuilder<'a, D, M, M0>
             cancel: &opts.cancel,
             max_level: 0,
             entry_points: Vec::new(),
-            layers: vec![],
+            layers: vec![HashMap::new()],
             distance: PhantomData,
         }
     }
@@ -229,6 +229,10 @@ impl<'a, D: Distance, const M: usize, const M0: usize> HnswBuilder<'a, D, M, M0>
                     None => break,
                 };
             }
+        }
+        if ok_eps.is_empty() {
+            // If the loop above added no points, we must have deleted the entire prev graph!
+            self.max_level = 0;
         }
 
         // Schedule old entry point ids for re-indexing, otherwise we end up building a completely
