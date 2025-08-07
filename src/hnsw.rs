@@ -433,10 +433,8 @@ impl<'a, D: Distance, const M: usize, const M0: usize> HnswBuilder<'a, D, M, M0>
                 // in which case its OK not to explore it
                 let item = match lmdb.get_item(point) {
                     Ok(item) => item,
-                    Err(Error::MissingKey { .. }) => {
-                        continue;
-                    }
-                    Err(e) => panic!("{}", e),
+                    Err(Error::MissingKey { .. }) => continue,
+                    Err(e) => panic!("{e}"),
                 };
                 let dist = D::distance(query, &item);
 

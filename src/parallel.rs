@@ -131,7 +131,10 @@ impl<'t, D: Distance> ImmutableLinks<'t, D> {
 
             let links = match self.get(item_id, level) {
                 Ok(Some(Links { links })) => links,
-                _ => panic!("fix me later"),
+                Ok(None) => {
+                    unreachable!("link at level {level} with item_id {item_id} not found")
+                }
+                Err(e) => panic!("{e}"),
             };
             (k, links)
         })
@@ -150,7 +153,10 @@ impl<'t, D: Distance> ImmutableLinks<'t, D> {
 
             let links = match self.get(item_id, level) {
                 Ok(Some(Links { links })) => links,
-                _ => panic!("fix me later"),
+                Ok(None) => {
+                    unreachable!("link at level {level} with item_id {item_id} not found")
+                }
+                Err(e) => panic!("{e}"),
             };
             Some((k, links))
         })
