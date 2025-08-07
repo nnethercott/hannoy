@@ -3,7 +3,13 @@ name = "hannoy"
 description = "HNSW Approximate Nearest Neighbors in Rust, based on LMDB and optimized for memory usage"
 version = "0.0.2"
 repository = "https://github.com/nnethercott/hannoy"
-keywords = ["HNSW", "Graph-algorithms", "Vector-Search", "Store", "Nearest-Neighbours"]
+keywords = [
+    "HNSW",
+    "Graph-algorithms",
+    "Vector-Search",
+    "Store",
+    "Nearest-Neighbours",
+]
 categories = ["algorithms", "database", "data-structures", "science"]
 authors = [
     "Kerollmops <clement@meilisearch.com>",
@@ -30,7 +36,9 @@ tinyvec = { version = "1.9.0", features = ["rustc_1_55"] }
 
 [dev-dependencies]
 anyhow = "1.0.95"
+approx = "0.5.1"
 arbitrary = { version = "1.4.1", features = ["derive"] }
+arroy = "0.6.1"
 clap = { version = "4.5.24", features = ["derive"] }
 env_logger = "0.11.6"
 insta = "1.42.0"
