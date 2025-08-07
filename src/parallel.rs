@@ -6,6 +6,7 @@ use hashbrown::HashMap;
 use heed::types::Bytes;
 use heed::{BytesDecode, RoTxn};
 use roaring::RoaringBitmap;
+use rustc_hash::FxBuildHasher;
 
 use crate::internals::{Item, KeyCodec};
 use crate::key::{Prefix, PrefixCodec};
@@ -18,7 +19,7 @@ use crate::{Database, Distance, ItemId, LayerId};
 /// in the mmapped file and the transaction is kept here and therefore
 /// no longer touches the database.
 pub struct ImmutableItems<'t, D> {
-    items: HashMap<ItemId, *const u8>,
+    items: HashMap<ItemId, *const u8, FxBuildHasher>,
     constant_length: Option<usize>,
     _marker: marker::PhantomData<(&'t (), D)>,
 }
@@ -33,7 +34,8 @@ impl<'t, D: Distance> ImmutableItems<'t, D> {
     /// Do not take more items than memory allows.
     /// Remove from the list of candidates all the items that were selected and return them.
     pub fn new(rtxn: &'t RoTxn, database: Database<D>, index: u16) -> heed::Result<Self> {
-        let mut map = HashMap::with_capacity(database.len(rtxn)? as usize);
+        let mut map =
+            HashMap::with_capacity_and_hasher(database.len(rtxn)? as usize, FxBuildHasher);
         let mut constant_length = None;
 
         let cursor = database
@@ -77,7 +79,7 @@ unsafe impl<D> Sync for ImmutableItems<'_, D> {}
 /// in the mmapped file and the transaction is kept here and therefore
 /// no longer touches the database.
 pub struct ImmutableLinks<'t, D> {
-    links: HashMap<(u32, u8), (usize, *const u8)>,
+    links: HashMap<(u32, u8), (usize, *const u8), FxBuildHasher>,
     _marker: marker::PhantomData<(&'t (), D)>,
 }
 
@@ -90,7 +92,7 @@ impl<'t, D: Distance> ImmutableLinks<'t, D> {
         index: u16,
         nb_links: u64,
     ) -> heed::Result<Self> {
-        let mut links = HashMap::with_capacity(nb_links as usize);
+        let mut links = HashMap::with_capacity_and_hasher(nb_links as usize, FxBuildHasher);
 
         let iter = database
             .remap_types::<PrefixCodec, Bytes>()
