@@ -315,7 +315,7 @@ impl<'a, D: Distance, const M: usize, const M0: usize> HnswBuilder<'a, D, M, M0>
     /// deleted items.
     /// Algorithm 4 from FreshDiskANN paper.
     fn maybe_patch_old_links(
-        &self,
+        &mut self,
         lmdb: &FrozenReader<D>,
         to_delete: &RoaringBitmap,
     ) -> Result<()> {
@@ -332,11 +332,14 @@ impl<'a, D: Distance, const M: usize, const M0: usize> HnswBuilder<'a, D, M, M0>
             }
 
             let del_subset = &links & to_delete;
-            let Some(map) = self.layers.get(lvl) else { continue };
-            let map_guard = map.pin();
 
-            let mut new_links =
-                map_guard.get(&id).map(|state| state.links.to_vec()).unwrap_or_default();
+            // Resize the layers if necessary
+            if self.layers.len() <= lvl {
+                self.layers.resize_with(lvl + 1, HashMap::new);
+            }
+
+            let map_guard = self.layers[lvl].pin();
+            let mut new_links = map_guard.get(&id).map(|s| s.links.to_vec()).unwrap_or_default();
 
             // no work to be done, continue
             if del_subset.is_empty() && new_links.is_empty() {
