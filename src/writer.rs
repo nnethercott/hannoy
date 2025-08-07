@@ -112,6 +112,7 @@ impl<D: Distance> Writer<D> {
                 Ok((Key { .. }, _)) | Err(heed::Error::Decoding(_)) => unsafe {
                     // Every other entry that fails to decode can be considered as something
                     // else than an item, is useless for the conversion and is deleted.
+                    // SAFETY: Safe because we don't keep any references to the entry
                     iter.del_current()?;
                 },
                 // If there is another error (lmdb...), it is returned.
@@ -272,7 +273,7 @@ impl<D: Distance> Writer<D> {
             .remap_types::<DecodeIgnore, DecodeIgnore>();
 
         while let Some((_id, _node)) = cursor.next().transpose()? {
-            // safety: we don't have any reference to the database
+            // SAFETY: Safe because we don't keep any references to the entry
             unsafe { cursor.del_current() }?;
         }
 
@@ -314,8 +315,13 @@ impl<D: Distance> Writer<D> {
             .with_entry_points(entry_points)
             .with_max_level(max_level);
 
-        let stats = hnsw.build(to_insert, to_delete, self.database, self.index, wtxn, rng)?;
+        let stats = hnsw.build(to_insert, &to_delete, self.database, self.index, wtxn, rng)?;
         tracing::info!("{stats:?}");
+
+        // Remove deleted links from lmdb AFTER build; in DiskANN we use a deleted item's
+        // neighbours when filling in the "gaps" left in the graph from deletions. See
+        // [`HnswBuilder::maybe_patch_old_links`] for more details.
+        self.delete_links_from_db(to_delete, wtxn)?;
 
         tracing::debug!("write the metadata...");
         let metadata = Metadata {
@@ -360,10 +366,8 @@ impl<D: Distance> Writer<D> {
 
             let inserted = updated_items.push(key.node.item);
             debug_assert!(inserted, "The keys should be sorted by LMDB");
-            // Safe because we don't hold any reference to the database currently
-            unsafe {
-                updated_iter.del_current()?;
-            }
+            // SAFETY: Safe because we don't hold any reference to the database currently
+            unsafe { updated_iter.del_current()? };
 
             index += 1;
         }
@@ -391,6 +395,25 @@ impl<D: Distance> Writer<D> {
         }
 
         Ok(indices)
+    }
+
+    // Iterates over links in lmdb and deletes those in `to_delete`. There can be several links
+    // with the same NodeId.item, each differing by their layer
+    fn delete_links_from_db(&self, to_delete: RoaringBitmap, wtxn: &mut RwTxn) -> Result<()> {
+        let mut cursor = self
+            .database
+            .remap_key_type::<PrefixCodec>()
+            .prefix_iter_mut(wtxn, &Prefix::links(self.index))?
+            .remap_types::<KeyCodec, DecodeIgnore>();
+
+        while let Some((key, _)) = cursor.next().transpose()? {
+            if to_delete.contains(key.node.item) {
+                // SAFETY: Safe because we don't keep any references to the entry
+                unsafe { cursor.del_current() }?;
+            }
+        }
+
+        Ok(())
     }
 }
 
@@ -424,7 +447,7 @@ fn clear_links<D: Distance>(wtxn: &mut RwTxn, database: Database<D>, index: u16)
         .remap_key_type::<DecodeIgnore>();
 
     while let Some((_id, _node)) = cursor.next().transpose()? {
-        // safety: we keep no reference into the database between operations
+        // SAFETY: Safe because we don't keep any references to the entry
         unsafe { cursor.del_current()? };
     }
 

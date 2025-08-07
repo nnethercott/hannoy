@@ -1,11 +1,13 @@
-use crate::version::VersionCodec;
-use crate::{Database, Distance, MetadataCodec, NodeCodec, NodeMode, Reader};
+use std::fmt;
+
 use heed::types::LazyDecode;
 use heed::{Env, EnvOpenOptions, WithTls};
 use rand::rngs::StdRng;
 use rand::SeedableRng;
-use std::fmt;
 use tempfile::TempDir;
+
+use crate::version::VersionCodec;
+use crate::{Database, Distance, MetadataCodec, NodeCodec, NodeMode, Reader};
 
 mod writer;
 
