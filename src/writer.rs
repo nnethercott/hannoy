@@ -112,6 +112,7 @@ impl<D: Distance> Writer<D> {
                 Ok((Key { .. }, _)) | Err(heed::Error::Decoding(_)) => unsafe {
                     // Every other entry that fails to decode can be considered as something
                     // else than an item, is useless for the conversion and is deleted.
+                    // SAFETY: Safe because we don't keep any references to the entry
                     iter.del_current()?;
                 },
                 // If there is another error (lmdb...), it is returned.
@@ -272,7 +273,7 @@ impl<D: Distance> Writer<D> {
             .remap_types::<DecodeIgnore, DecodeIgnore>();
 
         while let Some((_id, _node)) = cursor.next().transpose()? {
-            // safety: we don't have any reference to the database
+            // SAFETY: Safe because we don't keep any references to the entry
             unsafe { cursor.del_current() }?;
         }
 
@@ -365,10 +366,8 @@ impl<D: Distance> Writer<D> {
 
             let inserted = updated_items.push(key.node.item);
             debug_assert!(inserted, "The keys should be sorted by LMDB");
-            // Safe because we don't hold any reference to the database currently
-            unsafe {
-                updated_iter.del_current()?;
-            }
+            // SAFETY: Safe because we don't hold any reference to the database currently
+            unsafe { updated_iter.del_current()? };
 
             index += 1;
         }
@@ -409,7 +408,7 @@ impl<D: Distance> Writer<D> {
 
         while let Some((key, _)) = cursor.next().transpose()? {
             if to_delete.contains(key.node.item) {
-                // SAFETY: todo !
+                // SAFETY: Safe because we don't keep any references to the entry
                 unsafe { cursor.del_current() }?;
             }
         }
@@ -448,7 +447,7 @@ fn clear_links<D: Distance>(wtxn: &mut RwTxn, database: Database<D>, index: u16)
         .remap_key_type::<DecodeIgnore>();
 
     while let Some((_id, _node)) = cursor.next().transpose()? {
-        // safety: we keep no reference into the database between operations
+        // SAFETY: Safe because we don't keep any references to the entry
         unsafe { cursor.del_current()? };
     }
 
