@@ -77,7 +77,9 @@ impl<D: Distance> fmt::Display for DatabaseHandle<D> {
                         .unwrap();
                     writeln!(f, "Version: {version:?}")?;
                 }
-                NodeMode::Updated | NodeMode::Metadata => panic!(),
+                NodeMode::Updated | NodeMode::Metadata => {
+                    unreachable!("Mode must be an Updated or Metadata")
+                }
             }
         }
 

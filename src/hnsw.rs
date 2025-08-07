@@ -1,11 +1,11 @@
 use std::borrow::Cow;
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
+use std::f32;
 use std::fmt::{self, Debug};
 use std::marker::PhantomData;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering::Relaxed;
-use std::{f32, panic};
 
 use heed::RwTxn;
 use min_max_heap::MinMaxHeap;
@@ -217,7 +217,9 @@ impl<'a, D: Distance, const M: usize, const M0: usize> HnswBuilder<'a, D, M, M0>
         for _ in (old_eps & to_delete).iter() {
             let mut l = self.max_level;
             loop {
-                for ((item_id, _), _) in lmdb.links.iter_layer(l as u8) {
+                for result in lmdb.links.iter_layer(l as u8) {
+                    let ((item_id, _), _) = result?;
+
                     if !to_delete.contains(item_id) && ok_eps.insert(item_id) {
                         break;
                     }
@@ -314,10 +316,14 @@ impl<'a, D: Distance, const M: usize, const M0: usize> HnswBuilder<'a, D, M, M0>
         lmdb: &FrozenReader<D>,
         to_delete: &RoaringBitmap,
     ) -> Result<()> {
-        let links_in_db =
-            lmdb.links.iter().map(|((id, lvl), v)| ((id, lvl as usize), v.into_owned()));
+        let links_in_db = lmdb
+            .links
+            .iter()
+            .map(|result| result.map(|((id, lvl), v)| ((id, lvl as usize), v.into_owned())));
 
-        for (index, ((id, lvl), links)) in links_in_db.into_iter().enumerate() {
+        for (index, result) in links_in_db.into_iter().enumerate() {
+            let ((id, lvl), links) = result?;
+
             if index % CANCELLATION_PROBING == 0 && (self.cancel)() {
                 return Err(Error::BuildCancelled);
             }
@@ -434,7 +440,7 @@ impl<'a, D: Distance, const M: usize, const M0: usize> HnswBuilder<'a, D, M, M0>
                 let item = match lmdb.get_item(point) {
                     Ok(item) => item,
                     Err(Error::MissingKey { .. }) => continue,
-                    Err(e) => panic!("{e}"),
+                    Err(e) => return Err(e),
                 };
                 let dist = D::distance(query, &item);
 
