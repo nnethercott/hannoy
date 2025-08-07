@@ -77,7 +77,7 @@ impl<'a, D: Distance, const M: usize, const M0: usize> HnswBuilder<'a, D, M, M0>
             cancel: &opts.cancel,
             max_level: 0,
             entry_points: Vec::new(),
-            layers: vec![HashMap::new()],
+            layers: vec![],
             distance: PhantomData,
         }
     }
@@ -178,7 +178,10 @@ impl<'a, D: Distance, const M: usize, const M0: usize> HnswBuilder<'a, D, M, M0>
         // Single-threaded write to lmdb
         let mut cancellation_index = 0;
         for lvl in 0..=self.max_level {
-            for (item_id, node_state) in &self.layers[lvl].pin() {
+            let Some(map) = self.layers.get(lvl) else { break };
+            let map_guard = map.pin();
+
+            for (item_id, node_state) in &map_guard {
                 if cancellation_index % CANCELLATION_PROBING == 0 && (self.cancel)() {
                     return Err(Error::BuildCancelled);
                 }
@@ -329,7 +332,9 @@ impl<'a, D: Distance, const M: usize, const M0: usize> HnswBuilder<'a, D, M, M0>
             }
 
             let del_subset = &links & to_delete;
-            let map_guard = self.layers[lvl].pin();
+            let Some(map) = self.layers.get(lvl) else { continue };
+            let map_guard = map.pin();
+
             let mut new_links =
                 map_guard.get(&id).map(|state| state.links.to_vec()).unwrap_or_default();
 
@@ -362,7 +367,8 @@ impl<'a, D: Distance, const M: usize, const M0: usize> HnswBuilder<'a, D, M, M0>
     /// overwriting it's links in mem. This is useful in cases like Vanama build.
     fn add_in_layers_below(&self, item_id: ItemId, level: usize) {
         for level in 0..=level {
-            self.layers[level].pin().get_or_insert(item_id, NodeState { links: array_vec![] });
+            let Some(map) = self.layers.get(level) else { break };
+            map.pin().get_or_insert(item_id, NodeState { links: array_vec![] });
         }
     }
 
@@ -383,7 +389,8 @@ impl<'a, D: Distance, const M: usize, const M0: usize> HnswBuilder<'a, D, M, M0>
         }
 
         // O(1) from self.layers
-        match self.layers[level].pin().get(&item_id) {
+        let Some(map) = self.layers.get(level) else { return Ok(res) };
+        match map.pin().get(&item_id) {
             Some(node_state) => res.extend(node_state.links.iter().map(|(_, i)| *i)),
             None => {
                 if res.is_empty() {
@@ -473,7 +480,8 @@ impl<'a, D: Distance, const M: usize, const M0: usize> HnswBuilder<'a, D, M, M0>
             return Ok(());
         }
 
-        let map = self.layers[level].pin();
+        let Some(map) = self.layers.get(level) else { return Ok(()) };
+        let map_guard = map.pin();
 
         // 'pure' links update function
         let _add_link = |node_state: &NodeState<M0>| {
@@ -493,9 +501,10 @@ impl<'a, D: Distance, const M: usize, const M0: usize> HnswBuilder<'a, D, M, M0>
             NodeState { links: new_links }
         };
 
-        map.update_or_insert_with(p, _add_link, || NodeState {
+        map_guard.update_or_insert_with(p, _add_link, || NodeState {
             links: array_vec!([ScoredLink; M0] => q),
         });
+
         Ok(())
     }
 
