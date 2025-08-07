@@ -69,7 +69,7 @@ impl<D: Distance> BuildStats<D> {
 
             let links = match node {
                 Node::Links(Links { links }) => links,
-                Node::Item(_) => unreachable!(),
+                Node::Item(_) => unreachable!("Node must not be an item"),
             };
 
             total_links += links.len();

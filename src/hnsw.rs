@@ -1,11 +1,11 @@
 use std::borrow::Cow;
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
+use std::f32;
 use std::fmt::{self, Debug};
 use std::marker::PhantomData;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering::Relaxed;
-use std::{f32, panic};
 
 use heed::RwTxn;
 use min_max_heap::MinMaxHeap;
@@ -77,7 +77,7 @@ impl<'a, D: Distance, const M: usize, const M0: usize> HnswBuilder<'a, D, M, M0>
             cancel: &opts.cancel,
             max_level: 0,
             entry_points: Vec::new(),
-            layers: vec![HashMap::new()],
+            layers: vec![],
             distance: PhantomData,
         }
     }
@@ -178,7 +178,10 @@ impl<'a, D: Distance, const M: usize, const M0: usize> HnswBuilder<'a, D, M, M0>
         // Single-threaded write to lmdb
         let mut cancellation_index = 0;
         for lvl in 0..=self.max_level {
-            for (item_id, node_state) in &self.layers[lvl].pin() {
+            let Some(map) = self.layers.get(lvl) else { break };
+            let map_guard = map.pin();
+
+            for (item_id, node_state) in &map_guard {
                 if cancellation_index % CANCELLATION_PROBING == 0 && (self.cancel)() {
                     return Err(Error::BuildCancelled);
                 }
@@ -217,7 +220,9 @@ impl<'a, D: Distance, const M: usize, const M0: usize> HnswBuilder<'a, D, M, M0>
         for _ in (old_eps & to_delete).iter() {
             let mut l = self.max_level;
             loop {
-                for ((item_id, _), _) in lmdb.links.iter_layer(l as u8) {
+                for result in lmdb.links.iter_layer(l as u8) {
+                    let ((item_id, _), _) = result?;
+
                     if !to_delete.contains(item_id) && ok_eps.insert(item_id) {
                         break;
                     }
@@ -310,22 +315,31 @@ impl<'a, D: Distance, const M: usize, const M0: usize> HnswBuilder<'a, D, M, M0>
     /// deleted items.
     /// Algorithm 4 from FreshDiskANN paper.
     fn maybe_patch_old_links(
-        &self,
+        &mut self,
         lmdb: &FrozenReader<D>,
         to_delete: &RoaringBitmap,
     ) -> Result<()> {
-        let links_in_db =
-            lmdb.links.iter().map(|((id, lvl), v)| ((id, lvl as usize), v.into_owned()));
+        let links_in_db = lmdb
+            .links
+            .iter()
+            .map(|result| result.map(|((id, lvl), v)| ((id, lvl as usize), v.into_owned())));
 
-        for (index, ((id, lvl), links)) in links_in_db.into_iter().enumerate() {
+        for (index, result) in links_in_db.into_iter().enumerate() {
+            let ((id, lvl), links) = result?;
+
             if index % CANCELLATION_PROBING == 0 && (self.cancel)() {
                 return Err(Error::BuildCancelled);
             }
 
             let del_subset = &links & to_delete;
+
+            // Resize the layers if necessary
+            if self.layers.len() <= lvl {
+                self.layers.resize_with(lvl + 1, HashMap::new);
+            }
+
             let map_guard = self.layers[lvl].pin();
-            let mut new_links =
-                map_guard.get(&id).map(|state| state.links.to_vec()).unwrap_or_default();
+            let mut new_links = map_guard.get(&id).map(|s| s.links.to_vec()).unwrap_or_default();
 
             // no work to be done, continue
             if del_subset.is_empty() && new_links.is_empty() {
@@ -356,7 +370,8 @@ impl<'a, D: Distance, const M: usize, const M0: usize> HnswBuilder<'a, D, M, M0>
     /// overwriting it's links in mem. This is useful in cases like Vanama build.
     fn add_in_layers_below(&self, item_id: ItemId, level: usize) {
         for level in 0..=level {
-            self.layers[level].pin().get_or_insert(item_id, NodeState { links: array_vec![] });
+            let Some(map) = self.layers.get(level) else { break };
+            map.pin().get_or_insert(item_id, NodeState { links: array_vec![] });
         }
     }
 
@@ -377,7 +392,8 @@ impl<'a, D: Distance, const M: usize, const M0: usize> HnswBuilder<'a, D, M, M0>
         }
 
         // O(1) from self.layers
-        match self.layers[level].pin().get(&item_id) {
+        let Some(map) = self.layers.get(level) else { return Ok(res) };
+        match map.pin().get(&item_id) {
             Some(node_state) => res.extend(node_state.links.iter().map(|(_, i)| *i)),
             None => {
                 if res.is_empty() {
@@ -434,7 +450,7 @@ impl<'a, D: Distance, const M: usize, const M0: usize> HnswBuilder<'a, D, M, M0>
                 let item = match lmdb.get_item(point) {
                     Ok(item) => item,
                     Err(Error::MissingKey { .. }) => continue,
-                    Err(e) => panic!("{e}"),
+                    Err(e) => return Err(e),
                 };
                 let dist = D::distance(query, &item);
 
@@ -467,7 +483,8 @@ impl<'a, D: Distance, const M: usize, const M0: usize> HnswBuilder<'a, D, M, M0>
             return Ok(());
         }
 
-        let map = self.layers[level].pin();
+        let Some(map) = self.layers.get(level) else { return Ok(()) };
+        let map_guard = map.pin();
 
         // 'pure' links update function
         let _add_link = |node_state: &NodeState<M0>| {
@@ -487,9 +504,10 @@ impl<'a, D: Distance, const M: usize, const M0: usize> HnswBuilder<'a, D, M, M0>
             NodeState { links: new_links }
         };
 
-        map.update_or_insert_with(p, _add_link, || NodeState {
+        map_guard.update_or_insert_with(p, _add_link, || NodeState {
             links: array_vec!([ScoredLink; M0] => q),
         });
+
         Ok(())
     }
 

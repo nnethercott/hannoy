@@ -1,3 +1,5 @@
+#![warn(clippy::todo)]
+
 mod distance;
 mod error;
 mod hnsw;
