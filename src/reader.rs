@@ -223,13 +223,7 @@ impl<'t, D: Distance> Reader<'t, D> {
 
     /// Returns an iterator over the items vector.
     pub fn iter(&self, rtxn: &'t RoTxn) -> Result<ItemIter<'t, D>> {
-        Ok(ItemIter {
-            inner: self
-                .database
-                .remap_key_type::<PrefixCodec>()
-                .prefix_iter(rtxn, &Prefix::item(self.index))?
-                .remap_key_type::<KeyCodec>(),
-        })
+        ItemIter::new(self.database, self.index, rtxn).map_err(Into::into)
     }
 
     /// Return a [`QueryBuilder`] that lets you configure and execute a search request.
@@ -275,7 +269,7 @@ impl<'t, D: Distance> Reader<'t, D> {
             // Get neighborhood of candidate either from self or LMDB
             let proximity = match get_links(rtxn, self.database, self.index, c, level)? {
                 Some(Links { links }) => links.iter().collect::<Vec<ItemId>>(),
-                None => unreachable!(),
+                None => unreachable!("Links must exist"),
             };
             for point in proximity {
                 if !visited.insert(point) {
@@ -367,7 +361,7 @@ impl<'t, D: Distance> Reader<'t, D> {
 
             let Links { links } = match node {
                 Node::Links(links) => links,
-                _ => unreachable!(),
+                Node::Item(_) => unreachable!("Node must not be an item"),
             };
 
             // this fails if links contains an item_id not in the db

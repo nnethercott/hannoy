@@ -125,18 +125,18 @@ impl<'t, D: Distance> ImmutableLinks<'t, D> {
             .map(|node: Node<'t, D>| node.links())
     }
 
-    pub fn iter(&self) -> impl Iterator<Item = ((ItemId, u8), Cow<'_, RoaringBitmap>)> {
+    pub fn iter(
+        &self,
+    ) -> impl Iterator<Item = heed::Result<((ItemId, u8), Cow<'_, RoaringBitmap>)>> {
         self.links.keys().map(|&k| {
             let (item_id, level) = k;
-
-            let links = match self.get(item_id, level) {
-                Ok(Some(Links { links })) => links,
+            match self.get(item_id, level) {
+                Ok(Some(Links { links })) => Ok((k, links)),
                 Ok(None) => {
                     unreachable!("link at level {level} with item_id {item_id} not found")
                 }
-                Err(e) => panic!("{e}"),
-            };
-            (k, links)
+                Err(e) => Err(e),
+            }
         })
     }
 
@@ -144,21 +144,20 @@ impl<'t, D: Distance> ImmutableLinks<'t, D> {
     pub fn iter_layer(
         &self,
         layer: u8,
-    ) -> impl Iterator<Item = ((ItemId, u8), Cow<'_, RoaringBitmap>)> {
+    ) -> impl Iterator<Item = heed::Result<((ItemId, u8), Cow<'_, RoaringBitmap>)>> {
         self.links.keys().filter_map(move |&k| {
             let (item_id, level) = k;
             if level != layer {
                 return None;
             }
 
-            let links = match self.get(item_id, level) {
-                Ok(Some(Links { links })) => links,
+            match self.get(item_id, level) {
+                Ok(Some(Links { links })) => Some(Ok((k, links))),
                 Ok(None) => {
                     unreachable!("link at level {level} with item_id {item_id} not found")
                 }
-                Err(e) => panic!("{e}"),
-            };
-            Some((k, links))
+                Err(e) => Some(Err(e)),
+            }
         })
     }
 }

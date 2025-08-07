@@ -169,7 +169,7 @@ impl<D: Distance> Writer<D> {
                             )?
                         };
                     }
-                    Node::Links(_) => panic!(),
+                    Node::Links(_) => unreachable!("Node must not be a link"),
                 }
             }
         }
