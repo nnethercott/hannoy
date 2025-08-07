@@ -1,7 +1,9 @@
+use heed::types::DecodeIgnore;
 use proptest::proptest;
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
 use rand::{thread_rng, Rng, SeedableRng};
+use roaring::RoaringBitmap;
 
 use super::{create_database, rng};
 use crate::distance::{Cosine, Euclidean};
@@ -9,8 +11,6 @@ use crate::key::{KeyCodec, Prefix, PrefixCodec};
 use crate::reader::get_item;
 use crate::tests::DatabaseHandle;
 use crate::{Reader, Writer};
-use heed::types::DecodeIgnore;
-use roaring::RoaringBitmap;
 
 const M: usize = 3;
 const M0: usize = 3;
@@ -266,7 +266,6 @@ fn convert_from_arroy_to_hannoy() {
 }
 
 #[test]
-#[ignore = "frozzenreader layer iter seems to be non-deterministic"]
 fn overwrite_one_item_incremental() {
     let handle = create_database::<Euclidean>();
     let mut rng = rng();
@@ -470,7 +469,6 @@ fn delete_one_item_in_a_single_document_database() {
 }
 
 #[test]
-#[ignore = "frozzenreader layer iter seems to be non-deterministic"]
 fn delete_one_item() {
     let handle = create_database::<Euclidean>();
     let mut rng = rng();
@@ -514,25 +512,25 @@ fn delete_one_item() {
     writer.builder(&mut rng).build::<3, 3>(&mut wtxn).unwrap();
     wtxn.commit().unwrap();
 
-    insta::assert_snapshot!(handle, @r#"
+    insta::assert_snapshot!(handle, @r###"
     ==================
     Dumping index 0
-    Root: Metadata { dimensions: 2, items: RoaringBitmap<[0, 1, 2, 4, 5]>, distance: "euclidean", entry_points: [0, 2, 4], max_level: 1 }
+    Root: Metadata { dimensions: 2, items: RoaringBitmap<[0, 1, 2, 4, 5]>, distance: "euclidean", entry_points: [0, 1, 2], max_level: 1 }
     Version: Version { major: 0, minor: 0, patch: 2 }
     Links 0: Links(Links { links: RoaringBitmap<[1]> })
-    Links 0: Links(Links { links: RoaringBitmap<[2]> })
+    Links 0: Links(Links { links: RoaringBitmap<[1]> })
+    Links 1: Links(Links { links: RoaringBitmap<[0, 2]> })
     Links 1: Links(Links { links: RoaringBitmap<[0, 2]> })
     Links 2: Links(Links { links: RoaringBitmap<[1, 2, 4]> })
-    Links 2: Links(Links { links: RoaringBitmap<[0, 2, 4]> })
+    Links 2: Links(Links { links: RoaringBitmap<[1, 2]> })
     Links 4: Links(Links { links: RoaringBitmap<[2, 4, 5]> })
-    Links 4: Links(Links { links: RoaringBitmap<[2]> })
     Links 5: Links(Links { links: RoaringBitmap<[4]> })
     Item 0: Item(Item { header: NodeHeaderEuclidean { bias: "0.0000" }, vector: [0.0000, 0.0000] })
     Item 1: Item(Item { header: NodeHeaderEuclidean { bias: "0.0000" }, vector: [1.0000, 0.0000] })
     Item 2: Item(Item { header: NodeHeaderEuclidean { bias: "0.0000" }, vector: [2.0000, 0.0000] })
     Item 4: Item(Item { header: NodeHeaderEuclidean { bias: "0.0000" }, vector: [4.0000, 0.0000] })
     Item 5: Item(Item { header: NodeHeaderEuclidean { bias: "0.0000" }, vector: [5.0000, 0.0000] })
-    "#);
+    "###);
 
     // delete another one
     let mut wtxn = handle.env.write_txn().unwrap();
@@ -549,7 +547,7 @@ fn delete_one_item() {
     Root: Metadata { dimensions: 2, items: RoaringBitmap<[0, 2, 4, 5]>, distance: "euclidean", entry_points: [0, 2, 4], max_level: 1 }
     Version: Version { major: 0, minor: 0, patch: 2 }
     Links 0: Links(Links { links: RoaringBitmap<[0, 2]> })
-    Links 0: Links(Links { links: RoaringBitmap<[2]> })
+    Links 0: Links(Links { links: RoaringBitmap<[0, 2]> })
     Links 2: Links(Links { links: RoaringBitmap<[0, 2, 4]> })
     Links 2: Links(Links { links: RoaringBitmap<[0, 2, 4]> })
     Links 4: Links(Links { links: RoaringBitmap<[2, 4, 5]> })
