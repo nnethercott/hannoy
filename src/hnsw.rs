@@ -262,7 +262,7 @@ impl<'a, D: Distance, const M: usize, const M0: usize> HnswBuilder<'a, D, M, M0>
             .collect();
 
         for &(item_id, _) in upper_layer {
-            ok_eps.push(item_id);
+            ok_eps.insert(item_id);
             self.add_in_layers_below(item_id, self.max_level);
         }
 
@@ -429,7 +429,7 @@ impl<'a, D: Distance, const M: usize, const M0: usize> HnswBuilder<'a, D, M, M0>
 
             candidates.push((Reverse(OrderedFloat(dist)), ep));
             res.push((OrderedFloat(dist), ep));
-            visited.push(ep);
+            visited.insert(ep);
         }
 
         while let Some(&(Reverse(OrderedFloat(f)), _)) = candidates.peek() {
