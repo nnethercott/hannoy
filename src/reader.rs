@@ -256,7 +256,7 @@ impl<'t, D: Distance> Reader<'t, D> {
 
             candidates.push((Reverse(OrderedFloat(dist)), ep));
             res.push((OrderedFloat(dist), ep));
-            visited.push(ep);
+            visited.insert(ep);
         }
 
         while let Some(&(Reverse(OrderedFloat(f)), _)) = candidates.peek() {
@@ -344,7 +344,7 @@ impl<'t, D: Distance> Reader<'t, D> {
             .remap_key_type::<KeyCodec>()
         {
             let (i, _) = result?;
-            item_ids.push(i.node.unwrap_item());
+            item_ids.insert(i.node.unwrap_item());
         }
         assert_eq!(item_ids, self.items);
 
@@ -357,7 +357,7 @@ impl<'t, D: Distance> Reader<'t, D> {
             .remap_key_type::<KeyCodec>()
         {
             let (k, node) = result?;
-            link_ids.push(k.node.item);
+            link_ids.insert(k.node.item);
 
             let Links { links } = match node {
                 Node::Links(links) => links,

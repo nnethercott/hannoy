@@ -364,7 +364,7 @@ impl<D: Distance> Writer<D> {
                 return Err(Error::BuildCancelled);
             }
 
-            let inserted = updated_items.push(key.node.item);
+            let inserted = updated_items.insert(key.node.item);
             debug_assert!(inserted, "The keys should be sorted by LMDB");
             // SAFETY: Safe because we don't hold any reference to the database currently
             unsafe { updated_iter.del_current()? };
@@ -391,7 +391,7 @@ impl<D: Distance> Writer<D> {
             }
 
             let (i, _) = result?;
-            indices.push(i.node.unwrap_item());
+            indices.insert(i.node.unwrap_item());
         }
 
         Ok(indices)
