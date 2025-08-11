@@ -6,6 +6,7 @@ use heed::{PutFlags, RoTxn, RwTxn};
 use rand::{Rng, SeedableRng};
 use roaring::RoaringBitmap;
 use steppe::default::DefaultProgress;
+use tracing::debug;
 
 use crate::distance::Distance;
 use crate::hnsw::HnswBuilder;
@@ -71,6 +72,10 @@ impl<'a, D: Distance, R: Rng + SeedableRng> HannoyBuilder<'a, D, R> {
     pub fn build<const M: usize, const M0: usize>(&mut self, wtxn: &mut RwTxn) -> Result<()> {
         self.writer.build::<R, M, M0>(wtxn, self.rng, &self.inner)
     }
+
+    pub fn prepare_arroy_conversion(&self, wtxn: &mut RwTxn) -> Result<()> {
+        self.writer.prepare_arroy_conversion(wtxn, &self.inner)
+    }
 }
 
 /// A writer to store new items, remove existing ones,
@@ -93,7 +98,10 @@ impl<D: Distance> Writer<D> {
 
     /// After opening an arroy database this function will prepare it for conversion,
     /// cleanup the arroy database and only keep the items/vectors entries.
-    pub fn prepare_arroy_conversion(&self, wtxn: &mut RwTxn) -> Result<()> {
+    pub(crate) fn prepare_arroy_conversion(&self, wtxn: &mut RwTxn, options: &BuildOption) -> Result<()> {
+        debug!("Preparing dumpless upgrade from arroy to hannoy");
+        options.progress.update(HannoyBuild::ConvertingArroyToHannoy);
+
         let mut iter = self
             .database
             .remap_key_type::<PrefixCodec>()

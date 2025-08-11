@@ -248,7 +248,7 @@ fn convert_from_arroy_to_hannoy() {
                 .unwrap();
 
         let writer = Writer::new(database, index, pre_commit_arroy_reader.dimensions());
-        writer.prepare_arroy_conversion(&mut wtxn).unwrap();
+        writer.builder(&mut rng).prepare_arroy_conversion(&mut wtxn).unwrap();
         assert!(writer.need_build(&mut wtxn).unwrap());
         writer.builder(&mut rng).build::<16, 32>(&mut wtxn).unwrap();
 

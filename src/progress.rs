@@ -11,6 +11,7 @@ make_enum_progress! {
         PatchOldNewDeletedLinks,
         WritingTheItems,
         WriteTheMetadata,
+        ConvertingArroyToHannoy,
     }
 }
 
