@@ -25,7 +25,7 @@ jobs:
 
     steps:
       - uses: actions/checkout@v1
-      - uses: dtolnay/rust-toolchain@1.82
+      - uses: dtolnay/rust-toolchain@1.85
       - uses: actions-rs/cargo@v1
         with:
           command: build
@@ -42,7 +42,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v1
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.85
         with:
           profile: minimal
           components: clippy, rustfmt
