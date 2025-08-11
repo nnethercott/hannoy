@@ -34,6 +34,7 @@ rustc-hash = "2.1.1"
 thiserror = "2.0.9"
 tinyvec = { version = "1.9.0", features = ["rustc_1_55"] }
 tracing = "0.1.41"
+steppe = { version = "0.4.0", default-features = false }
 
 [dev-dependencies]
 anyhow = "1.0.95"

@@ -9,6 +9,7 @@ mod metadata;
 mod node;
 mod node_id;
 mod parallel;
+mod progress;
 mod reader;
 mod roaring;
 mod spaces;
