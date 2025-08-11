@@ -5,7 +5,7 @@ use heed::types::{DecodeIgnore, Unit};
 use heed::{PutFlags, RoTxn, RwTxn};
 use rand::{Rng, SeedableRng};
 use roaring::RoaringBitmap;
-use steppe::default::DefaultProgress;
+use steppe::NoProgress;
 use tracing::debug;
 
 use crate::distance::Distance;
@@ -25,32 +25,32 @@ use crate::{
 };
 
 /// The options available when building the arroy database.
-pub struct HannoyBuilder<'a, D: Distance, R: Rng + SeedableRng> {
+pub struct HannoyBuilder<'a, D: Distance, R: Rng + SeedableRng, P> {
     writer: &'a Writer<D>,
     rng: &'a mut R,
-    inner: BuildOption<'a>,
+    inner: BuildOption<'a, P>,
 }
 
 /// The options available when building the arroy database.
-pub(crate) struct BuildOption<'a> {
+pub(crate) struct BuildOption<'a, P> {
     pub(crate) ef_construction: usize,
     pub(crate) available_memory: Option<usize>,
     pub(crate) cancel: Box<dyn Fn() -> bool + 'a + Sync + Send>,
-    pub(crate) progress: DefaultProgress,
+    pub(crate) progress: P,
 }
 
-impl Default for BuildOption<'_> {
+impl Default for BuildOption<'_, NoProgress> {
     fn default() -> Self {
         Self {
             ef_construction: 100,
             available_memory: None,
             cancel: Box::new(|| false),
-            progress: DefaultProgress::default(),
+            progress: NoProgress,
         }
     }
 }
 
-impl<'a, D: Distance, R: Rng + SeedableRng> HannoyBuilder<'a, D, R> {
+impl<'a, D: Distance, R: Rng + SeedableRng, P> HannoyBuilder<'a, D, R, P> {
     pub fn available_memory(&mut self, memory: usize) -> &mut Self {
         self.inner.available_memory = Some(memory);
         self
@@ -64,16 +64,36 @@ impl<'a, D: Distance, R: Rng + SeedableRng> HannoyBuilder<'a, D, R> {
         self
     }
 
+    pub fn progress<NP>(self, progress: NP) -> HannoyBuilder<'a, D, R, NP> {
+        let HannoyBuilder {
+            writer,
+            rng,
+            inner: BuildOption { ef_construction, available_memory, cancel, progress: _ },
+        } = self;
+
+        HannoyBuilder {
+            writer,
+            rng,
+            inner: BuildOption { ef_construction, available_memory, cancel, progress },
+        }
+    }
+
     pub fn ef_construction(&mut self, ef_construction: usize) -> &mut Self {
         self.inner.ef_construction = ef_construction;
         self
     }
 
-    pub fn build<const M: usize, const M0: usize>(&mut self, wtxn: &mut RwTxn) -> Result<()> {
-        self.writer.build::<R, M, M0>(wtxn, self.rng, &self.inner)
+    pub fn build<const M: usize, const M0: usize>(&mut self, wtxn: &mut RwTxn) -> Result<()>
+    where
+        P: steppe::Progress,
+    {
+        self.writer.build::<R, P, M, M0>(wtxn, self.rng, &self.inner)
     }
 
-    pub fn prepare_arroy_conversion(&self, wtxn: &mut RwTxn) -> Result<()> {
+    pub fn prepare_arroy_conversion(&self, wtxn: &mut RwTxn) -> Result<()>
+    where
+        P: steppe::Progress,
+    {
         self.writer.prepare_arroy_conversion(wtxn, &self.inner)
     }
 }
@@ -98,10 +118,10 @@ impl<D: Distance> Writer<D> {
 
     /// After opening an arroy database this function will prepare it for conversion,
     /// cleanup the arroy database and only keep the items/vectors entries.
-    pub(crate) fn prepare_arroy_conversion(
+    pub(crate) fn prepare_arroy_conversion<P: steppe::Progress>(
         &self,
         wtxn: &mut RwTxn,
-        options: &BuildOption,
+        options: &BuildOption<P>,
     ) -> Result<()> {
         debug!("Preparing dumpless upgrade from arroy to hannoy");
         options.progress.update(HannoyBuild::ConvertingArroyToHannoy);
@@ -301,16 +321,23 @@ impl<D: Distance> Writer<D> {
     }
 
     /// Returns an [`HannoyBuilder`] to configure the available options to build the database.
-    pub fn builder<'a, R: Rng + SeedableRng>(&'a self, rng: &'a mut R) -> HannoyBuilder<'a, D, R> {
+    pub fn builder<'a, R>(&'a self, rng: &'a mut R) -> HannoyBuilder<'a, D, R, NoProgress>
+    where
+        R: Rng + SeedableRng,
+    {
         HannoyBuilder { writer: self, rng, inner: BuildOption::default() }
     }
 
-    fn build<R: Rng + SeedableRng, const M: usize, const M0: usize>(
+    fn build<R, P, const M: usize, const M0: usize>(
         &self,
         wtxn: &mut RwTxn,
         rng: &mut R,
-        options: &BuildOption,
-    ) -> Result<()> {
+        options: &BuildOption<P>,
+    ) -> Result<()>
+    where
+        R: Rng + SeedableRng,
+        P: steppe::Progress,
+    {
         let item_indices = self.item_indices(wtxn, options)?;
         // updated items can be an update, an addition or a removed item
         let updated_items = self.reset_and_retrieve_updated_items(wtxn, options)?;
@@ -368,11 +395,14 @@ impl<D: Distance> Writer<D> {
         Ok(())
     }
 
-    fn reset_and_retrieve_updated_items(
+    fn reset_and_retrieve_updated_items<P>(
         &self,
         wtxn: &mut RwTxn,
-        options: &BuildOption,
-    ) -> Result<RoaringBitmap, Error> {
+        options: &BuildOption<P>,
+    ) -> Result<RoaringBitmap, Error>
+    where
+        P: steppe::Progress,
+    {
         tracing::debug!("reset and retrieve the updated items...");
         options.progress.update(HannoyBuild::RetrieveTheUpdatedItems);
 
@@ -400,7 +430,10 @@ impl<D: Distance> Writer<D> {
     }
 
     // Fetches the item's ids, not the tree nodes ones.
-    fn item_indices(&self, wtxn: &mut RwTxn, options: &BuildOption) -> Result<RoaringBitmap> {
+    fn item_indices<P>(&self, wtxn: &mut RwTxn, options: &BuildOption<P>) -> Result<RoaringBitmap>
+    where
+        P: steppe::Progress,
+    {
         tracing::debug!("started retrieving all the items ids...");
         options.progress.update(HannoyBuild::RetrievingTheItemsIds);
 

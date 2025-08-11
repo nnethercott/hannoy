@@ -69,7 +69,7 @@ pub struct HnswBuilder<'a, D, const M: usize, const M0: usize> {
 }
 
 impl<'a, D: Distance, const M: usize, const M0: usize> HnswBuilder<'a, D, M, M0> {
-    pub fn new(opts: &'a BuildOption) -> Self {
+    pub fn new<P: steppe::Progress>(opts: &'a BuildOption<P>) -> Self {
         let assign_probas = Self::get_default_probas();
 
         Self {
@@ -122,7 +122,7 @@ impl<'a, D: Distance, const M: usize, const M0: usize> HnswBuilder<'a, D, M, M0>
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub fn build<R>(
+    pub fn build<R, P>(
         &mut self,
         mut to_insert: RoaringBitmap,
         to_delete: &RoaringBitmap,
@@ -130,10 +130,11 @@ impl<'a, D: Distance, const M: usize, const M0: usize> HnswBuilder<'a, D, M, M0>
         index: u16,
         wtxn: &mut RwTxn,
         rng: &mut R,
-        options: &BuildOption,
+        options: &BuildOption<P>,
     ) -> Result<BuildStats<D>>
     where
         R: Rng + ?Sized,
+        P: steppe::Progress,
     {
         let mut build_stats = BuildStats::new();
 
@@ -220,14 +221,17 @@ impl<'a, D: Distance, const M: usize, const M0: usize> HnswBuilder<'a, D, M, M0>
     /// This function resolves several nasty edge cases that can occur, namely : deleted
     /// or partially deleted entrypoints, new indexed points assigned to higher layers, ensuring
     /// entry points are present on all layers before build
-    fn prepare_levels_and_entry_points(
+    fn prepare_levels_and_entry_points<P>(
         &mut self,
         levels: &mut Vec<(u32, usize)>,
         cur_max_level: usize,
         to_delete: &RoaringBitmap,
         lmdb: &FrozenReader<D>,
-        options: &BuildOption,
-    ) -> Result<RoaringBitmap> {
+        options: &BuildOption<P>,
+    ) -> Result<RoaringBitmap>
+    where
+        P: steppe::Progress,
+    {
         debug!("Resolving entry points in (maybe incremental) build");
         options.progress.update(HannoyBuild::ResolveGraphEntryPoints);
 
@@ -332,12 +336,15 @@ impl<'a, D: Distance, const M: usize, const M0: usize> HnswBuilder<'a, D, M, M0>
     /// the end of indexing we need to merge the old and new links and prune ones pointing to
     /// deleted items.
     /// Algorithm 4 from FreshDiskANN paper.
-    fn maybe_patch_old_links(
+    fn maybe_patch_old_links<P>(
         &mut self,
         lmdb: &FrozenReader<D>,
         to_delete: &RoaringBitmap,
-        options: &BuildOption,
-    ) -> Result<()> {
+        options: &BuildOption<P>,
+    ) -> Result<()>
+    where
+        P: steppe::Progress,
+    {
         debug!("Repairing connections to deleted items, and linking old and new graphs");
         options.progress.update(HannoyBuild::PatchOldNewDeletedLinks);
 

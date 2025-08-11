@@ -36,12 +36,15 @@ impl<'t, D: Distance> ImmutableItems<'t, D> {
     /// and keeping the transaction making the pointers valid.
     /// Do not take more items than memory allows.
     /// Remove from the list of candidates all the items that were selected and return them.
-    pub fn new(
+    pub fn new<P>(
         rtxn: &'t RoTxn,
         database: Database<D>,
         index: u16,
-        options: &BuildOption,
-    ) -> heed::Result<Self> {
+        options: &BuildOption<P>,
+    ) -> heed::Result<Self>
+    where
+        P: steppe::Progress,
+    {
         debug!("fetching the pointers to the items from lmdb");
         options.progress.update(HannoyBuild::FetchItemPointers);
 
@@ -97,13 +100,16 @@ pub struct ImmutableLinks<'t, D> {
 impl<'t, D: Distance> ImmutableLinks<'t, D> {
     /// Creates the structure by fetching all the root pointers
     /// and keeping the transaction making the pointers valid.
-    pub fn new(
+    pub fn new<P>(
         rtxn: &'t RoTxn,
         database: Database<D>,
         index: u16,
         nb_links: u64,
-        options: &BuildOption,
-    ) -> heed::Result<Self> {
+        options: &BuildOption<P>,
+    ) -> heed::Result<Self>
+    where
+        P: steppe::Progress,
+    {
         debug!("fetching the pointers to the links from lmdb");
         options.progress.update(HannoyBuild::FetchLinksPointers);
 
