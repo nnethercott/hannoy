@@ -98,7 +98,11 @@ impl<D: Distance> Writer<D> {
 
     /// After opening an arroy database this function will prepare it for conversion,
     /// cleanup the arroy database and only keep the items/vectors entries.
-    pub(crate) fn prepare_arroy_conversion(&self, wtxn: &mut RwTxn, options: &BuildOption) -> Result<()> {
+    pub(crate) fn prepare_arroy_conversion(
+        &self,
+        wtxn: &mut RwTxn,
+        options: &BuildOption,
+    ) -> Result<()> {
         debug!("Preparing dumpless upgrade from arroy to hannoy");
         options.progress.update(HannoyBuild::ConvertingArroyToHannoy);
 
