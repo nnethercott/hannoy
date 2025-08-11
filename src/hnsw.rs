@@ -128,6 +128,7 @@ impl<'a, D: Distance, const M: usize, const M0: usize> HnswBuilder<'a, D, M, M0>
         index: u16,
         wtxn: &mut RwTxn,
         rng: &mut R,
+        options: &BuildOption,
     ) -> Result<BuildStats<D>>
     where
         R: Rng + ?Sized,

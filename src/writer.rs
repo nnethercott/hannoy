@@ -5,6 +5,7 @@ use heed::types::{DecodeIgnore, Unit};
 use heed::{PutFlags, RoTxn, RwTxn};
 use rand::{Rng, SeedableRng};
 use roaring::RoaringBitmap;
+use steppe::default::DefaultProgress;
 
 use crate::distance::Distance;
 use crate::hnsw::HnswBuilder;
@@ -13,6 +14,7 @@ use crate::item_iter::ItemIter;
 use crate::node::{Item, ItemIds, Links, NodeCodec};
 use crate::node_id::{NodeId, NodeMode};
 use crate::parallel::{ImmutableItems, ImmutableLinks};
+use crate::progress::HannoyBuild;
 use crate::reader::get_item;
 use crate::unaligned_vector::UnalignedVector;
 use crate::version::{Version, VersionCodec};
@@ -29,15 +31,15 @@ pub struct HannoyBuilder<'a, D: Distance, R: Rng + SeedableRng> {
 }
 
 /// The options available when building the arroy database.
-pub(crate) struct BuildOption<'a> {
+pub(crate) struct BuildOption {
     pub(crate) ef_construction: usize,
     pub(crate) available_memory: Option<usize>,
-    pub(crate) cancel: Box<dyn Fn() -> bool + 'a + Sync + Send>,
+    pub(crate) progress: DefaultProgress,
 }
 
-impl Default for BuildOption<'_> {
+impl Default for BuildOption {
     fn default() -> Self {
-        Self { ef_construction: 100, available_memory: None, cancel: Box::new(|| false) }
+        Self { ef_construction: 100, available_memory: None, ..Default::default()}
     }
 }
 
@@ -351,6 +353,8 @@ impl<D: Distance> Writer<D> {
         options: &BuildOption,
     ) -> Result<RoaringBitmap, Error> {
         tracing::debug!("reset and retrieve the updated items...");
+        options.progress.update(HannoyBuild::RetrieveTheUpdatedItems);
+
         let mut updated_items = RoaringBitmap::new();
         let mut updated_iter = self
             .database
@@ -377,6 +381,7 @@ impl<D: Distance> Writer<D> {
     // Fetches the item's ids, not the tree nodes ones.
     fn item_indices(&self, wtxn: &mut RwTxn, options: &BuildOption) -> Result<RoaringBitmap> {
         tracing::debug!("started retrieving all the items ids...");
+        options.progress.update(HannoyBuild::RetrievingTheItemsIds);
 
         let mut indices = RoaringBitmap::new();
         for (index, result) in self
