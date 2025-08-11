@@ -1,4 +1,4 @@
-<p align="center"><img width="280px" title="The arroy logo is electric like LMDB and made up of colored clusters (of vectors)" src="https://raw.githubusercontent.com/nnethercott/hannoy/main/assets/ed_temp.png"></a>
+<p align="center"><img width="280px" title="this is a cowboy bebop ref" src="https://raw.githubusercontent.com/nnethercott/hannoy/main/assets/ed_tmp.png"></a>
 <h1 align="center">hannoy 🗼</h1>
 
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
