@@ -3,9 +3,9 @@
 
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![Crates.io](https://img.shields.io/crates/v/hannoy)](https://crates.io/crates/hannoy)
-<!-- [![Docs](https://docs.rs/arroy/badge.svg)](https://docs.rs/arroy) -->
 [![dependency status](https://deps.rs/repo/github/nnethercott/hannoy/status.svg)](https://deps.rs/repo/github/nnethercott/hannoy)
 [![Build](https://github.com/nnethercott/hannoy/actions/workflows/rust.yml/badge.svg)](https://github.com/nnethercott/hannoy/actions/workflows/rust.yml)
+<!-- [![Docs](https://docs.rs/arroy/badge.svg)](https://docs.rs/arroy) -->
 
 hannoy is a key-value backed [HNSW](https://www.pinecone.io/learn/series/faiss/hnsw/) implementation based on [arroy](https://github.com/meilisearch/arroy).
 
