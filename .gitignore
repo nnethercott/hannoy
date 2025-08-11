@@ -5,4 +5,4 @@ target
 *.tree
 lock.mdb
 data.mdb
-assets
+example/assets
