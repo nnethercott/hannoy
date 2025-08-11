@@ -596,7 +596,7 @@ fn delete_one_item_no_snapshots() {
     assert!(get_item(handle.database, 0, &rtxn, 3).unwrap().is_none());
     assert!(get_item(handle.database, 0, &rtxn, 1).unwrap().is_none());
 
-    let mut links_iter = handle
+    let links_iter = handle
         .database
         .remap_key_type::<PrefixCodec>()
         .prefix_iter(&rtxn, &Prefix::links(0))
@@ -604,7 +604,7 @@ fn delete_one_item_no_snapshots() {
         .remap_types::<KeyCodec, DecodeIgnore>();
 
     let mut keys_of_links = RoaringBitmap::new();
-    while let Some(res) = links_iter.next() {
+    for res in links_iter {
         let (k, _) = res.unwrap();
         keys_of_links.insert(k.node.item);
     }

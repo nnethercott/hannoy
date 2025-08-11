@@ -143,7 +143,7 @@ impl<D: Distance> Writer<D> {
             // distance we do not need to clear links, otherwise we do.
             if ND::name()
                 .strip_prefix("binary quantized ")
-                .map_or(true, |raw_name| raw_name != D::name())
+                .is_none_or(|raw_name| raw_name != D::name())
             {
                 clear_links(wtxn, self.database, self.index)?;
             }
