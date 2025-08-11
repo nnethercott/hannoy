@@ -31,15 +31,21 @@ pub struct HannoyBuilder<'a, D: Distance, R: Rng + SeedableRng> {
 }
 
 /// The options available when building the arroy database.
-pub(crate) struct BuildOption {
+pub(crate) struct BuildOption<'a> {
     pub(crate) ef_construction: usize,
     pub(crate) available_memory: Option<usize>,
+    pub(crate) cancel: Box<dyn Fn() -> bool + 'a + Sync + Send>,
     pub(crate) progress: DefaultProgress,
 }
 
-impl Default for BuildOption {
+impl Default for BuildOption<'_> {
     fn default() -> Self {
-        Self { ef_construction: 100, available_memory: None, ..Default::default()}
+        Self {
+            ef_construction: 100,
+            available_memory: None,
+            cancel: Box::new(|| false),
+            progress: DefaultProgress::default(),
+        }
     }
 }
 
@@ -317,7 +323,8 @@ impl<D: Distance> Writer<D> {
             .with_entry_points(entry_points)
             .with_max_level(max_level);
 
-        let stats = hnsw.build(to_insert, &to_delete, self.database, self.index, wtxn, rng)?;
+        let stats =
+            hnsw.build(to_insert, &to_delete, self.database, self.index, wtxn, rng, options)?;
         tracing::info!("{stats:?}");
 
         // Remove deleted links from lmdb AFTER build; in DiskANN we use a deleted item's
@@ -326,6 +333,8 @@ impl<D: Distance> Writer<D> {
         self.delete_links_from_db(to_delete, wtxn)?;
 
         tracing::debug!("write the metadata...");
+        options.progress.update(HannoyBuild::WriteTheMetadata);
+
         let metadata = Metadata {
             dimensions: self.dimensions.try_into().unwrap(),
             items: item_indices,

@@ -7,10 +7,13 @@ use heed::types::Bytes;
 use heed::{BytesDecode, RoTxn};
 use roaring::RoaringBitmap;
 use rustc_hash::FxBuildHasher;
+use tracing::debug;
 
 use crate::internals::{Item, KeyCodec};
 use crate::key::{Prefix, PrefixCodec};
 use crate::node::{Links, Node, NodeCodec};
+use crate::progress::HannoyBuild;
+use crate::writer::BuildOption;
 use crate::{Database, Distance, ItemId, LayerId};
 
 /// A struture used to keep a list of the leaf nodes in the tree.
@@ -33,7 +36,15 @@ impl<'t, D: Distance> ImmutableItems<'t, D> {
     /// and keeping the transaction making the pointers valid.
     /// Do not take more items than memory allows.
     /// Remove from the list of candidates all the items that were selected and return them.
-    pub fn new(rtxn: &'t RoTxn, database: Database<D>, index: u16) -> heed::Result<Self> {
+    pub fn new(
+        rtxn: &'t RoTxn,
+        database: Database<D>,
+        index: u16,
+        options: &BuildOption,
+    ) -> heed::Result<Self> {
+        debug!("fetching the pointers to the items from lmdb");
+        options.progress.update(HannoyBuild::FetchItemPointers);
+
         let mut map =
             HashMap::with_capacity_and_hasher(database.len(rtxn)? as usize, FxBuildHasher);
         let mut constant_length = None;
@@ -91,7 +102,11 @@ impl<'t, D: Distance> ImmutableLinks<'t, D> {
         database: Database<D>,
         index: u16,
         nb_links: u64,
+        options: &BuildOption,
     ) -> heed::Result<Self> {
+        debug!("fetching the pointers to the links from lmdb");
+        options.progress.update(HannoyBuild::FetchLinksPointers);
+
         let mut links = HashMap::with_capacity_and_hasher(nb_links as usize, FxBuildHasher);
 
         let iter = database

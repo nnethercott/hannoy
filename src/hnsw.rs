@@ -16,12 +16,13 @@ use rand::Rng;
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use roaring::RoaringBitmap;
 use tinyvec::{array_vec, ArrayVec};
-use tracing::error;
+use tracing::{debug, error};
 
 use crate::key::Key;
 use crate::node::{Item, Links, Node};
 use crate::ordered_float::OrderedFloat;
 use crate::parallel::{ImmutableItems, ImmutableLinks};
+use crate::progress::{AtomicInsertItemsStep, HannoyBuild};
 use crate::stats::BuildStats;
 use crate::writer::{BuildOption, FrozenReader};
 use crate::{Database, Distance, Error, ItemId, Result, CANCELLATION_PROBING};
@@ -120,6 +121,7 @@ impl<'a, D: Distance, const M: usize, const M0: usize> HnswBuilder<'a, D, M, M0>
         dist.sample(rng)
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn build<R>(
         &mut self,
         mut to_insert: RoaringBitmap,
@@ -135,8 +137,8 @@ impl<'a, D: Distance, const M: usize, const M0: usize> HnswBuilder<'a, D, M, M0>
     {
         let mut build_stats = BuildStats::new();
 
-        let items = ImmutableItems::new(wtxn, database, index)?;
-        let links = ImmutableLinks::new(wtxn, database, index, database.len(wtxn)?)?;
+        let items = ImmutableItems::new(wtxn, database, index, options)?;
+        let links = ImmutableLinks::new(wtxn, database, index, database.len(wtxn)?, options)?;
         let lmdb = FrozenReader { index, items: &items, links: &links };
 
         // Generate a random level for each point
@@ -150,14 +152,23 @@ impl<'a, D: Distance, const M: usize, const M0: usize> HnswBuilder<'a, D, M, M0>
             })
             .collect();
 
-        let ok_eps =
-            self.prepare_levels_and_entry_points(&mut levels, cur_max_level, to_delete, &lmdb)?;
+        let ok_eps = self.prepare_levels_and_entry_points(
+            &mut levels,
+            cur_max_level,
+            to_delete,
+            &lmdb,
+            options,
+        )?;
         to_insert |= ok_eps;
 
         let level_groups: Vec<_> = levels.chunk_by(|(_, la), (_, lb)| la == lb).collect();
 
         // Insert layers L...0 multi-threaded
+        options.progress.update(HannoyBuild::BuildingTheGraph);
+        let (item_ctr, insert_step) = AtomicInsertItemsStep::new(to_insert.len());
+        options.progress.update(insert_step);
         let cancel_index = AtomicUsize::new(0);
+
         level_groups.into_iter().try_for_each(|grp| {
             grp.into_par_iter().try_for_each(|&(item_id, lvl)| {
                 if cancel_index.fetch_add(1, Relaxed) % CANCELLATION_PROBING == 0 && (self.cancel)()
@@ -165,6 +176,7 @@ impl<'a, D: Distance, const M: usize, const M0: usize> HnswBuilder<'a, D, M, M0>
                     Err(Error::BuildCancelled)
                 } else {
                     self.insert(item_id, lvl, &lmdb, &build_stats)?;
+                    item_ctr.fetch_add(1, Relaxed);
                     Ok(())
                 }
             })?;
@@ -174,10 +186,12 @@ impl<'a, D: Distance, const M: usize, const M0: usize> HnswBuilder<'a, D, M, M0>
             Ok(()) as Result<(), Error>
         })?;
 
-        self.maybe_patch_old_links(&lmdb, to_delete)?;
+        self.maybe_patch_old_links(&lmdb, to_delete, options)?;
 
         // Single-threaded write to lmdb
+        options.progress.update(HannoyBuild::WritingTheItems);
         let mut cancellation_index = 0;
+
         for lvl in 0..=self.max_level {
             let Some(map) = self.layers.get(lvl) else { break };
             let map_guard = map.pin();
@@ -212,12 +226,15 @@ impl<'a, D: Distance, const M: usize, const M0: usize> HnswBuilder<'a, D, M, M0>
         cur_max_level: usize,
         to_delete: &RoaringBitmap,
         lmdb: &FrozenReader<D>,
+        options: &BuildOption,
     ) -> Result<RoaringBitmap> {
+        debug!("Resolving entry points in (maybe incremental) build");
+        options.progress.update(HannoyBuild::ResolveGraphEntryPoints);
+
         let old_eps = RoaringBitmap::from_iter(self.entry_points.iter());
         let mut ok_eps = &old_eps - to_delete;
 
-        // If any old entry points were deleted we need to replace them with valid points in the
-        // new graph
+        // If any old entry points were deleted we need to replace them
         for _ in (old_eps & to_delete).iter() {
             let mut l = self.max_level;
             loop {
@@ -236,8 +253,8 @@ impl<'a, D: Distance, const M: usize, const M0: usize> HnswBuilder<'a, D, M, M0>
                 };
             }
         }
+        // If the loop above added no points, we must have deleted the entire prev graph!
         if ok_eps.is_empty() {
-            // If the loop above added no points, we must have deleted the entire prev graph!
             self.max_level = 0;
         }
 
@@ -319,7 +336,11 @@ impl<'a, D: Distance, const M: usize, const M0: usize> HnswBuilder<'a, D, M, M0>
         &mut self,
         lmdb: &FrozenReader<D>,
         to_delete: &RoaringBitmap,
+        options: &BuildOption,
     ) -> Result<()> {
+        debug!("Repairing connections to deleted items, and linking old and new graphs");
+        options.progress.update(HannoyBuild::PatchOldNewDeletedLinks);
+
         let links_in_db = lmdb
             .links
             .iter()
