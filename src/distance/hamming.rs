@@ -43,7 +43,8 @@ impl Distance for Hamming {
     }
 
     fn distance(p: &Item<Self>, q: &Item<Self>) -> f32 {
-        hamming_bitwise_fast(p.vector.as_bytes(), q.vector.as_bytes())
+        let dist = hamming_bitwise_fast(p.vector.as_bytes(), q.vector.as_bytes());
+        dist / (p.vector.len() as f32)
     }
 
     fn norm_no_header(v: &UnalignedVector<Self::VectorCodec>) -> f32 {
