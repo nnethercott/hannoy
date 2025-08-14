@@ -86,149 +86,23 @@ fn delete_all_entry_points_and_build() {
 // Minimal reproducer for issue #52
 // <https://github.com/nnethercott/hannoy/issues/52>
 #[test]
-fn delete_every_items_and_build() {
+fn delete_all_but_one_item_and_build() {
     const DIMENSIONS: usize = 3;
 
-    fn vector_store_for_embedder(embedder_id: u8, store_id: u8) -> u16 {
-        let embedder_id = (embedder_id as u16) << 8;
-        embedder_id | (store_id as u16)
-    }
-
-    const ITEM_VEC: &'static [[f32; 3]] =
-        &[[0.0, 1.0, 2.0], [1.0, 2.0, 0.0], [2.0, 1.0, 0.0], [1.0, 0.0, 2.0]];
-
     let DatabaseHandle { env, database, tempdir: _ } = create_database::<Cosine>();
-    let emb0_store0 = vector_store_for_embedder(0, 0);
-    let emb0_store1 = vector_store_for_embedder(0, 1);
-    let emb1_store0 = vector_store_for_embedder(1, 0);
-    let emb1_store1 = vector_store_for_embedder(1, 1);
-    let emb2_store0 = vector_store_for_embedder(2, 0);
-    let emb2_store1 = vector_store_for_embedder(2, 1);
-
     let mut wtxn = env.write_txn().unwrap();
+    let writer = Writer::new(database, 0, DIMENSIONS);
+    writer.add_item(&mut wtxn, 1, &[1.0, 2.0, 0.0]).unwrap();
+    writer.add_item(&mut wtxn, 2, &[2.0, 1.0, 0.0]).unwrap();
+    writer.add_item(&mut wtxn, 3, &[1.0, 0.0, 2.0]).unwrap();
+    writer.add_item(&mut wtxn, 0, &[0.0, 1.0, 2.0]).unwrap();
+    writer.builder(&mut rng()).build::<M, M0>(&mut wtxn).unwrap();
 
-    // Deleting item_id=1 in all stores in embedder_index=0
-    for index in [emb0_store0, emb0_store1] {
-        let writer = Writer::new(database, index, DIMENSIONS);
-        writer.del_item(&mut wtxn, 1).unwrap();
-    }
-
-    // Adding item_id=1 to all stores in embedder_index=0
-    for index in [emb0_store0, emb0_store1] {
-        let writer = Writer::new(database, index, DIMENSIONS);
-        writer.add_item(&mut wtxn, 1, &ITEM_VEC[1]).unwrap();
-    }
-
-    // Adding item_id=0 in store_id=0 and embedder_index=0
-    // Adding item_id=2 in store_id=0 and embedder_index=0
-    {
-        let writer = Writer::new(database, emb0_store0, DIMENSIONS);
-        writer.add_item(&mut wtxn, 0, &ITEM_VEC[0]).unwrap();
-        writer.add_item(&mut wtxn, 2, &ITEM_VEC[2]).unwrap();
-        writer.builder(&mut rng()).build::<M, M0>(&mut wtxn).unwrap();
-    }
-
-    // Adding item_id=2 in store_id=1 and embedder_index=0
-    {
-        let writer = Writer::new(database, emb0_store1, DIMENSIONS);
-        writer.add_item(&mut wtxn, 2, &ITEM_VEC[2]).unwrap();
-        writer.builder(&mut rng()).build::<M, M0>(&mut wtxn).unwrap();
-    }
-
-    // Adding item_id=3 in store_id=0 and embedder_index=0
-    {
-        let writer = Writer::new(database, emb0_store0, DIMENSIONS);
-        writer.add_item(&mut wtxn, 3, &ITEM_VEC[3]).unwrap();
-        writer.builder(&mut rng()).build::<M, M0>(&mut wtxn).unwrap();
-    }
-
-    // Adding item_id=3 in store_id=1 and embedder_index=0
-    {
-        let writer = Writer::new(database, emb0_store1, DIMENSIONS);
-        writer.add_item(&mut wtxn, 3, &ITEM_VEC[3]).unwrap();
-        writer.builder(&mut rng()).build::<M, M0>(&mut wtxn).unwrap();
-    }
-
-    // Build and quantize embedder_index=0
-    for index in [emb0_store0, emb0_store1] {
-        let writer = Writer::new(database, index, DIMENSIONS);
-        writer.builder(&mut rng()).build::<M, M0>(&mut wtxn).unwrap();
-    }
-
-    // Deleting item_id=0 in all stores in embedder_index=1
-    // Deleting item_id=0 in all stores in embedder_index=2
-    // Deleting item_id=1 in all stores in embedder_index=1
-    // Deleting item_id=1 in all stores in embedder_index=2
-    // Deleting item_id=2 in all stores in embedder_index=1
-    // Deleting item_id=2 in all stores in embedder_index=2
-    // Deleting item_id=3 in all stores in embedder_index=1
-    // Deleting item_id=3 in all stores in embedder_index=2
-    for item in [0, 1, 2, 3] {
-        for index in [emb1_store0, emb1_store1, emb2_store0, emb2_store1] {
-            let writer = Writer::new(database, index, DIMENSIONS);
-            writer.del_item(&mut wtxn, item).unwrap();
-        }
-    }
-
-    // Adding item_id=0 in store_id=0 and embedder_index=1
-    // Adding item_id=1 in store_id=0 and embedder_index=1
-    // Adding item_id=2 in store_id=0 and embedder_index=1
-    for item in [0, 1, 2] {
-        let writer = Writer::new(database, emb1_store0, DIMENSIONS);
-        writer.add_item(&mut wtxn, item, &ITEM_VEC[item as usize]).unwrap();
-    }
-
-    // Adding item_id=2 in store_id=1 and embedder_index=1
-    {
-        let writer = Writer::new(database, emb1_store1, DIMENSIONS);
-        writer.add_item(&mut wtxn, 2, &ITEM_VEC[2]).unwrap();
-    }
-
-    // Adding item_id=3 in store_id=0 and embedder_index=1
-    {
-        let writer = Writer::new(database, emb1_store0, DIMENSIONS);
-        writer.add_item(&mut wtxn, 3, &ITEM_VEC[3]).unwrap();
-    }
-
-    // Adding item_id=3 in store_id=1 and embedder_index=1
-    {
-        let writer = Writer::new(database, emb1_store1, DIMENSIONS);
-        writer.add_item(&mut wtxn, 3, &ITEM_VEC[3]).unwrap();
-    }
-
-    // Adding item_id=0 in store_id=0 and embedder_index=2
-    // Adding item_id=1 in store_id=0 and embedder_index=2
-    // Adding item_id=2 in store_id=0 and embedder_index=2
-    // Adding item_id=3 in store_id=0 and embedder_index=2
-    for item in [0, 1, 2, 3] {
-        let writer = Writer::new(database, emb2_store0, DIMENSIONS);
-        writer.add_item(&mut wtxn, item, &ITEM_VEC[item as usize]).unwrap();
-    }
-
-    // Build and quantize embedder_index=1
-    // Build and quantize embedder_index=2
-    for index in [emb1_store0, emb1_store1, emb2_store0, emb2_store1] {
-        let writer = Writer::new(database, index, DIMENSIONS);
-        writer.builder(&mut rng()).build::<M, M0>(&mut wtxn).unwrap();
-    }
-
-    // Clearing all items from embedder_index=1
-    for index in [emb1_store0, emb1_store1] {
-        let writer = Writer::new(database, index, DIMENSIONS);
-        writer.clear(&mut wtxn).unwrap();
-    }
-
-    // Deleting item_id=0 in store_id=0 and embedder_index=0
-    // Deleting item_id=2 in store_id=0 and embedder_index=0
-    // Deleting item_id=3 in store_id=0 and embedder_index=0
-    // Build and quantize embedder_index=0
-    for index in [emb0_store0, emb0_store1] {
-        let writer = Writer::new(database, index, DIMENSIONS);
-        writer.del_item(&mut wtxn, 0).unwrap();
-        writer.del_item(&mut wtxn, 2).unwrap();
-        writer.del_item(&mut wtxn, 3).unwrap();
-        writer.builder(&mut rng()).build::<M, M0>(&mut wtxn).unwrap();
-    }
+    let writer = Writer::new(database, 0, DIMENSIONS);
+    writer.del_item(&mut wtxn, 0).unwrap();
+    writer.del_item(&mut wtxn, 2).unwrap();
+    writer.del_item(&mut wtxn, 3).unwrap();
+    writer.builder(&mut rng()).build::<M, M0>(&mut wtxn).unwrap();
 }
 
 #[test]
