@@ -1,0 +1,8 @@
+[workspace]
+allow_dirty = false # allow updating repositories with uncommitted changes
+publish_allow_dirty = false
+dependencies_update = false # update dependencies with `cargo update`
+pr_branch_prefix = "release-plz-" # PR branch prefix
+git_tag_name = "v{{ version }}"
+git_release_enable = true # enable automatic releases from new tag
+changelog_update = true
