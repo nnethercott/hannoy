@@ -41,6 +41,28 @@ fn clear_small_database() {
     wtxn.commit().unwrap();
 }
 
+// Minimal reproducer for issue #52
+// <https://github.com/nnethercott/hannoy/issues/52>
+#[test]
+fn delete_all_but_one_item_and_build() {
+    const DIMENSIONS: usize = 3;
+
+    let DatabaseHandle { env, database, tempdir: _ } = create_database::<Cosine>();
+    let mut wtxn = env.write_txn().unwrap();
+    let writer = Writer::new(database, 0, DIMENSIONS);
+    writer.add_item(&mut wtxn, 1, &[1.0, 2.0, 0.0]).unwrap();
+    writer.add_item(&mut wtxn, 2, &[2.0, 1.0, 0.0]).unwrap();
+    writer.add_item(&mut wtxn, 3, &[1.0, 0.0, 2.0]).unwrap();
+    writer.add_item(&mut wtxn, 0, &[0.0, 1.0, 2.0]).unwrap();
+    writer.builder(&mut rng()).build::<M, M0>(&mut wtxn).unwrap();
+
+    let writer = Writer::new(database, 0, DIMENSIONS);
+    writer.del_item(&mut wtxn, 0).unwrap();
+    writer.del_item(&mut wtxn, 2).unwrap();
+    writer.del_item(&mut wtxn, 3).unwrap();
+    writer.builder(&mut rng()).build::<M, M0>(&mut wtxn).unwrap();
+}
+
 #[test]
 fn use_u32_max_minus_one_for_a_vec() {
     let handle = create_database::<Euclidean>();

@@ -356,6 +356,12 @@ impl<'a, D: Distance, const M: usize, const M0: usize> HnswBuilder<'a, D, M, M0>
         for (index, result) in links_in_db.into_iter().enumerate() {
             let ((id, lvl), links) = result?;
 
+            // Since we delete links AFTER a build, links belonging to deleted items may still be
+            // present. We don't care about patching them.
+            if to_delete.contains(id) {
+                continue;
+            }
+
             if index % CANCELLATION_PROBING == 0 && (self.cancel)() {
                 return Err(Error::BuildCancelled);
             }
@@ -370,12 +376,12 @@ impl<'a, D: Distance, const M: usize, const M0: usize> HnswBuilder<'a, D, M, M0>
             let map_guard = self.layers[lvl].pin();
             let mut new_links = map_guard.get(&id).map(|s| s.links.to_vec()).unwrap_or_default();
 
-            // no work to be done, continue
+            // No work to be done, continue
             if del_subset.is_empty() && new_links.is_empty() {
                 continue;
             }
 
-            // iter through each of the deleted, and explore his neighbours
+            // Iter through each of the deleted, and explore his neighbours
             let mut bitmap = RoaringBitmap::new();
             for item_id in del_subset.iter() {
                 bitmap.extend(lmdb.get_links(item_id, lvl)?.iter());
