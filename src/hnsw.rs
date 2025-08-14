@@ -355,6 +355,9 @@ impl<'a, D: Distance, const M: usize, const M0: usize> HnswBuilder<'a, D, M, M0>
 
         for (index, result) in links_in_db.into_iter().enumerate() {
             let ((id, lvl), links) = result?;
+            if to_delete.contains(id){
+                continue;
+            }
 
             if index % CANCELLATION_PROBING == 0 && (self.cancel)() {
                 return Err(Error::BuildCancelled);

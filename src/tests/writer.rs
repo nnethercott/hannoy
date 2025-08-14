@@ -50,12 +50,12 @@ fn delete_all_entry_points_and_build() {
     const ITEM_VEC: &'static [[f32; 3]] =
         &[[0.0, 1.0, 2.0], [1.0, 2.0, 0.0], [2.0, 1.0, 0.0], [1.0, 0.0, 2.0]];
 
-    writer.del_item(&mut wtxn, 0).unwrap();
-
     for (item, vec) in ITEM_VEC.iter().enumerate() {
         writer.add_item(&mut wtxn, item as u32, vec).unwrap();
     }
     writer.builder(&mut rng()).build::<M, M0>(&mut wtxn).unwrap();
+
+    // we commit the txn to get a snapshot visualizing the hnsw entry points
     wtxn.commit().unwrap();
     insta::assert_snapshot!(handle, @r#"
     ==================
