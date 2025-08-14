@@ -299,6 +299,11 @@ impl<'t, D: Distance> Reader<'t, D> {
         query: &Item<D>,
         opt: &QueryBuilder<D>,
     ) -> Result<Vec<(ItemId, f32)>> {
+        // If we will never find any candidates, return an empty vector
+        if opt.candidates.is_some_and(|c| self.item_ids().is_disjoint(c)) {
+            return Ok(Vec::new());
+        }
+
         let mut eps = Vec::from_iter(self.entry_points.iter());
 
         // search layers L->1 with ef=1
