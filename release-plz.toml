@@ -1,5 +1,0 @@
-[workspace]
-allow_dirty = true # allow updating repositories with uncommitted changes
-dependencies_update = false # update dependencies with `cargo update`
-pr_branch_prefix = "release-plz-" # PR branch prefix
-git_tag_name = "v{{ version }}"
