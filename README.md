@@ -9,21 +9,21 @@
 
 hannoy is a key-value backed [HNSW](https://www.pinecone.io/learn/series/faiss/hnsw/) implementation based on [arroy](https://github.com/meilisearch/arroy).
 
-# Motivation
+## Motivation
 Many popular HNSW libraries are built in memory, meaning you need enough RAM to store all the vectors you're indexing. Instead, `hannoy` uses [LMDB](https://en.wikipedia.org/wiki/Lightning_Memory-Mapped_Database) — a memory-mapped KV store — as a storage backend. This is more well-suited for machines running multiple programs, or cases where the dataset you're indexing won't fit in memory. LMDB also supports non-blocking concurrent reads by design, meaning its safe to query the index in multi-threaded environments.
 
-# Features
+## Features
 - Supported metrics: [euclidean](https://en.wikipedia.org/wiki/Euclidean_distance#:~:text=In%20mathematics%2C%20the%20Euclidean%20distance,occasionally%20called%20the%20Pythagorean%20distance.), [cosine](https://en.wikipedia.org/wiki/Cosine_similarity#Cosine_distance), [manhattan](https://en.wikipedia.org/wiki/Taxicab_geometry), [hamming](https://en.wikipedia.org/wiki/Hamming_distance), as well as quantized counterparts.
 - Multithreaded builds using rayon
 - Build index on disk to enable indexing big datasets that won't fit into memory using LMDB
 - [Compressed bitmaps](https://github.com/RoaringBitmap/roaring-rs) to store graph edges with minimal overhead, adding overhead of only ~200 bytes per vector
 - Dynamic document insertions and deletions
 
-# Missing Features
+## Missing Features
 - Python support
 - GPU-accelerated indexing
 
-# Usage
+## Usage
 Here's a quick demo:
 
 ```rust
