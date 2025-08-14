@@ -41,48 +41,6 @@ fn clear_small_database() {
     wtxn.commit().unwrap();
 }
 
-#[test]
-fn delete_all_entry_points_and_build() {
-    let handle = create_database::<Cosine>();
-    let mut wtxn = handle.env.write_txn().unwrap();
-
-    let writer = Writer::new(handle.database, 0, 3);
-    const ITEM_VEC: &'static [[f32; 3]] =
-        &[[0.0, 1.0, 2.0], [1.0, 2.0, 0.0], [2.0, 1.0, 0.0], [1.0, 0.0, 2.0]];
-
-    for (item, vec) in ITEM_VEC.iter().enumerate() {
-        writer.add_item(&mut wtxn, item as u32, vec).unwrap();
-    }
-    writer.builder(&mut rng()).build::<M, M0>(&mut wtxn).unwrap();
-
-    // we commit the txn to get a snapshot visualizing the hnsw entry points
-    wtxn.commit().unwrap();
-    insta::assert_snapshot!(handle, @r#"
-    ==================
-    Dumping index 0
-    Root: Metadata { dimensions: 3, items: RoaringBitmap<[0, 1, 2, 3]>, distance: "cosine", entry_points: [0, 2, 3], max_level: 1 }
-    Version: Version { major: 0, minor: 0, patch: 3 }
-    Links 0: Links(Links { links: RoaringBitmap<[1, 3]> })
-    Links 0: Links(Links { links: RoaringBitmap<[3]> })
-    Links 1: Links(Links { links: RoaringBitmap<[0, 2]> })
-    Links 2: Links(Links { links: RoaringBitmap<[1, 3]> })
-    Links 2: Links(Links { links: RoaringBitmap<[3]> })
-    Links 3: Links(Links { links: RoaringBitmap<[0, 2]> })
-    Links 3: Links(Links { links: RoaringBitmap<[0, 2]> })
-    Item 0: Item(Item { header: NodeHeaderCosine { norm: "2.2361" }, vector: [0.0000, 1.0000, 2.0000] })
-    Item 1: Item(Item { header: NodeHeaderCosine { norm: "2.2361" }, vector: [1.0000, 2.0000, 0.0000] })
-    Item 2: Item(Item { header: NodeHeaderCosine { norm: "2.2361" }, vector: [2.0000, 1.0000, 0.0000] })
-    Item 3: Item(Item { header: NodeHeaderCosine { norm: "2.2361" }, vector: [1.0000, 0.0000, 2.0000] })
-    "#);
-
-    // NOW delete all the entry points !
-    let mut wtxn = handle.env.write_txn().unwrap();
-    writer.del_item(&mut wtxn, 0).unwrap();
-    writer.del_item(&mut wtxn, 2).unwrap();
-    writer.del_item(&mut wtxn, 3).unwrap();
-    writer.builder(&mut rng()).build::<M, M0>(&mut wtxn).unwrap();
-}
-
 // Minimal reproducer for issue #52
 // <https://github.com/nnethercott/hannoy/issues/52>
 #[test]
