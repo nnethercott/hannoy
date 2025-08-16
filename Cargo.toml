@@ -42,7 +42,7 @@ approx = "0.5.1"
 arbitrary = { version = "1.4.1", features = ["derive"] }
 arroy = "0.6.1"
 clap = { version = "4.5.24", features = ["derive"] }
-criterion = "0.7.0"
+criterion = { package = "codspeed-criterion-compat", version = "*" }
 env_logger = "0.11.6"
 insta = "1.42.0"
 instant-distance = "0.6.1"
