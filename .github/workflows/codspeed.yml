@@ -4,16 +4,20 @@ on:
   push:
     branches:
       - "main"
-  pull_request: # required to have reports on PRs
+  pull_request:  # run on PRs
     branches:
       - "main"
-  workflow_dispatch:
+  workflow_dispatch: # manual trigger
 
 jobs:
   benchmarks:
     name: Run benchmarks
     runs-on: ubuntu-latest
-    if: ${{ contains(github.event.pull_request.labels.*.name, 'benchmarks') || github.event_name == 'workflow_dispatch' }}
+    # ✅ Run if:
+    # - workflow_dispatch
+    # - PR has 'benchmarks' label
+    # - push to main (merge)
+    if: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'benchmarks')) || github.event_name == 'push' }}
     steps:
       - uses: actions/checkout@v4
 
