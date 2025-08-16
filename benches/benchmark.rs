@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use criterion::{criterion_group, criterion_main, BatchSize, Criterion};
+use criterion::{criterion_group, criterion_main, Criterion};
 use hannoy::{distances::Cosine, Database, Writer};
 use heed::{Env, EnvOpenOptions, RwTxn};
 use rand::{rngs::StdRng, Rng, SeedableRng};
