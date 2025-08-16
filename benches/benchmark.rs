@@ -63,10 +63,6 @@ fn index_and_search_10k(c: &mut Criterion) {
             BatchSize::LargeInput,
         )
     });
-
-
-    // bench reader
-    // todo!()
 }
 
 criterion_group!(benches, index_and_search_10k,);
