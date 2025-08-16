@@ -10,7 +10,7 @@ jobs:
   benchmarks:
     name: Run benchmarks
     runs-on: ubuntu-latest
-    if: ${{ contains(github.event.pull_request.labels.*.name, 'benchmarks') }}
+    if: ${{ contains(github.event.pull_request.labels.*.name, 'benchmarks') || github.event_name == 'workflow_dispatch' }}
     steps:
       - uses: actions/checkout@v4
 
