@@ -48,7 +48,7 @@ instant-distance = "0.6.1"
 proptest = "1.6.0"
 rand = { version = "0.8.5", features = ["std_rng"] }
 tempfile = "3.20.0"
-criterion = "0.7.0"
+criterion = { package = "codspeed-criterion-compat", version = "*" }
 
 [features]
 default = []
@@ -60,5 +60,5 @@ assert-reader-validity = []
 opt-level = 3
 
 [[bench]]
-name = "benchmark"
+name = "bench"
 harness = false
