@@ -52,7 +52,7 @@ fn index_and_search_10k(c: &mut Criterion) {
         .warm_up_time(Duration::from_secs(10))
         .measurement_time(Duration::from_secs(100));
 
-    group.bench_function("hnsw build 1000", move |b| {
+    group.bench_function("hnsw build 10k", move |b| {
         b.iter_batched(
             || create_db_and_fill_with_vecs(&env).unwrap(),
             |(writer, mut wtxn)| {
