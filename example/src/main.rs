@@ -9,10 +9,10 @@ use ordered_float::OrderedFloat;
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng, thread_rng};
 use roaring::RoaringBitmap;
-use tempfile::env::temp_dir;
+use tempfile::tempdir;
 
 fn main() -> Result<()> {
-    let temp_dir = temp_dir();
+    let temp_dir = tempdir().unwrap();
     let env = unsafe {
         EnvOpenOptions::new()
             .map_size(1024 * 1024 * 1024 * 2) // 2GiB
