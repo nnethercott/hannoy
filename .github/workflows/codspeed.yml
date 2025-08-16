@@ -1,9 +1,12 @@
 name: CodSpeed
 
 on:
+  push:
+    branches:
+      - "main"
   pull_request: # required to have reports on PRs
     branches:
-      - "main" # or "master"
+      - "main"
   workflow_dispatch:
 
 jobs:
