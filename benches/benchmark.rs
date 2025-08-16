@@ -6,8 +6,8 @@ use heed::{Env, EnvOpenOptions, RwTxn};
 use rand::{rngs::StdRng, Rng, SeedableRng};
 use tempfile::tempdir;
 
-static M: usize = 8;
-static M0: usize = 16;
+static M: usize = 16;
+static M0: usize = 32;
 
 fn rng() -> StdRng {
     StdRng::seed_from_u64(42)
@@ -53,18 +53,14 @@ fn index_and_search_10k(c: &mut Criterion) {
         .measurement_time(Duration::from_secs(100));
 
     group.bench_function("hnsw build 10k", move |b| {
-        b.iter_batched(
-            || create_db_and_fill_with_vecs(&env).unwrap(),
-            |(writer, mut wtxn)| {
-                let mut rng = rng();
-                let mut builder = writer.builder(&mut rng);
-                builder.ef_construction(32).build::<M, M0>(&mut wtxn).unwrap();
-            },
-            BatchSize::LargeInput,
-        )
+        b.iter(|| {
+            let (writer, mut wtxn) = create_db_and_fill_with_vecs(&env).unwrap();
+            let mut rng = rng();
+            let mut builder = writer.builder(&mut rng);
+            builder.ef_construction(32).build::<M, M0>(&mut wtxn).unwrap();
+        });
     });
 }
 
-criterion_group!(benches, index_and_search_10k,);
-
+criterion_group!(benches, index_and_search_10k);
 criterion_main!(benches);
