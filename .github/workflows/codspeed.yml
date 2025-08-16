@@ -10,7 +10,7 @@ jobs:
   benchmarks:
     name: Run benchmarks
     runs-on: ubuntu-latest
-    if: ${{ contains(github.event.pull_request.labels.*.name, 'perf') }}
+    if: ${{ contains(github.event.pull_request.labels.*.name, 'benchmarks') }}
     steps:
       - uses: actions/checkout@v4
 
