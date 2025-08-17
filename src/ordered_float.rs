@@ -8,9 +8,14 @@
 #[derive(Default, Debug, Clone, Copy)]
 pub struct OrderedFloat(pub f32);
 
-impl OrderedFloat {
-    pub fn new(x: f32) -> Option<Self> {
-        x.is_sign_positive().then(move || Self(x))
+impl TryFrom<f32> for OrderedFloat {
+    type Error = crate::Error;
+
+    fn try_from(value: f32) -> Result<Self, Self::Error> {
+        if value.is_sign_positive() {
+            return Ok(Self(value));
+        }
+        Err(crate::Error::InvalidNonNegative(value))
     }
 }
 

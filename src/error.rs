@@ -84,7 +84,7 @@ pub enum Error {
     },
 
     #[error("Not a valid distance: {0} < 0.0")]
-    InvalidDistance(f32),
+    InvalidNonNegative(f32),
 }
 
 impl Error {

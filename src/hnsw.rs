@@ -463,7 +463,7 @@ impl<'a, D: Distance, const M: usize, const M0: usize> HnswBuilder<'a, D, M, M0>
             let dist = D::distance(query, &ve);
 
             candidates.push((
-                Reverse(OrderedFloat::new(dist).ok_or(Error::InvalidDistance(dist))?),
+                Reverse(OrderedFloat::try_from(dist)?),
                 ep,
             ));
             res.push((OrderedFloat(dist), ep));
