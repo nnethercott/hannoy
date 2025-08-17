@@ -3,6 +3,7 @@ use std::io;
 use crate::{key::Key, node_id::NodeMode, version::Version, ItemId, LayerId};
 
 /// The different set of errors that arroy can encounter.
+#[non_exhaustive]
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     /// An internal error mostly related to LMDB or encoding/decoding.
@@ -81,6 +82,9 @@ pub enum Error {
         /// The version that is unknown.
         version: Version,
     },
+
+    #[error("Not a valid distance: {0} < 0.0")]
+    InvalidDistance(f32),
 }
 
 impl Error {

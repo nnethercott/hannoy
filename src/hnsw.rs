@@ -462,7 +462,10 @@ impl<'a, D: Distance, const M: usize, const M0: usize> HnswBuilder<'a, D, M, M0>
             let ve = lmdb.get_item(ep)?;
             let dist = D::distance(query, &ve);
 
-            candidates.push((Reverse(OrderedFloat(dist)), ep));
+            candidates.push((
+                Reverse(OrderedFloat::new(dist).ok_or(Error::InvalidDistance(dist))?),
+                ep,
+            ));
             res.push((OrderedFloat(dist), ep));
             visited.insert(ep);
         }

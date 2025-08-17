@@ -8,6 +8,12 @@
 #[derive(Default, Debug, Clone, Copy)]
 pub struct OrderedFloat(pub f32);
 
+impl OrderedFloat {
+    pub fn new(x: f32) -> Option<Self> {
+        x.is_sign_positive().then(move || Self(x))
+    }
+}
+
 impl PartialEq for OrderedFloat {
     fn eq(&self, other: &Self) -> bool {
         self.0.to_bits().eq(&other.0.to_bits())
