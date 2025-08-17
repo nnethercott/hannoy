@@ -12,7 +12,7 @@ impl TryFrom<f32> for OrderedFloat {
     type Error = crate::Error;
 
     fn try_from(value: f32) -> Result<Self, Self::Error> {
-        if value.is_sign_positive() {
+        if value.is_sign_positive() || value == 0.0 {
             return Ok(Self(value));
         }
         Err(crate::Error::InvalidNonNegative(value))
@@ -45,11 +45,31 @@ mod tests {
 
     use crate::ordered_float::OrderedFloat;
 
+    #[test]
+    fn negative_zero_works() {
+        assert!(OrderedFloat::try_from(-0.0f32).is_ok())
+    }
+
+    #[test]
+    fn positive_zero_works() {
+        assert!(OrderedFloat::try_from(0.0f32).is_ok())
+    }
+
     proptest! {
         #[test]
+        fn negatives_fail(x in f32::MIN..-0.0) {
+           assert!(OrderedFloat::try_from(x).is_err())
+        }
+
+        #[test]
+        fn positives_succeed(x in -0.0..=f32::MAX) {
+           assert!(OrderedFloat::try_from(x).is_ok())
+        }
+
+        #[test]
         fn ordering_makes_sense(
-            (upper, lower) in (0.0f32..=f32::MAX).prop_flat_map(|u|{
-                (Just(u), 0.0f32..=u)
+            (upper, lower) in (-0.0f32..=f32::MAX).prop_flat_map(|u|{
+                (Just(u), -0.0f32..=u)
             })
         ){
             assert!(OrderedFloat(upper) > OrderedFloat(lower));
