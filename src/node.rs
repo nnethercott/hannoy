@@ -130,7 +130,7 @@ impl<'a, D: Distance> BytesEncode<'a> for NodeCodec<D> {
     type EItem = Node<'a, D>;
 
     fn bytes_encode(item: &Self::EItem) -> Result<Cow<'a, [u8]>, BoxedError> {
-        // ensure same alignment as 64-bit [`crate::key::Key`]
+        // ensure 8 byte alignment of values
         const ALIGMNENT: usize = std::mem::size_of::<u64>();
 
         let mut bytes = Vec::new();
@@ -138,19 +138,13 @@ impl<'a, D: Distance> BytesEncode<'a> for NodeCodec<D> {
             Node::Item(Item { header, vector }) => {
                 bytes.push(NODE_TAG);
                 bytes.extend_from_slice(bytes_of(header));
+                bytes.extend((vector.len() as u32).to_be_bytes());
                 bytes.extend(vector.as_bytes());
-
-                // pad with [0..,0, len, f32::NAN] so the prefix is backward compatible
-                let mut suffix = Vec::new();
-                suffix.extend((vector.len() as u64).to_be_bytes());
-                suffix.extend(f32::NAN.to_be_bytes());
-                let pad_len = ALIGMNENT - (bytes.len() + suffix.len()) % ALIGMNENT;
-                bytes.extend(std::iter::repeat_n(0, pad_len));
-                bytes.extend(suffix);
+                let pad_len = ALIGMNENT - bytes.len() % ALIGMNENT;
             }
             Node::Links(Links { links }) => {
                 bytes.push(LINKS_TAG);
-                bytes.extend((links.serialized_size() as u64).to_be_bytes());
+                bytes.extend((links.serialized_size() as u32).to_be_bytes());
                 links.serialize_into(&mut bytes)?;
                 let pad_len = ALIGMNENT - bytes.len() % ALIGMNENT;
                 bytes.extend(std::iter::repeat_n(0, pad_len));
@@ -170,30 +164,16 @@ impl<'a, D: Distance> BytesDecode<'a> for NodeCodec<D> {
             [NODE_TAG, bytes @ ..] => {
                 let (header_bytes, remaining) = bytes.split_at(size_of::<D::Header>());
                 let header = pod_read_unaligned(header_bytes);
-
-                let vector = if BigEndian::read_f32(
-                    &remaining[remaining.len() - std::mem::size_of::<f32>()..],
-                )
-                .is_nan()
-                {
-                    // aligned
-                    let offset = remaining.len()
-                        - std::mem::size_of::<f32>()
-                        - std::mem::size_of::<u64>() as usize;
-                    let suffix = &remaining[offset..];
-                    let vec_len = BigEndian::read_u64(suffix) as usize;
-                    UnalignedVector::<D::VectorCodec>::from_bytes(
-                        &remaining[..vec_len * std::mem::size_of::<f32>()],
-                    )?
-                } else {
-                    // potentially unaligned
-                    UnalignedVector::<D::VectorCodec>::from_bytes(remaining)?
-                };
+                let vec_len = BigEndian::read_u32(remaining) as usize;
+                let remaining = &remaining[std::mem::size_of::<u32>()..];
+                let vector = UnalignedVector::<D::VectorCodec>::from_bytes(
+                    &remaining[..vec_len * std::mem::size_of::<f32>()],
+                )?;
 
                 Ok(Node::Item(Item { header, vector }))
             }
             [LINKS_TAG, bytes @ ..] => {
-                let links_len = BigEndian::read_u64(bytes) as usize;
+                let links_len = BigEndian::read_u32(bytes) as usize;
                 let bytes = &bytes[std::mem::size_of_val(&links_len)..];
                 let links: Cow<'_, RoaringBitmap> =
                     Cow::Owned(RoaringBitmap::deserialize_from(&bytes[..links_len]).unwrap());
@@ -267,7 +247,7 @@ mod tests {
         assert!(bytes.is_ok());
         let bytes = bytes.unwrap();
         // dbg!(&bytes);
-        assert!(BigEndian::read_f32(&bytes[bytes.len() - 4..]).is_nan());
+        // assert!(BigEndian::read_f32(&bytes[bytes.len() - 4..]).is_nan());
         // dbg!(BigEndian::read_u64(&bytes[bytes.len() - 12..bytes.len() - 4]));
 
         let new_item = NodeCodec::<D>::bytes_decode(bytes.as_ref());
