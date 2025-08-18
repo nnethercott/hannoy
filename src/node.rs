@@ -4,7 +4,7 @@ use std::mem::size_of;
 use std::ops::Deref;
 
 use bytemuck::{bytes_of, cast_slice, pod_read_unaligned};
-use byteorder::{ByteOrder, NativeEndian};
+use byteorder::{BigEndian, ByteOrder, NativeEndian};
 use heed::{BoxedError, BytesDecode, BytesEncode};
 use roaring::RoaringBitmap;
 
@@ -130,16 +130,30 @@ impl<'a, D: Distance> BytesEncode<'a> for NodeCodec<D> {
     type EItem = Node<'a, D>;
 
     fn bytes_encode(item: &Self::EItem) -> Result<Cow<'a, [u8]>, BoxedError> {
+        // ensure same alignment as 64-bit [`crate::key::Key`]
+        const ALIGMNENT: usize = std::mem::size_of::<u64>();
+
         let mut bytes = Vec::new();
         match item {
             Node::Item(Item { header, vector }) => {
                 bytes.push(NODE_TAG);
                 bytes.extend_from_slice(bytes_of(header));
                 bytes.extend(vector.as_bytes());
+
+                // pad with [0..,0, len, f32::NAN] so the prefix is backward compatible
+                let mut suffix = Vec::new();
+                suffix.extend((vector.len() as u64).to_be_bytes());
+                suffix.extend(f32::NAN.to_be_bytes());
+                let pad_len = ALIGMNENT - (bytes.len() + suffix.len()) % ALIGMNENT;
+                bytes.extend(std::iter::repeat_n(0, pad_len));
+                bytes.extend(suffix);
             }
             Node::Links(Links { links }) => {
                 bytes.push(LINKS_TAG);
+                bytes.extend((links.serialized_size() as u64).to_be_bytes());
                 links.serialize_into(&mut bytes)?;
+                let pad_len = ALIGMNENT - bytes.len() % ALIGMNENT;
+                bytes.extend(std::iter::repeat_n(0, pad_len));
             }
         }
         Ok(Cow::Owned(bytes))
@@ -150,17 +164,39 @@ impl<'a, D: Distance> BytesDecode<'a> for NodeCodec<D> {
     type DItem = Node<'a, D>;
 
     fn bytes_decode(bytes: &'a [u8]) -> Result<Self::DItem, BoxedError> {
+        debug_assert!(bytes.as_ptr() as usize % std::mem::size_of::<u64>() == 0, "not aligned");
+
         match bytes {
             [NODE_TAG, bytes @ ..] => {
                 let (header_bytes, remaining) = bytes.split_at(size_of::<D::Header>());
                 let header = pod_read_unaligned(header_bytes);
-                let vector = UnalignedVector::<D::VectorCodec>::from_bytes(remaining)?;
+
+                let vector = if BigEndian::read_f32(
+                    &remaining[remaining.len() - std::mem::size_of::<f32>()..],
+                )
+                .is_nan()
+                {
+                    // aligned
+                    let offset = remaining.len()
+                        - std::mem::size_of::<f32>()
+                        - std::mem::size_of::<u64>() as usize;
+                    let suffix = &remaining[offset..];
+                    let vec_len = BigEndian::read_u64(suffix) as usize;
+                    UnalignedVector::<D::VectorCodec>::from_bytes(
+                        &remaining[..vec_len * std::mem::size_of::<f32>()],
+                    )?
+                } else {
+                    // potentially unaligned
+                    UnalignedVector::<D::VectorCodec>::from_bytes(remaining)?
+                };
 
                 Ok(Node::Item(Item { header, vector }))
             }
             [LINKS_TAG, bytes @ ..] => {
+                let links_len = BigEndian::read_u64(bytes) as usize;
+                let bytes = &bytes[std::mem::size_of_val(&links_len)..];
                 let links: Cow<'_, RoaringBitmap> =
-                    Cow::Owned(RoaringBitmap::deserialize_from(bytes).unwrap());
+                    Cow::Owned(RoaringBitmap::deserialize_from(&bytes[..links_len]).unwrap());
                 Ok(Node::Links(Links { links }))
             }
 
@@ -190,6 +226,7 @@ impl fmt::Display for InvalidNodeDecoding {
 mod tests {
     use super::{Item, Links, Node, NodeCodec};
     use crate::{distance::Cosine, internals::UnalignedVector, Distance};
+    use byteorder::{BigEndian, ByteOrder};
     use heed::{BytesDecode, BytesEncode};
     use roaring::RoaringBitmap;
     use std::borrow::Cow;
@@ -221,7 +258,7 @@ mod tests {
     fn test_codec() {
         type D = Cosine;
 
-        let vector = UnalignedVector::from_vec(vec![1.0f32, 2.0f32]);
+        let vector = UnalignedVector::from_vec(vec![1.2f32, -2.0f32, 1.0]);
         let header = D::new_header(&vector);
         let item = Item { vector, header };
         let db_item = Node::Item(item.clone());
@@ -229,6 +266,9 @@ mod tests {
         let bytes = NodeCodec::<D>::bytes_encode(&db_item);
         assert!(bytes.is_ok());
         let bytes = bytes.unwrap();
+        // dbg!(&bytes);
+        assert!(BigEndian::read_f32(&bytes[bytes.len() - 4..]).is_nan());
+        // dbg!(BigEndian::read_u64(&bytes[bytes.len() - 12..bytes.len() - 4]));
 
         let new_item = NodeCodec::<D>::bytes_decode(bytes.as_ref());
         assert!(new_item.is_ok());
