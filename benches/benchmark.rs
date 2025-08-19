@@ -1,6 +1,5 @@
 use std::time::Duration;
 
-use criterion::{criterion_group, criterion_main, Criterion};
 use hannoy::{distances::Cosine, Database, Writer};
 use heed::{Env, EnvOpenOptions, RwTxn};
 use rand::{rngs::StdRng, Rng, SeedableRng};
@@ -9,58 +8,94 @@ use tempfile::tempdir;
 static M: usize = 16;
 static M0: usize = 32;
 
+// scaffolding
 fn rng() -> StdRng {
     StdRng::seed_from_u64(42)
 }
 
-fn setup_lmdb() -> Env {
-    let temp_dir = tempdir().unwrap();
-    let env = unsafe {
-        EnvOpenOptions::new()
-            .map_size(1024 * 1024 * 1024 * 2) // 2GiB
-            .open(temp_dir)
+// hnsw build and search benchmarks
+mod hnsw {
+    use hannoy::Reader;
+    use rand::thread_rng;
+
+    use super::*;
+
+    fn setup_lmdb() -> Env {
+        let temp_dir = tempdir().unwrap();
+        let env = unsafe {
+            EnvOpenOptions::new()
+                .map_size(1024 * 1024 * 1024 * 2) // 2GiB
+                .open(temp_dir)
+        }
+        .unwrap();
+        env
     }
-    .unwrap();
-    env
-}
 
-fn index_and_search_10k(c: &mut Criterion) {
-    const DIM: usize = 512;
-    let env = setup_lmdb();
-
-    fn create_db_and_fill_with_vecs(env: &Env) -> hannoy::Result<(Writer<Cosine>, RwTxn)> {
+    fn create_db_and_fill_with_vecs<const DIM: usize>(
+        env: &Env,
+        size: usize,
+    ) -> hannoy::Result<(Writer<Cosine>, RwTxn, Database<Cosine>)> {
         let mut wtxn = env.write_txn().unwrap();
 
         let db: Database<Cosine> = env.create_database(&mut wtxn, None)?;
         let writer: Writer<Cosine> = Writer::new(db, 0, DIM);
         let mut rng = rng();
 
-        // insert 1k random vectors
-        for vec_id in 0..10000 {
-            let mut vec = [f32::default(); DIM];
+        // insert random vectors
+        for vec_id in 0..size {
+            let mut vec = [0.0; DIM];
             rng.fill(&mut vec);
-            writer.add_item(&mut wtxn, vec_id, &vec)?;
+            writer.add_item(&mut wtxn, vec_id as u32, &vec)?;
         }
 
-        Ok((writer, wtxn))
+        Ok((writer, wtxn, db))
     }
 
-    // bench writer
-    let mut group = c.benchmark_group("writer");
-    group
-        .sample_size(100)
-        .warm_up_time(Duration::from_secs(10))
-        .measurement_time(Duration::from_secs(100));
+    // time hnsw build
+    #[divan::bench(
+        consts = [512, 768, 1536],
+        max_time = 60.0,
+    )]
+    fn build_hnsw<const DIM: usize>(bencher: divan::Bencher) {
+        let env = setup_lmdb();
 
-    group.bench_function("hnsw build 10k", move |b| {
-        b.iter(|| {
-            let (writer, mut wtxn) = create_db_and_fill_with_vecs(&env).unwrap();
-            let mut rng = rng();
-            let mut builder = writer.builder(&mut rng);
-            builder.ef_construction(32).build::<M, M0>(&mut wtxn).unwrap();
-        });
-    });
+        bencher
+            .with_inputs(|| create_db_and_fill_with_vecs::<DIM>(&env, 5000).unwrap())
+            .bench_local_values(|(writer, mut wtxn, _)| {
+                let mut rng = rng();
+                let mut builder = writer.builder(&mut rng);
+                builder.ef_construction(32).build::<M, M0>(&mut wtxn).unwrap();
+            });
+    }
+
+    // time hnsw search
+    #[divan::bench(
+        consts = [512, 768, 1536],
+        sample_count = 500,
+    )]
+    fn search_hnsw<const DIM: usize>(bencher: divan::Bencher) {
+        // first build a vector db
+        let env = setup_lmdb();
+        let (writer, mut wtxn, db) = create_db_and_fill_with_vecs::<DIM>(&env, 10000).unwrap();
+        let mut rng = rng();
+        let mut builder = writer.builder(&mut rng);
+        builder.ef_construction(32).build::<M, M0>(&mut wtxn).unwrap();
+        wtxn.commit().unwrap();
+
+        bencher
+            .with_inputs(|| {
+                let mut query = [f32::default(); DIM];
+                thread_rng().fill(&mut query);
+                query
+            })
+            .bench_local_values(|query| {
+                let rtxn = env.read_txn().unwrap();
+                let reader = Reader::<Cosine>::open(&rtxn, 0, db).unwrap();
+                let nns = reader.nns(10).by_vector(&rtxn, &query).unwrap();
+            });
+    }
 }
 
-criterion_group!(benches, index_and_search_10k);
-criterion_main!(benches);
+fn main() {
+    divan::main();
+}
