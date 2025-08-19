@@ -8,7 +8,6 @@ use tempfile::tempdir;
 static M: usize = 16;
 static M0: usize = 32;
 
-// scaffolding
 fn rng() -> StdRng {
     StdRng::seed_from_u64(42)
 }
