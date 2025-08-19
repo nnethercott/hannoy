@@ -42,12 +42,12 @@ approx = "0.5.1"
 arbitrary = { version = "1.4.1", features = ["derive"] }
 arroy = "0.6.1"
 clap = { version = "4.5.24", features = ["derive"] }
-criterion = { package = "codspeed-criterion-compat", version = "*" }
+divan = { version = "3.0.5", package = "codspeed-divan-compat" }
 env_logger = "0.11.6"
 insta = "1.42.0"
 instant-distance = "0.6.1"
 proptest = "1.6.0"
-rand = { version = "0.8.5", features = ["std_rng"] }
+rand = { version = "0.8.5", features = ["std_rng", "min_const_gen"] }
 tempfile = "3.20.0"
 
 [features]
