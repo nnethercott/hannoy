@@ -1,5 +1,3 @@
-use std::time::Duration;
-
 use hannoy::{distances::Cosine, Database, Writer};
 use heed::{Env, EnvOpenOptions, RwTxn};
 use rand::{rngs::StdRng, Rng, SeedableRng};
@@ -70,12 +68,12 @@ mod hnsw {
     // time hnsw search
     #[divan::bench(
         consts = [512, 768, 1536],
-        sample_count = 500,
+        sample_count = 100,
     )]
     fn search_hnsw<const DIM: usize>(bencher: divan::Bencher) {
         // first build a vector db
         let env = setup_lmdb();
-        let (writer, mut wtxn, db) = create_db_and_fill_with_vecs::<DIM>(&env, 10000).unwrap();
+        let (writer, mut wtxn, db) = create_db_and_fill_with_vecs::<DIM>(&env, 50000).unwrap();
         let mut rng = rng();
         let mut builder = writer.builder(&mut rng);
         builder.ef_construction(32).build::<M, M0>(&mut wtxn).unwrap();
@@ -90,7 +88,7 @@ mod hnsw {
             .bench_local_values(|query| {
                 let rtxn = env.read_txn().unwrap();
                 let reader = Reader::<Cosine>::open(&rtxn, 0, db).unwrap();
-                let nns = reader.nns(10).by_vector(&rtxn, &query).unwrap();
+                reader.nns(10).by_vector(&rtxn, &query).unwrap();
             });
     }
 }
