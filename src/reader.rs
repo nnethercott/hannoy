@@ -21,6 +21,14 @@ use crate::{Database, Error, ItemId, Key, MetadataCodec, Node, Prefix, PrefixCod
 /// A good default value for the `ef` parameter.
 const DEFAULT_EF_SEARCH: usize = 100;
 
+#[cfg(not(test))]
+/// The threshold at which linear search is used instead of the HNSW algorithm.
+const LINEAR_SEARCH_THRESHOLD: u64 = 1000;
+#[cfg(test)]
+/// Note that for tests purposes, we use set this threshold
+/// to zero to make sure we test the HNSW algorithm.
+const LINEAR_SEARCH_THRESHOLD: u64 = 0;
+
 /// Options used to make a query against an arroy [`Reader`].
 pub struct QueryBuilder<'a, D: Distance> {
     reader: &'a Reader<'a, D>,
@@ -302,6 +310,21 @@ impl<'t, D: Distance> Reader<'t, D> {
         // If we will never find any candidates, return an empty vector
         if opt.candidates.is_some_and(|c| self.item_ids().is_disjoint(c)) {
             return Ok(Vec::new());
+        }
+
+        // If the number of candidates is less than a given threshold, perform linear search
+        if let Some(candidates) = opt.candidates.filter(|c| c.len() < LINEAR_SEARCH_THRESHOLD) {
+            let mut item_distances = Vec::with_capacity(candidates.len() as usize);
+            for item_id in candidates {
+                let Some(vector) = self.item_vector(rtxn, item_id)? else { continue };
+                let vector = UnalignedVector::from_vec(vector);
+                let item = Item { header: D::new_header(&vector), vector };
+                let distance = D::distance(&item, query);
+                item_distances.push((item_id, distance));
+            }
+            item_distances.sort_by_key(|(_, dist)| OrderedFloat(*dist));
+            item_distances.truncate(opt.count);
+            return Ok(item_distances);
         }
 
         let mut eps = Vec::from_iter(self.entry_points.iter());
