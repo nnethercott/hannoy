@@ -29,7 +29,7 @@ const LINEAR_SEARCH_THRESHOLD: u64 = 1000;
 /// to zero to make sure we test the HNSW algorithm.
 const LINEAR_SEARCH_THRESHOLD: u64 = 0;
 
-/// Options used to make a query against an arroy [`Reader`].
+/// Options used to make a query against an hannoy [`Reader`].
 pub struct QueryBuilder<'a, D: Distance> {
     reader: &'a Reader<'a, D>,
     candidates: Option<&'a RoaringBitmap>,

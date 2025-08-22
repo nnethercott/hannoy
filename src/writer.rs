@@ -24,14 +24,14 @@ use crate::{
     CANCELLATION_PROBING,
 };
 
-/// The options available when building the arroy database.
+/// The options available when building the hannoy database.
 pub struct HannoyBuilder<'a, D: Distance, R: Rng + SeedableRng, P> {
     writer: &'a Writer<D>,
     rng: &'a mut R,
     inner: BuildOption<'a, P>,
 }
 
-/// The options available when building the arroy database.
+/// The options available when building the hannoy database.
 pub(crate) struct BuildOption<'a, P> {
     pub(crate) ef_construction: usize,
     pub(crate) available_memory: Option<usize>,
