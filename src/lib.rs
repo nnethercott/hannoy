@@ -1,7 +1,9 @@
 //! Hannoy is a key-value backed [HNSW][1] implementation based on [arroy][2].
 //!
 //! Many popular HNSW libraries are built in memory, meaning you need enough RAM to store all the vectors you're indexing. Instead, `hannoy` uses
-//! [LMDB][3] — a memory-mapped KV store — as a storage backend. This is more well-suited for machines running multiple programs, or cases where the
+//! [LMDB][3] — a memory-mapped KV store — as a storage backend.
+//!
+//! This is more well-suited for machines running multiple programs, or cases where the
 //! dataset you're indexing won't fit in memory. LMDB also supports non-blocking concurrent reads by design, meaning its safe to query the index in
 //! multi-threaded environments.
 //!

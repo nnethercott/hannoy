@@ -51,20 +51,63 @@ impl Default for BuildOption<'_, NoProgress> {
 }
 
 impl<'a, D: Distance, R: Rng + SeedableRng, P> HannoyBuilder<'a, D, R, P> {
-    pub fn available_memory(&mut self, memory: usize) -> &mut Self {
-        self.inner.available_memory = Some(memory);
-        self
-    }
+    // NOTE: unused in hannoy
+    // pub fn available_memory(&mut self, memory: usize) -> &mut Self {
+    //     self.inner.available_memory = Some(memory);
+    //     self
+    // }
 
-    /// Provide a closure that can cancel the indexing process early if needed. There is no guarantee on when the process is going to cancel itself, but hannoy will try to stop as soon as possible once the closure returns true.
+    /// Provide a closure that can cancel the indexing process early if needed.
+    /// There is no guarantee on when the process is going to cancel itself, but
+    /// hannoy will try to stop as soon as possible once the closure returns `true`.
     ///
-    /// Since the closure is not mutable and will be called from multiple threads at the same time it’s encouraged to make it quick to execute. A common way to use it is to fetch an AtomicBool inside it that can be set from another thread without lock.
+    /// Since the closure is not mutable and will be called from multiple threads
+    /// at the same time it's encouraged to make it quick to execute. A common
+    /// way to use it is to fetch an `AtomicBool` inside it that can be set
+    /// from another thread without lock.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// # use hannoy::{Writer, distances::Euclidean};
+    /// # let (writer, wtxn): (Writer<Euclidean>, heed::RwTxn) = todo!();
+    /// use rand::rngs::StdRng;
+    /// use rand::SeedableRng;
+    /// use std::sync::atomic::{AtomicBool, Ordering};
+    ///
+    /// let stops_after = AtomicBool::new(false);
+    ///
+    /// // Cancel the task after one minute
+    /// std::thread::spawn(|| {
+    ///     let one_minute = std::time::Duration::from_secs(60);
+    ///     std::thread::sleep(one_minute);
+    ///     stops_after.store(true, Ordering::Relaxed);
+    /// });
+    ///
+    /// let mut rng = StdRng::seed_from_u64(92);
+    /// writer.builder(&mut rng).cancel(|| stops_after.load(Ordering::Relaxed)).build::<16,32>(&mut wtxn);
+    /// ```
     pub fn cancel(&mut self, cancel: impl Fn() -> bool + 'a + Sync + Send) -> &mut Self {
         self.inner.cancel = Box::new(cancel);
         self
     }
 
-    pub fn progress<NP>(self, progress: NP) -> HannoyBuilder<'a, D, R, NP> {
+    /// The provided object handles reporting build steps.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// # use hannoy::{Writer, distances::Euclidean};
+    /// # let (writer, wtxn): (Writer<Euclidean>, heed::RwTxn) = todo!();
+    /// use rand::rngs::StdRng;
+    /// use rand::SeedableRng;
+    /// use std::sync::atomic::{AtomicBool, Ordering};
+    /// use steppe::NoProgress;
+    ///
+    /// let mut rng = StdRng::seed_from_u64(4729);
+    /// writer.builder(&mut rng).progress(NoProgress).build::<16,32>(&mut wtxn);
+    /// ```
+    pub fn progress<NP: steppe::Progress>(self, progress: NP) -> HannoyBuilder<'a, D, R, NP> {
         let HannoyBuilder {
             writer,
             rng,
@@ -78,6 +121,7 @@ impl<'a, D: Distance, R: Rng + SeedableRng, P> HannoyBuilder<'a, D, R, P> {
         }
     }
 
+    /// TODO: finish
     pub fn ef_construction(&mut self, ef_construction: usize) -> &mut Self {
         self.inner.ef_construction = ef_construction;
         self
