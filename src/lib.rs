@@ -68,7 +68,6 @@
 #![doc(
     html_logo_url = "https://raw.githubusercontent.com/nnethercott/hannoy/main/assets/ed_tmp.png?raw=true"
 )]
-
 #![warn(clippy::todo)]
 
 mod distance;

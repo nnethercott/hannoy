@@ -144,11 +144,11 @@ impl<'a, D: Distance, R: Rng + SeedableRng, P> HannoyBuilder<'a, D, R, P> {
     }
 
     /// Generates an HNSW graph with max `M` links per node in layers > 0 and max `M0` links in layer 0.
-    /// 
+    ///
     /// A general rule of thumb is to take `M0`= 2*`M`, with `M` >=3.  Some common choices for
-    /// `M` include : 8, 12, 16, 32. Note that increasing `M` produces a denser graph at the cost 
+    /// `M` include : 8, 12, 16, 32. Note that increasing `M` produces a denser graph at the cost
     /// of longer build times.
-    /// 
+    ///
     /// This function is using rayon to spawn threads. It can be configured by using the
     /// [`rayon::ThreadPoolBuilder`].
     ///
