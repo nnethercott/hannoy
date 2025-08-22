@@ -1,3 +1,64 @@
+//! Hannoy is a key-value backed [HNSW][1] implementation based on [arroy][2].
+//!
+//! Many popular HNSW libraries are built in memory, meaning you need enough RAM to store all the vectors you're indexing. Instead, `hannoy` uses
+//! [LMDB][3] — a memory-mapped KV store — as a storage backend. This is more well-suited for machines running multiple programs, or cases where the
+//! dataset you're indexing won't fit in memory. LMDB also supports non-blocking concurrent reads by design, meaning its safe to query the index in
+//! multi-threaded environments.
+//!
+//! [1]: https://www.pinecone.io/learn/series/faiss/hnsw/
+//! [2]: https://github.com/meilisearch/arroy
+//! [3]: https://en.wikipedia.org/wiki/Lightning_Memory-Mapped_Database
+//!
+//! # Examples
+//!
+//! Open an LMDB database, store some vectors in it and query the nearest item from some query vector. This is the most
+//! trivial way to use hannoy and it's fairly easy. Just do not forget to [`HannoyBuilder::build<M0,M>`] and [`heed::RwTxn::commit`]
+//! when you are done inserting your items.
+//!
+//! ```rust
+//! use hannoy::{distances::Cosine, Database, Reader, Result, Writer};
+//! use heed::EnvOpenOptions;
+//! use rand::{rngs::StdRng, SeedableRng};
+//!
+//! fn main() -> Result<()> {
+//!     const DIM: usize = 3;
+//!     let vecs: Vec<[f32; DIM]> = vec![[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
+//!
+//!     let env = unsafe {
+//!         EnvOpenOptions::new()
+//!             .map_size(1024 * 1024 * 1024 * 1) // 1GiB
+//!             .open("./")
+//!     }
+//!     .unwrap();
+//!
+//!     let mut wtxn = env.write_txn().unwrap();
+//!     let db: Database<Cosine> = env.create_database(&mut wtxn, None)?;
+//!     let writer: Writer<Cosine> = Writer::new(db, 0, DIM);
+//!
+//!     // insert into lmdb
+//!     writer.add_item(&mut wtxn, 0, &vecs[0])?;
+//!     writer.add_item(&mut wtxn, 1, &vecs[1])?;
+//!     writer.add_item(&mut wtxn, 2, &vecs[2])?;
+//!
+//!     // ...and build hnsw
+//!     let mut rng = StdRng::seed_from_u64(42);
+//!
+//!     let mut builder = writer.builder(&mut rng);
+//!     builder.ef_construction(100).build::<16,32>(&mut wtxn)?;
+//!     wtxn.commit()?;
+//!
+//!     // search hnsw using a new lmdb read transaction
+//!     let rtxn = env.read_txn()?;
+//!     let reader = Reader::<Cosine>::open(&rtxn, 0, db)?;
+//!
+//!     let query = vec![0.0, 1.0, 0.0];
+//!     let nns = reader.nns(1).ef_search(10).by_vector(&rtxn, &query)?;
+//!
+//!     dbg!("{:?}", &nns);
+//!     Ok(())
+//! }
+//! ```
+
 #![warn(clippy::todo)]
 
 mod distance;
