@@ -13,7 +13,7 @@ use crate::unaligned_vector::UnalignedVector;
 #[derive(Debug, Clone)]
 pub enum Manhattan {}
 
-/// The header of Manhattan leaf nodes.
+/// The header of Manhattan item nodes.
 #[repr(C)]
 #[derive(Pod, Zeroable, Clone, Copy)]
 pub struct NodeHeaderManhattan {

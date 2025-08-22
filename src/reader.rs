@@ -176,8 +176,8 @@ impl<'t, D: Distance> Reader<'t, D> {
         self.dimensions
     }
 
-    /// Returns the number of trees in the index.
-    pub fn n_trees(&self) -> usize {
+    /// Returns the number of entry points to the hnsw index.
+    pub fn n_entrypoints(&self) -> usize {
         self.entry_points.len()
     }
 

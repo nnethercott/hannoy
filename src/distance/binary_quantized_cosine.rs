@@ -15,7 +15,7 @@ use crate::unaligned_vector::{BinaryQuantized, UnalignedVector};
 #[derive(Debug, Clone)]
 pub enum BinaryQuantizedCosine {}
 
-/// The header of `BinaryQuantizedCosine` leaf nodes.
+/// The header of `BinaryQuantizedCosine` item nodes.
 #[repr(C)]
 #[derive(Pod, Zeroable, Clone, Copy)]
 pub struct NodeHeaderBinaryQuantizedCosine {

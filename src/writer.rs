@@ -245,8 +245,8 @@ impl<D: Distance> Writer<D> {
 
     /// Returns an `Option`al vector previous stored in this database.
     pub fn item_vector(&self, rtxn: &RoTxn, item: ItemId) -> Result<Option<Vec<f32>>> {
-        Ok(get_item(self.database, self.index, rtxn, item)?.map(|leaf| {
-            let mut vec = leaf.vector.to_vec();
+        Ok(get_item(self.database, self.index, rtxn, item)?.map(|item| {
+            let mut vec = item.vector.to_vec();
             vec.truncate(self.dimensions);
             vec
         }))
@@ -429,7 +429,7 @@ impl<D: Distance> Writer<D> {
         Ok(updated_items)
     }
 
-    // Fetches the item's ids, not the tree nodes ones.
+    // Fetches the item's ids, not the links.
     fn item_indices<P>(&self, wtxn: &mut RwTxn, options: &BuildOption<P>) -> Result<RoaringBitmap>
     where
         P: steppe::Progress,
@@ -497,7 +497,7 @@ impl<'a, D: Distance> FrozenReader<'a, D> {
     }
 }
 
-/// Clears all the links. Starts from the last node and stops at the first leaf.
+/// Clears all the links. Starts from the last node and stops at the first item.
 fn clear_links<D: Distance>(wtxn: &mut RwTxn, database: Database<D>, index: u16) -> Result<()> {
     database.delete(wtxn, &Key::metadata(index))?;
     let mut cursor = database

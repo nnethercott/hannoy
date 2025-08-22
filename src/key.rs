@@ -11,8 +11,8 @@ use crate::{NodeId, NodeMode};
 /// The `mode` indicates what we're looking at.
 /// The `item` point to a specific node.
 /// If the mode is:
-///  - `Item`: we're looking at a `Leaf` node.
-///  - `Tree`: we're looking at one of the internal generated node from hannoy. Could be a descendants or a split plane.
+///  - `Item`: we're looking at an `Item` node.
+///  - `Links`: we're looking at the `Links` bitmap of neighbours for a node
 ///  - `Updated`: The list of items that has been updated since the last build of the database.
 ///  - `Metadata`: There is only one item at `0` that contains the header required to read the index.
 #[derive(Debug, Copy, Clone)]
