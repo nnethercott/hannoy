@@ -24,7 +24,6 @@ use crate::{
     CANCELLATION_PROBING,
 };
 
-/// The options available when building the hannoy database.
 pub struct HannoyBuilder<'a, D: Distance, R: Rng + SeedableRng, P> {
     writer: &'a Writer<D>,
     rng: &'a mut R,
@@ -57,7 +56,7 @@ impl<'a, D: Distance, R: Rng + SeedableRng, P> HannoyBuilder<'a, D, R, P> {
     //     self
     // }
 
-    /// Provide a closure that can cancel the indexing process early if needed.
+    /// Provides a closure that can cancel the indexing process early if needed.
     /// There is no guarantee on when the process is going to cancel itself, but
     /// hannoy will try to stop as soon as possible once the closure returns `true`.
     ///
@@ -121,12 +120,53 @@ impl<'a, D: Distance, R: Rng + SeedableRng, P> HannoyBuilder<'a, D, R, P> {
         }
     }
 
-    /// TODO: finish
+    /// Controls the search range when inserting a new item into the graph. This value must be
+    /// greater than or equal to the `M` used in [`Self::build<M,M0>`]
+    ///
+    /// Typical values range from 50 to 500, with larger `ef_construction` producing higher
+    /// quality hnsw graphs at the expense of longer builds. The default value used in hannoy is
+    /// 100.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// # use hannoy::{Writer, distances::Euclidean};
+    /// # let (writer, wtxn): (Writer<Euclidean>, heed::RwTxn) = todo!();
+    /// use rand::rngs::StdRng;
+    /// use rand::SeedableRng;
+    ///
+    /// let mut rng = StdRng::seed_from_u64(4729);
+    /// writer.builder(&mut rng).ef_construction(100).build::<16,32>(&mut wtxn);
+    /// ```
     pub fn ef_construction(&mut self, ef_construction: usize) -> &mut Self {
         self.inner.ef_construction = ef_construction;
         self
     }
 
+    /// Generates an HNSW graph with max `M` links per node in layers > 0 and max `M0` links in layer 0.
+    /// 
+    /// A general rule of thumb is to take `M0`= 2*`M`, with `M` >=3.  Some common choices for
+    /// `M` include : 8, 12, 16, 32. Note that increasing `M` produces a denser graph at the cost 
+    /// of longer build times.
+    /// 
+    /// This function is using rayon to spawn threads. It can be configured by using the
+    /// [`rayon::ThreadPoolBuilder`].
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// # use hannoy::{Writer, distances::Euclidean};
+    /// # let (writer, wtxn): (Writer<Euclidean>, heed::RwTxn) = todo!();
+    /// use rayon;
+    /// use rand::rngs::StdRng;
+    /// use rand::SeedableRng;
+    ///
+    /// // configure global threadpool if you want!
+    /// rayon::ThreadPoolBuilder::new().num_threads(4).build_global().unwrap();
+    ///
+    /// let mut rng = StdRng::seed_from_u64(4729);
+    /// writer.builder(&mut rng).build::<16,32>(&mut wtxn);
+    /// ```
     pub fn build<const M: usize, const M0: usize>(&mut self, wtxn: &mut RwTxn) -> Result<()>
     where
         P: steppe::Progress,
@@ -134,6 +174,7 @@ impl<'a, D: Distance, R: Rng + SeedableRng, P> HannoyBuilder<'a, D, R, P> {
         self.writer.build::<R, P, M, M0>(wtxn, self.rng, &self.inner)
     }
 
+    // FIXME: make this available under feature "arroy"
     pub fn prepare_arroy_conversion(&self, wtxn: &mut RwTxn) -> Result<()>
     where
         P: steppe::Progress,
@@ -142,9 +183,8 @@ impl<'a, D: Distance, R: Rng + SeedableRng, P> HannoyBuilder<'a, D, R, P> {
     }
 }
 
-/// A writer to store new items, remove existing ones,
-/// and build the search index to query the nearest
-/// neighbors to items or vectors.
+/// A writer to store new items, remove existing ones, and build the search
+/// index to query the nearest neighbors to items or vectors.
 #[derive(Debug)]
 pub struct Writer<D: Distance> {
     database: Database<D>,
