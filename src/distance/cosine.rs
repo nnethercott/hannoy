@@ -1,6 +1,7 @@
 use std::fmt;
 
 use bytemuck::{Pod, Zeroable};
+use simsimd::SpatialSimilarity;
 
 use crate::distance::Distance;
 use crate::node::Item;
@@ -38,24 +39,34 @@ impl Distance for Cosine {
     }
 
     fn distance(p: &Item<Self>, q: &Item<Self>) -> f32 {
-        let pn = p.header.norm;
-        let qn = q.header.norm;
-        let pq = dot_product(&p.vector, &q.vector);
-        let pnqn = pn * qn;
-        if pnqn > f32::EPSILON {
-            let cos = pq / pnqn;
-            let cos = cos.clamp(-1.0, 1.0);
-            // cos is [-1; 1]
-            // cos =  0. -> 0.5
-            // cos = -1. -> 1.0
-            // cos =  1. -> 0.0
-            (1.0 - cos) / 2.0
-        } else {
-            0.0
-        }
+        let p = unsafe{std::slice::from_raw_parts(p.vector.as_ptr() as *const f32, p.vector.len())};
+        let q = unsafe{std::slice::from_raw_parts(q.vector.as_ptr() as *const f32, q.vector.len())};
+
+        // dbg!(p.to_vec());
+        f32::cosine(&p, &q).unwrap() as f32
     }
 
     fn norm_no_header(v: &UnalignedVector<Self::VectorCodec>) -> f32 {
         dot_product(v, v).sqrt()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::borrow::Cow;
+
+    use crate::{distances::Cosine, internals::UnalignedVector, Distance};
+    use crate::node::Item;
+
+    #[test]
+    fn alignment() {
+        let p = vec![1.0f32, 0.0, 2.0];
+        let q = vec![1.0f32, 0.0, 3.0];
+        let p = UnalignedVector::from_slice(&p);
+        let q = UnalignedVector::from_slice(&q);
+        let p: Item<Cosine> = Item{header: Cosine::new_header(&p), vector: p};
+        let q: Item<Cosine> = Item{header: Cosine::new_header(&q), vector: q};
+
+        dbg!(Cosine::distance(&p, &q));
     }
 }

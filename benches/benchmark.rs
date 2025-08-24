@@ -51,13 +51,13 @@ mod hnsw {
     // time hnsw build
     #[divan::bench(
         consts = [512, 768, 1536],
-        max_time = 60.0,
+        max_time = 10.0,
     )]
     fn build_hnsw<const DIM: usize>(bencher: divan::Bencher) {
         let env = setup_lmdb();
 
         bencher
-            .with_inputs(|| create_db_and_fill_with_vecs::<DIM>(&env, 5000).unwrap())
+            .with_inputs(|| create_db_and_fill_with_vecs::<DIM>(&env, 1000).unwrap())
             .bench_local_values(|(writer, mut wtxn, _)| {
                 let mut rng = rng();
                 let mut builder = writer.builder(&mut rng);
@@ -66,14 +66,16 @@ mod hnsw {
     }
 
     // time hnsw search
+    #[ignore]
     #[divan::bench(
         consts = [512, 768, 1536],
         sample_count = 100,
+        sample_size = 10,
     )]
     fn search_hnsw<const DIM: usize>(bencher: divan::Bencher) {
         // first build a vector db
         let env = setup_lmdb();
-        let (writer, mut wtxn, db) = create_db_and_fill_with_vecs::<DIM>(&env, 50000).unwrap();
+        let (writer, mut wtxn, db) = create_db_and_fill_with_vecs::<DIM>(&env, 10000).unwrap();
         let mut rng = rng();
         let mut builder = writer.builder(&mut rng);
         builder.ef_construction(32).build::<M, M0>(&mut wtxn).unwrap();
