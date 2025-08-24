@@ -38,6 +38,7 @@ impl Distance for Cosine {
         NodeHeaderCosine { norm: Self::norm_no_header(vector) }
     }
 
+    // NOTE: i'm noticing one below is much faster
     fn distance(p: &Item<Self>, q: &Item<Self>) -> f32 {
         let p = unsafe{std::slice::from_raw_parts(p.vector.as_ptr() as *const f32, p.vector.len())};
         let q = unsafe{std::slice::from_raw_parts(q.vector.as_ptr() as *const f32, q.vector.len())};
@@ -45,6 +46,23 @@ impl Distance for Cosine {
         // dbg!(p.to_vec());
         f32::cosine(&p, &q).unwrap() as f32
     }
+    // fn distance(p: &Item<Self>, q: &Item<Self>) -> f32 {
+    //     let pn = p.header.norm;
+    //     let qn = q.header.norm;
+    //     let pq = dot_product(&p.vector, &q.vector);
+    //     let pnqn = pn * qn;
+    //     if pnqn > f32::EPSILON {
+    //         let cos = pq / pnqn;
+    //         let cos = cos.clamp(-1.0, 1.0);
+    //         // cos is [-1; 1]
+    //         // cos =  0. -> 0.5
+    //         // cos = -1. -> 1.0
+    //         // cos =  1. -> 0.0
+    //         (1.0 - cos) / 2.0
+    //     } else {
+    //         0.0
+    //     }
+    // }
 
     fn norm_no_header(v: &UnalignedVector<Self::VectorCodec>) -> f32 {
         dot_product(v, v).sqrt()
