@@ -67,6 +67,7 @@ impl<D: Distance> Item<'_, D> {
         Item { header: self.header, vector: Cow::Owned(self.vector.into_owned()) }
     }
 
+    /// Builds a new item from a Vec<f32>.
     pub fn new(vec: Vec<f32>) -> Self {
         let vector = UnalignedVector::from_vec(vec);
         let header = D::new_header(&vector);

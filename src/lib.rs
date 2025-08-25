@@ -128,6 +128,8 @@ pub type Database<D> = heed::Database<internals::KeyCodec, NodeCodec<D>>;
 
 /// An identifier for the items stored in the database.
 pub type ItemId = u32;
+/// An indentifier for the links of the hnsw. We can guarantee mathematically there will always be
+/// less than 256 layers.
 pub type LayerId = u8;
 
 /// The number of iterations to process before checking if the indexing process should be cancelled.

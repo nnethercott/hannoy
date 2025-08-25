@@ -24,6 +24,7 @@ use crate::{
     CANCELLATION_PROBING,
 };
 
+/// The options available when configuring the hannoy database.
 pub struct HannoyBuilder<'a, D: Distance, R: Rng + SeedableRng, P> {
     writer: &'a Writer<D>,
     rng: &'a mut R,
@@ -174,7 +175,7 @@ impl<'a, D: Distance, R: Rng + SeedableRng, P> HannoyBuilder<'a, D, R, P> {
         self.writer.build::<R, P, M, M0>(wtxn, self.rng, &self.inner)
     }
 
-    // FIXME: make this available under feature "arroy"
+    /// Used internally to convert an [`arroy`] db into a hannoy-compatible one.
     pub fn prepare_arroy_conversion(&self, wtxn: &mut RwTxn) -> Result<()>
     where
         P: steppe::Progress,
@@ -302,6 +303,7 @@ impl<D: Distance> Writer<D> {
         Ok(Writer { database: database.remap_data_type(), index, dimensions, tmpdir })
     }
 
+    /// Sets the path to the temporary directory where files are written.
     pub fn set_tmpdir(&mut self, path: impl Into<PathBuf>) {
         self.tmpdir = Some(path.into());
     }
