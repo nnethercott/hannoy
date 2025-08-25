@@ -175,7 +175,7 @@ impl<'a, D: Distance, R: Rng + SeedableRng, P> HannoyBuilder<'a, D, R, P> {
         self.writer.build::<R, P, M, M0>(wtxn, self.rng, &self.inner)
     }
 
-    /// Used internally to convert an [`arroy`] db into a hannoy-compatible one.
+    /// Used internally to convert an arroy db into a hannoy-compatible one.
     pub fn prepare_arroy_conversion(&self, wtxn: &mut RwTxn) -> Result<()>
     where
         P: steppe::Progress,

@@ -64,7 +64,7 @@ pub enum Error {
         mode: &'static str,
         /// The item ID queried
         item: ItemId,
-        // The item's layer
+        /// The item's layer
         layer: LayerId,
     },
 
