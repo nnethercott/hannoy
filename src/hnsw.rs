@@ -4,8 +4,8 @@ use std::collections::BinaryHeap;
 use std::f32;
 use std::fmt::{self, Debug};
 use std::marker::PhantomData;
-use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering::Relaxed;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use heed::RwTxn;
 use min_max_heap::MinMaxHeap;
@@ -319,7 +319,7 @@ impl<'a, D: Distance, const M: usize, const M0: usize> HnswBuilder<'a, D, M, M0>
                 .into_vec();
 
             eps.clear();
-            for (dist, n) in self.select_sng(neighbours, level, false, lmdb)? {
+            for (dist, n) in self.robust_prune(neighbours, level, false, lmdb)? {
                 // add links in both directions
                 self.add_link(query, (dist, n), lvl, lmdb)?;
                 self.add_link(n, (dist, query), lvl, lmdb)?;
@@ -348,37 +348,46 @@ impl<'a, D: Distance, const M: usize, const M0: usize> HnswBuilder<'a, D, M, M0>
         debug!("Repairing connections to deleted items, and linking old and new graphs");
         options.progress.update(HannoyBuild::PatchOldNewDeletedLinks);
 
-        let links_in_db = lmdb
+        let links_in_db: Vec<_> = lmdb
             .links
             .iter()
-            .map(|result| result.map(|((id, lvl), v)| ((id, lvl as usize), v.into_owned())));
+            .map(|result| {
+                result.map(|((id, lvl), v)| {
+                    // Resize the layers if necessary. We must do this to accomodate links from
+                    // previous builds that exist on levels larger than our current one.
+                    if self.layers.len() <= lvl as usize {
+                        self.layers.resize_with(lvl as usize + 1, HashMap::new);
+                    }
+                    ((id, lvl as usize), v.into_owned())
+                })
+            })
+            .collect();
 
-        for (index, result) in links_in_db.into_iter().enumerate() {
-            let ((id, lvl), links) = result?;
+        let cancel_index = AtomicUsize::new(0);
 
-            // Since we delete links AFTER a build, links belonging to deleted items may still be
-            // present. We don't care about patching them.
-            if to_delete.contains(id) {
-                continue;
-            }
-
-            if index % CANCELLATION_PROBING == 0 && (self.cancel)() {
+        links_in_db.into_par_iter().try_for_each(|result| {
+            if cancel_index.fetch_add(1, Ordering::Relaxed) % CANCELLATION_PROBING == 0
+                && (self.cancel)()
+            {
                 return Err(Error::BuildCancelled);
             }
+            let ((id, lvl), links) = result?;
 
+            // Since we delete links AFTER a build (we need to do this to apply diskann-approach
+            // for patching), links belonging to deleted items may still be present. We don't
+            // care about patching them.
+            if to_delete.contains(id) {
+                return Ok(());
+            }
             let del_subset = &links & to_delete;
 
-            // Resize the layers if necessary
-            if self.layers.len() <= lvl {
-                self.layers.resize_with(lvl + 1, HashMap::new);
-            }
-
+            // This is safe because we resized layers above.
             let map_guard = self.layers[lvl].pin();
             let mut new_links = map_guard.get(&id).map(|s| s.links.to_vec()).unwrap_or_default();
 
             // No work to be done, continue
             if del_subset.is_empty() && new_links.is_empty() {
-                continue;
+                return Ok(());
             }
 
             // Iter through each of the deleted, and explore his neighbours
@@ -389,14 +398,16 @@ impl<'a, D: Distance, const M: usize, const M0: usize> HnswBuilder<'a, D, M, M0>
             bitmap |= links;
             bitmap -= to_delete;
 
-            // NOTE: Same setup as general layer exploration, could generalize this bit
+            // TODO: abstract this layer search and pruning bit as its duplicated a lot in
+            // this file
             for other in bitmap {
                 let dist = D::distance(&lmdb.get_item(id)?, &lmdb.get_item(other)?);
                 new_links.push((OrderedFloat(dist), other));
             }
-            let pruned = self.select_sng(new_links, lvl, false, lmdb)?;
+            let pruned = self.robust_prune(new_links, lvl, false, lmdb)?;
             let _ = map_guard.insert(id, NodeState { links: ArrayVec::from_iter(pruned) });
-        }
+            Ok(())
+        })?;
 
         Ok(())
     }
@@ -532,7 +543,7 @@ impl<'a, D: Distance, const M: usize, const M0: usize> HnswBuilder<'a, D, M, M0>
             }
 
             let new_links = self
-                .select_sng(links.to_vec(), level, false, lmdb)
+                .robust_prune(links.to_vec(), level, false, lmdb)
                 .map(ArrayVec::from_iter)
                 .unwrap_or_else(|_| node_state.links);
 
@@ -549,7 +560,7 @@ impl<'a, D: Distance, const M: usize, const M0: usize> HnswBuilder<'a, D, M, M0>
     /// Naively choosing the nearest neighbours performs poorly on clustered data since we can never
     /// escape our local neighbourhood. "Sparse Neighbourhood Graph" (SNG) condition sufficient for
     /// quick convergence.
-    fn select_sng(
+    fn robust_prune(
         &self,
         mut candidates: Vec<ScoredLink>,
         level: usize,
