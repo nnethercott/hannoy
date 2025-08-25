@@ -47,9 +47,9 @@ fn main() -> Result<()> {
     let writer: Writer<Cosine> = Writer::new(db, 0, DIM);
 
     // insert into lmdb
-    writer.add_item(&mut wtxn, 0, vecs[0])?;
-    writer.add_item(&mut wtxn, 1, vecs[1])?;
-    writer.add_item(&mut wtxn, 2, vecs[2])?;
+    writer.add_item(&mut wtxn, 0, &vecs[0])?;
+    writer.add_item(&mut wtxn, 1, &vecs[1])?;
+    writer.add_item(&mut wtxn, 2, &vecs[2])?;
 
     // ...and build hnsw
     let mut rng = StdRng::seed_from_u64(42);
@@ -62,7 +62,7 @@ fn main() -> Result<()> {
     let rtxn = env.read_txn()?;
     let reader = Reader::<Cosine>::open(&rtxn, 0, db)?;
 
-    let query = vec![1.0, 0.0, 0.0];
+    let query = vec![0.0, 1.0, 0.0];
     let nns = reader.nns(1).ef_search(10).by_vector(&rtxn, &query)?;
 
     dbg!("{:?}", &nns);

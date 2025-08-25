@@ -16,7 +16,7 @@ use crate::progress::HannoyBuild;
 use crate::writer::BuildOption;
 use crate::{Database, Distance, ItemId, LayerId};
 
-/// A struture used to keep a list of the leaf nodes in the tree.
+/// A struture used to keep a list of the item nodes in the graph.
 ///
 /// It is safe to share between threads as the pointer are pointing
 /// in the mmapped file and the transaction is kept here and therefore
@@ -32,7 +32,7 @@ pub struct ImmutableItems<'t, D> {
 // things together.
 // To accomodate this we use a cursor over ALL Key::items in the db.
 impl<'t, D: Distance> ImmutableItems<'t, D> {
-    /// Creates the structure by fetching all the leaf pointers
+    /// Creates the structure by fetching all the item vector pointers
     /// and keeping the transaction making the pointers valid.
     /// Do not take more items than memory allows.
     /// Remove from the list of candidates all the items that were selected and return them.
@@ -67,7 +67,7 @@ impl<'t, D: Distance> ImmutableItems<'t, D> {
         Ok(ImmutableItems { items: map, constant_length, _marker: marker::PhantomData })
     }
 
-    /// Returns the leafs identified by the given ID.
+    /// Returns the items identified by the given ID.
     pub fn get(&self, item_id: ItemId) -> heed::Result<Option<Item<'t, D>>> {
         let len = match self.constant_length {
             Some(len) => len,
@@ -129,7 +129,7 @@ impl<'t, D: Distance> ImmutableLinks<'t, D> {
         Ok(ImmutableLinks { links, _marker: marker::PhantomData })
     }
 
-    /// Returns the tree node identified by the given ID.
+    /// Returns the node identified by the given ID.
     pub fn get(&self, item_id: ItemId, level: LayerId) -> heed::Result<Option<Links<'t>>> {
         let key = (item_id, level);
         let (ptr, len) = match self.links.get(&key) {

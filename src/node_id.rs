@@ -16,7 +16,7 @@ pub enum NodeMode {
     Updated = 1,
     /// The graph edges re stored under this id
     Links = 2,
-    /// The original vectors are stored under this id in `Leaf` structures.
+    /// The original vectors are stored under this id in `Item` structures.
     Item = 3,
 }
 
@@ -80,7 +80,7 @@ impl NodeId {
         self.item
     }
 
-    /// Return the underlying `ItemId` if it is a tree node.
+    /// Return the underlying `ItemId` if it is a links node.
     /// Panic otherwise.
     #[track_caller]
     pub fn unwrap_node(&self) -> (ItemId, LayerId) {
@@ -128,7 +128,6 @@ mod test {
         assert!(NodeId::updated(1) > NodeId::updated(0));
         assert!(NodeId::updated(0) < NodeId::updated(1));
 
-        // tree < item whatever is the value
         assert!(NodeId::links(u32::MAX, 0) < NodeId::item(0));
 
         assert!(NodeId::metadata() == NodeId::metadata());

@@ -16,7 +16,7 @@ use crate::unaligned_vector::{self, BinaryQuantized, UnalignedVector};
 #[derive(Debug, Clone)]
 pub enum BinaryQuantizedEuclidean {}
 
-/// The header of `BinaryQuantizedEuclidean` leaf nodes.
+/// The header of `BinaryQuantizedEuclidean` item nodes.
 #[repr(C)]
 #[derive(Pod, Zeroable, Clone, Copy)]
 pub struct NodeHeaderBinaryQuantizedEuclidean {

@@ -14,7 +14,7 @@ use crate::unaligned_vector::UnalignedVector;
 #[derive(Debug, Clone)]
 pub enum Euclidean {}
 
-/// The header of Euclidean leaf nodes.
+/// The header of Euclidean item nodes.
 #[repr(C)]
 #[derive(Pod, Zeroable, Clone, Copy)]
 pub struct NodeHeaderEuclidean {

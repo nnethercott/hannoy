@@ -2,7 +2,7 @@ use std::io;
 
 use crate::{key::Key, node_id::NodeMode, version::Version, ItemId, LayerId};
 
-/// The different set of errors that arroy can encounter.
+/// The different set of errors that hannoy can encounter.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     /// An internal error mostly related to LMDB or encoding/decoding.
@@ -22,8 +22,8 @@ pub enum Error {
         received: usize,
     },
 
-    /// An internal error returned when arroy cannot generate internal IDs.
-    #[error("Database full. Arroy cannot generate enough internal IDs for your items")]
+    /// An internal error returned when hannoy cannot generate internal IDs.
+    #[error("Database full. Hannoy cannot generate enough internal IDs for your items")]
     DatabaseFull,
 
     /// The user tried to append an item in the database but the last inserted item
@@ -40,7 +40,7 @@ pub enum Error {
         received: &'static str,
     },
 
-    /// Arroy is not able to find the metadata for a given index.
+    /// Hannoy is not able to find the metadata for a given index.
     /// It is probably because the user forget to build the database.
     #[error(
         "Metadata are missing on index {0}, You must build your database before attempting to read it"
@@ -48,7 +48,7 @@ pub enum Error {
     MissingMetadata(u16),
 
     /// The last time items in the database were updated, the [`crate::HannoyBuilder::build`] method wasn't called.
-    #[error("The trees have not been built after an update on index {0}")]
+    #[error("The graph has not been built after an update on index {0}")]
     NeedBuild(u16),
 
     /// Returned iff the `should_abort` function returned true.
@@ -64,7 +64,7 @@ pub enum Error {
         mode: &'static str,
         /// The item ID queried
         item: ItemId,
-        // The item's layer
+        /// The item's layer
         layer: LayerId,
     },
 

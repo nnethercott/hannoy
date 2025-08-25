@@ -20,7 +20,7 @@ mod euclidean;
 mod hamming;
 mod manhattan;
 
-/// A trait used by arroy to compute the distances,
+/// A trait used by hannoy to compute the distances,
 /// compute the split planes, and normalize user vectors.
 #[allow(missing_docs)]
 pub trait Distance: Send + Sync + Sized + Clone + fmt::Debug + 'static {

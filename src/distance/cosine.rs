@@ -13,7 +13,7 @@ use crate::unaligned_vector::UnalignedVector;
 #[derive(Debug, Clone)]
 pub enum Cosine {}
 
-/// The header of Cosine leaf nodes.
+/// The header of Cosine item nodes.
 #[repr(C)]
 #[derive(Pod, Zeroable, Clone, Copy)]
 pub struct NodeHeaderCosine {

@@ -24,14 +24,14 @@ use crate::{
     CANCELLATION_PROBING,
 };
 
-/// The options available when building the arroy database.
+/// The options available when configuring the hannoy database.
 pub struct HannoyBuilder<'a, D: Distance, R: Rng + SeedableRng, P> {
     writer: &'a Writer<D>,
     rng: &'a mut R,
     inner: BuildOption<'a, P>,
 }
 
-/// The options available when building the arroy database.
+/// The options available when building the hannoy database.
 pub(crate) struct BuildOption<'a, P> {
     pub(crate) ef_construction: usize,
     pub(crate) available_memory: Option<usize>,
@@ -51,20 +51,63 @@ impl Default for BuildOption<'_, NoProgress> {
 }
 
 impl<'a, D: Distance, R: Rng + SeedableRng, P> HannoyBuilder<'a, D, R, P> {
-    pub fn available_memory(&mut self, memory: usize) -> &mut Self {
-        self.inner.available_memory = Some(memory);
-        self
-    }
+    // NOTE: unused in hannoy
+    // pub fn available_memory(&mut self, memory: usize) -> &mut Self {
+    //     self.inner.available_memory = Some(memory);
+    //     self
+    // }
 
-    /// Provide a closure that can cancel the indexing process early if needed. There is no guarantee on when the process is going to cancel itself, but hannoy will try to stop as soon as possible once the closure returns true.
+    /// Provides a closure that can cancel the indexing process early if needed.
+    /// There is no guarantee on when the process is going to cancel itself, but
+    /// hannoy will try to stop as soon as possible once the closure returns `true`.
     ///
-    /// Since the closure is not mutable and will be called from multiple threads at the same time it’s encouraged to make it quick to execute. A common way to use it is to fetch an AtomicBool inside it that can be set from another thread without lock.
+    /// Since the closure is not mutable and will be called from multiple threads
+    /// at the same time it's encouraged to make it quick to execute. A common
+    /// way to use it is to fetch an `AtomicBool` inside it that can be set
+    /// from another thread without lock.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// # use hannoy::{Writer, distances::Euclidean};
+    /// # let (writer, wtxn): (Writer<Euclidean>, heed::RwTxn) = todo!();
+    /// use rand::rngs::StdRng;
+    /// use rand::SeedableRng;
+    /// use std::sync::atomic::{AtomicBool, Ordering};
+    ///
+    /// let stops_after = AtomicBool::new(false);
+    ///
+    /// // Cancel the task after one minute
+    /// std::thread::spawn(|| {
+    ///     let one_minute = std::time::Duration::from_secs(60);
+    ///     std::thread::sleep(one_minute);
+    ///     stops_after.store(true, Ordering::Relaxed);
+    /// });
+    ///
+    /// let mut rng = StdRng::seed_from_u64(92);
+    /// writer.builder(&mut rng).cancel(|| stops_after.load(Ordering::Relaxed)).build::<16,32>(&mut wtxn);
+    /// ```
     pub fn cancel(&mut self, cancel: impl Fn() -> bool + 'a + Sync + Send) -> &mut Self {
         self.inner.cancel = Box::new(cancel);
         self
     }
 
-    pub fn progress<NP>(self, progress: NP) -> HannoyBuilder<'a, D, R, NP> {
+    /// The provided object handles reporting build steps.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// # use hannoy::{Writer, distances::Euclidean};
+    /// # let (writer, wtxn): (Writer<Euclidean>, heed::RwTxn) = todo!();
+    /// use rand::rngs::StdRng;
+    /// use rand::SeedableRng;
+    /// use std::sync::atomic::{AtomicBool, Ordering};
+    /// use steppe::NoProgress;
+    ///
+    /// let mut rng = StdRng::seed_from_u64(4729);
+    /// writer.builder(&mut rng).progress(NoProgress).build::<16,32>(&mut wtxn);
+    /// ```
+    pub fn progress<NP: steppe::Progress>(self, progress: NP) -> HannoyBuilder<'a, D, R, NP> {
         let HannoyBuilder {
             writer,
             rng,
@@ -78,11 +121,53 @@ impl<'a, D: Distance, R: Rng + SeedableRng, P> HannoyBuilder<'a, D, R, P> {
         }
     }
 
+    /// Controls the search range when inserting a new item into the graph. This value must be
+    /// greater than or equal to the `M` used in [`Self::build<M,M0>`]
+    ///
+    /// Typical values range from 50 to 500, with larger `ef_construction` producing higher
+    /// quality hnsw graphs at the expense of longer builds. The default value used in hannoy is
+    /// 100.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// # use hannoy::{Writer, distances::Euclidean};
+    /// # let (writer, wtxn): (Writer<Euclidean>, heed::RwTxn) = todo!();
+    /// use rand::rngs::StdRng;
+    /// use rand::SeedableRng;
+    ///
+    /// let mut rng = StdRng::seed_from_u64(4729);
+    /// writer.builder(&mut rng).ef_construction(100).build::<16,32>(&mut wtxn);
+    /// ```
     pub fn ef_construction(&mut self, ef_construction: usize) -> &mut Self {
         self.inner.ef_construction = ef_construction;
         self
     }
 
+    /// Generates an HNSW graph with max `M` links per node in layers > 0 and max `M0` links in layer 0.
+    ///
+    /// A general rule of thumb is to take `M0`= 2*`M`, with `M` >=3.  Some common choices for
+    /// `M` include : 8, 12, 16, 32. Note that increasing `M` produces a denser graph at the cost
+    /// of longer build times.
+    ///
+    /// This function is using rayon to spawn threads. It can be configured by using the
+    /// [`rayon::ThreadPoolBuilder`].
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// # use hannoy::{Writer, distances::Euclidean};
+    /// # let (writer, wtxn): (Writer<Euclidean>, heed::RwTxn) = todo!();
+    /// use rayon;
+    /// use rand::rngs::StdRng;
+    /// use rand::SeedableRng;
+    ///
+    /// // configure global threadpool if you want!
+    /// rayon::ThreadPoolBuilder::new().num_threads(4).build_global().unwrap();
+    ///
+    /// let mut rng = StdRng::seed_from_u64(4729);
+    /// writer.builder(&mut rng).build::<16,32>(&mut wtxn);
+    /// ```
     pub fn build<const M: usize, const M0: usize>(&mut self, wtxn: &mut RwTxn) -> Result<()>
     where
         P: steppe::Progress,
@@ -90,6 +175,7 @@ impl<'a, D: Distance, R: Rng + SeedableRng, P> HannoyBuilder<'a, D, R, P> {
         self.writer.build::<R, P, M, M0>(wtxn, self.rng, &self.inner)
     }
 
+    /// Used internally to convert an arroy db into a hannoy-compatible one.
     pub fn prepare_arroy_conversion(&self, wtxn: &mut RwTxn) -> Result<()>
     where
         P: steppe::Progress,
@@ -98,9 +184,8 @@ impl<'a, D: Distance, R: Rng + SeedableRng, P> HannoyBuilder<'a, D, R, P> {
     }
 }
 
-/// A writer to store new items, remove existing ones,
-/// and build the search index to query the nearest
-/// neighbors to items or vectors.
+/// A writer to store new items, remove existing ones, and build the search
+/// index to query the nearest neighbors to items or vectors.
 #[derive(Debug)]
 pub struct Writer<D: Distance> {
     database: Database<D>,
@@ -218,6 +303,7 @@ impl<D: Distance> Writer<D> {
         Ok(Writer { database: database.remap_data_type(), index, dimensions, tmpdir })
     }
 
+    /// Sets the path to the temporary directory where files are written.
     pub fn set_tmpdir(&mut self, path: impl Into<PathBuf>) {
         self.tmpdir = Some(path.into());
     }
@@ -245,8 +331,8 @@ impl<D: Distance> Writer<D> {
 
     /// Returns an `Option`al vector previous stored in this database.
     pub fn item_vector(&self, rtxn: &RoTxn, item: ItemId) -> Result<Option<Vec<f32>>> {
-        Ok(get_item(self.database, self.index, rtxn, item)?.map(|leaf| {
-            let mut vec = leaf.vector.to_vec();
+        Ok(get_item(self.database, self.index, rtxn, item)?.map(|item| {
+            let mut vec = item.vector.to_vec();
             vec.truncate(self.dimensions);
             vec
         }))
@@ -429,7 +515,7 @@ impl<D: Distance> Writer<D> {
         Ok(updated_items)
     }
 
-    // Fetches the item's ids, not the tree nodes ones.
+    // Fetches the item's ids, not the links.
     fn item_indices<P>(&self, wtxn: &mut RwTxn, options: &BuildOption<P>) -> Result<RoaringBitmap>
     where
         P: steppe::Progress,
@@ -497,7 +583,7 @@ impl<'a, D: Distance> FrozenReader<'a, D> {
     }
 }
 
-/// Clears all the links. Starts from the last node and stops at the first leaf.
+/// Clears all the links. Starts from the last node and stops at the first item.
 fn clear_links<D: Distance>(wtxn: &mut RwTxn, database: Database<D>, index: u16) -> Result<()> {
     database.delete(wtxn, &Key::metadata(index))?;
     let mut cursor = database

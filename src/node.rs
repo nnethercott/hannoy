@@ -39,12 +39,12 @@ impl<'a, D: Distance> Node<'a, D> {
     }
 }
 
-/// A leaf node which corresponds to the vector inputed
+/// An item node which corresponds to the vector inputed
 /// by the user and the distance header.
 pub struct Item<'a, D: Distance> {
-    /// The header of this leaf.
+    /// The header of this item.
     pub header: D::Header,
-    /// The vector of this leaf.
+    /// The vector of this item.
     pub vector: Cow<'a, UnalignedVector<D::VectorCodec>>,
 }
 
@@ -61,12 +61,13 @@ impl<D: Distance> Clone for Item<'_, D> {
 }
 
 impl<D: Distance> Item<'_, D> {
-    /// Converts the leaf into an owned version of itself by cloning
+    /// Converts the item into an owned version of itself by cloning
     /// the internal vector. Doing so will make it mutable.
     pub fn into_owned(self) -> Item<'static, D> {
         Item { header: self.header, vector: Cow::Owned(self.vector.into_owned()) }
     }
 
+    /// Builds a new item from a `Vec<f32>`.
     pub fn new(vec: Vec<f32>) -> Self {
         let vector = UnalignedVector::from_vec(vec);
         let header = D::new_header(&vector);

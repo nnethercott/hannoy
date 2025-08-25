@@ -7,12 +7,12 @@ use heed::BoxedError;
 use crate::{NodeId, NodeMode};
 
 /// This whole structure must fit in an u64 so we can tell LMDB to optimize its storage.
-/// The `index` is specified by the user and is used to differentiate between multiple arroy indexes.
+/// The `index` is specified by the user and is used to differentiate between multiple hannoy indexes.
 /// The `mode` indicates what we're looking at.
 /// The `item` point to a specific node.
 /// If the mode is:
-///  - `Item`: we're looking at a `Leaf` node.
-///  - `Tree`: we're looking at one of the internal generated node from arroy. Could be a descendants or a split plane.
+///  - `Item`: we're looking at an `Item` node.
+///  - `Links`: we're looking at the `Links` bitmap of neighbours for a node
 ///  - `Updated`: The list of items that has been updated since the last build of the database.
 ///  - `Metadata`: There is only one item at `0` that contains the header required to read the index.
 #[derive(Debug, Copy, Clone)]
