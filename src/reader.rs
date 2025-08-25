@@ -3,8 +3,9 @@ use std::collections::BinaryHeap;
 use std::marker;
 use std::num::NonZeroUsize;
 
-use heed::types::DecodeIgnore;
+use heed::types::{Bytes, DecodeIgnore};
 use heed::RoTxn;
+use madvise::AccessPattern;
 use min_max_heap::MinMaxHeap;
 use roaring::RoaringBitmap;
 
@@ -157,6 +158,36 @@ impl<'t, D: Distance> Reader<'t, D> {
             .is_some()
         {
             return Err(Error::NeedBuild(index));
+        }
+
+        // TODO: explore layers downwards and fill until we've reached some `available_memory`.
+        // Encourage pre-fetching of nodes and links we'll need.
+        for point_id in metadata.entry_points.iter() {
+            let mut keys = vec![Key::item(index, point_id)];
+            let max_level = metadata.max_level;
+            for l in max_level..=0 {
+                keys.push(Key::links(index, point_id, l));
+            }
+
+            for key in keys.iter() {
+                let item = database.remap_data_type::<Bytes>().get(&rtxn, &key)?.unwrap();
+
+                // some pointer stuff
+                let page_size = page_size::get();
+                let start_ptr = item.as_ptr() as usize;
+                let end_ptr = start_ptr + metadata.dimensions as usize;
+                let start_page = start_ptr - (start_ptr % page_size);
+                let end_page = end_ptr + ((end_ptr + page_size) % page_size);
+
+                unsafe {
+                    madvise::madvise(
+                        start_page as *const u8,
+                        end_page - start_page,
+                        AccessPattern::Sequential,
+                    )
+                    .expect("Advisory failed");
+                }
+            }
         }
 
         Ok(Reader {
