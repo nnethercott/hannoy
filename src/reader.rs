@@ -13,6 +13,7 @@ use crate::distance::Distance;
 use crate::hnsw::ScoredLink;
 use crate::internals::KeyCodec;
 use crate::item_iter::ItemIter;
+use crate::metadata::Metadata;
 use crate::node::{Item, ItemIds, Links};
 use crate::ordered_float::OrderedFloat;
 use crate::unaligned_vector::UnalignedVector;
@@ -160,8 +161,27 @@ impl<'t, D: Distance> Reader<'t, D> {
             return Err(Error::NeedBuild(index));
         }
 
-        // TODO: explore layers downwards and fill until we've reached some `available_memory`.
-        // Encourage pre-fetching of nodes and links we'll need.
+        // Hint to the kernel that we'll probably need some vectors in RAM.
+        Self::advise_prefetch_graph(rtxn, &database, index, &metadata)?;
+
+        Ok(Reader {
+            database: database.remap_data_type(),
+            index,
+            entry_points: metadata.entry_points,
+            max_level: metadata.max_level as usize,
+            dimensions: metadata.dimensions.try_into().unwrap(),
+            items: metadata.items,
+            version,
+            _marker: marker::PhantomData,
+        })
+    }
+
+    fn advise_prefetch_graph(
+        rtxn: &RoTxn,
+        database: &Database<D>,
+        index: u16,
+        metadata: &Metadata,
+    ) -> Result<()> {
         for point_id in metadata.entry_points.iter() {
             let mut keys = vec![Key::item(index, point_id)];
             let max_level = metadata.max_level;
@@ -189,17 +209,7 @@ impl<'t, D: Distance> Reader<'t, D> {
                 }
             }
         }
-
-        Ok(Reader {
-            database: database.remap_data_type(),
-            index,
-            entry_points: metadata.entry_points,
-            max_level: metadata.max_level as usize,
-            dimensions: metadata.dimensions.try_into().unwrap(),
-            items: metadata.items,
-            version,
-            _marker: marker::PhantomData,
-        })
+        Ok(())
     }
 
     /// Returns the number of dimensions in the index.
