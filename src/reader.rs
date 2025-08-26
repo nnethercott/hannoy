@@ -176,27 +176,21 @@ impl<'t, D: Distance> Reader<'t, D> {
         })
     }
 
-    // NOTE: can check after with `mincore`
     // TODO: impose an `available_memory` for the number of pages we can load in
-    fn prefetch_graph(
-        rtxn: &RoTxn,
-        database: &Database<D>,
-        metadata: &Metadata,
-    ) -> Result<()> {
+    fn prefetch_graph(rtxn: &RoTxn, database: &Database<D>, metadata: &Metadata) -> Result<()> {
         let page_size = page_size::get();
 
         let madvise_page = |item: &[u8]| {
             let start_ptr = item.as_ptr() as usize;
             let end_ptr = start_ptr + metadata.dimensions as usize;
             let start_page = start_ptr - (start_ptr % page_size);
-            let end_page = end_ptr + ((end_ptr + page_size) % page_size);
+            let end_page = end_ptr + ((end_ptr + page_size - 1) % page_size);
 
-            // not really random
             unsafe {
                 madvise::madvise(
                     start_page as *const u8,
                     end_page - start_page,
-                    AccessPattern::Random,
+                    AccessPattern::WillNeed,
                 )
                 .expect("Advisory failed");
             }
@@ -204,7 +198,7 @@ impl<'t, D: Distance> Reader<'t, D> {
 
         // Load links and vectors.
         // let mut cone = RoaringBitmap::new();
-        for lvl in metadata.max_level..=1 {
+        for lvl in (1..=metadata.max_level).rev() {
             for result in database.remap_data_type::<Bytes>().iter(&rtxn)? {
                 let (key, item) = result?;
                 if key.node.layer != lvl {
