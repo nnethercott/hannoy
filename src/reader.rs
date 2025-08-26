@@ -162,7 +162,7 @@ impl<'t, D: Distance> Reader<'t, D> {
         }
 
         // Hint to the kernel that we'll probably need some vectors in RAM.
-        Self::advise_prefetch_graph(rtxn, &database, index, &metadata)?;
+        Self::prefetch_graph(rtxn, &database, &metadata)?;
 
         Ok(Reader {
             database: database.remap_data_type(),
@@ -176,39 +176,44 @@ impl<'t, D: Distance> Reader<'t, D> {
         })
     }
 
-    fn advise_prefetch_graph(
+    // NOTE: can check after with `mincore`
+    // TODO: impose an `available_memory` for the number of pages we can load in
+    fn prefetch_graph(
         rtxn: &RoTxn,
         database: &Database<D>,
-        index: u16,
         metadata: &Metadata,
     ) -> Result<()> {
-        for point_id in metadata.entry_points.iter() {
-            let mut keys = vec![Key::item(index, point_id)];
-            let max_level = metadata.max_level;
-            for l in max_level..=0 {
-                keys.push(Key::links(index, point_id, l));
+        let page_size = page_size::get();
+
+        let madvise_page = |item: &[u8]| {
+            let start_ptr = item.as_ptr() as usize;
+            let end_ptr = start_ptr + metadata.dimensions as usize;
+            let start_page = start_ptr - (start_ptr % page_size);
+            let end_page = end_ptr + ((end_ptr + page_size) % page_size);
+
+            // not really random
+            unsafe {
+                madvise::madvise(
+                    start_page as *const u8,
+                    end_page - start_page,
+                    AccessPattern::Random,
+                )
+                .expect("Advisory failed");
             }
+        };
 
-            for key in keys.iter() {
-                let item = database.remap_data_type::<Bytes>().get(&rtxn, &key)?.unwrap();
-
-                // some pointer stuff
-                let page_size = page_size::get();
-                let start_ptr = item.as_ptr() as usize;
-                let end_ptr = start_ptr + metadata.dimensions as usize;
-                let start_page = start_ptr - (start_ptr % page_size);
-                let end_page = end_ptr + ((end_ptr + page_size) % page_size);
-
-                unsafe {
-                    madvise::madvise(
-                        start_page as *const u8,
-                        end_page - start_page,
-                        AccessPattern::Sequential,
-                    )
-                    .expect("Advisory failed");
+        // Load links and vectors.
+        // let mut cone = RoaringBitmap::new();
+        for lvl in metadata.max_level..=1 {
+            for result in database.remap_data_type::<Bytes>().iter(&rtxn)? {
+                let (key, item) = result?;
+                if key.node.layer != lvl {
+                    continue;
                 }
+                madvise_page(item);
             }
         }
+
         Ok(())
     }
 
