@@ -176,6 +176,7 @@ impl<'a, D: Distance, R: Rng + SeedableRng, P> HannoyBuilder<'a, D, R, P> {
     }
 
     /// Used internally to convert an arroy db into a hannoy-compatible one.
+    #[cfg(feature = "arroy")]
     pub fn prepare_arroy_conversion(&self, wtxn: &mut RwTxn) -> Result<()>
     where
         P: steppe::Progress,
@@ -201,6 +202,7 @@ impl<D: Distance> Writer<D> {
         Writer { database, index, dimensions, tmpdir: None }
     }
 
+    #[cfg(feature = "arroy")]
     /// After opening an arroy database this function will prepare it for conversion,
     /// cleanup the arroy database and only keep the items/vectors entries.
     pub(crate) fn prepare_arroy_conversion<P: steppe::Progress>(

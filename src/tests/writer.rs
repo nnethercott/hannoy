@@ -226,6 +226,7 @@ fn write_random_vectors_to_random_indexes() {
     wtxn.commit().unwrap();
 }
 
+#[cfg(feature = "arroy")]
 #[test]
 fn convert_from_arroy_to_hannoy() {
     // let handle = create_database::<Euclidean>();
