@@ -6,14 +6,13 @@ use heed::{PutFlags, RoTxn, RwTxn};
 use rand::{Rng, SeedableRng};
 use roaring::RoaringBitmap;
 use steppe::NoProgress;
-use tracing::debug;
+use tracing::{debug, info};
 
 use crate::distance::Distance;
 use crate::hnsw::HnswBuilder;
 use crate::internals::KeyCodec;
 use crate::item_iter::ItemIter;
 use crate::node::{Item, ItemIds, Links, NodeCodec};
-use crate::node_id::{NodeId, NodeMode};
 use crate::parallel::{ImmutableItems, ImmutableLinks};
 use crate::progress::HannoyBuild;
 use crate::reader::get_item;
@@ -175,7 +174,9 @@ impl<'a, D: Distance, R: Rng + SeedableRng, P> HannoyBuilder<'a, D, R, P> {
         self.writer.build::<R, P, M, M0>(wtxn, self.rng, &self.inner)
     }
 
-    /// Used internally to convert an arroy db into a hannoy-compatible one.
+    /// Converts an arroy db into a hannoy one.
+    #[cfg(any(test, feature = "arroy"))]
+    #[cfg_attr(docsrs, doc(cfg(feature = "arroy")))]
     pub fn prepare_arroy_conversion(&self, wtxn: &mut RwTxn) -> Result<()>
     where
         P: steppe::Progress,
@@ -203,11 +204,14 @@ impl<D: Distance> Writer<D> {
 
     /// After opening an arroy database this function will prepare it for conversion,
     /// cleanup the arroy database and only keep the items/vectors entries.
+    #[cfg(any(test, feature = "arroy"))]
     pub(crate) fn prepare_arroy_conversion<P: steppe::Progress>(
         &self,
         wtxn: &mut RwTxn,
         options: &BuildOption<P>,
     ) -> Result<()> {
+        use crate::node_id::{NodeId, NodeMode};
+
         debug!("Preparing dumpless upgrade from arroy to hannoy");
         options.progress.update(HannoyBuild::ConvertingArroyToHannoy);
 
@@ -450,14 +454,14 @@ impl<D: Distance> Writer<D> {
 
         let stats =
             hnsw.build(to_insert, &to_delete, self.database, self.index, wtxn, rng, options)?;
-        tracing::info!("{stats:?}");
+        info!("{stats:?}");
 
         // Remove deleted links from lmdb AFTER build; in DiskANN we use a deleted item's
         // neighbours when filling in the "gaps" left in the graph from deletions. See
         // [`HnswBuilder::maybe_patch_old_links`] for more details.
         self.delete_links_from_db(to_delete, wtxn)?;
 
-        tracing::debug!("write the metadata...");
+        debug!("write the metadata...");
         options.progress.update(HannoyBuild::WriteTheMetadata);
 
         let metadata = Metadata {
@@ -489,7 +493,7 @@ impl<D: Distance> Writer<D> {
     where
         P: steppe::Progress,
     {
-        tracing::debug!("reset and retrieve the updated items...");
+        debug!("reset and retrieve the updated items...");
         options.progress.update(HannoyBuild::RetrieveTheUpdatedItems);
 
         let mut updated_items = RoaringBitmap::new();
@@ -520,7 +524,7 @@ impl<D: Distance> Writer<D> {
     where
         P: steppe::Progress,
     {
-        tracing::debug!("started retrieving all the items ids...");
+        debug!("started retrieving all the items ids...");
         options.progress.update(HannoyBuild::RetrievingTheItemsIds);
 
         let mut indices = RoaringBitmap::new();

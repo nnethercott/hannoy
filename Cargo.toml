@@ -53,6 +53,9 @@ tempfile = "3.20.0"
 [features]
 default = []
 
+# Enabling this feature allows dumpless upgrades from arroy to hannoy
+arroy = []
+
 # Enabling this feature provide a method on the reader that assert its own validity.
 assert-reader-validity = []
 
