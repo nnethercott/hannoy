@@ -9,7 +9,7 @@ use heed::RoTxn;
 use madvise::AccessPattern;
 use min_max_heap::MinMaxHeap;
 use roaring::RoaringBitmap;
-use tracing::{error, warn};
+use tracing::warn;
 
 use crate::distance::Distance;
 use crate::hnsw::ScoredLink;
