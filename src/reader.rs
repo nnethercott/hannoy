@@ -181,7 +181,7 @@ impl<'t, D: Distance> Reader<'t, D> {
     }
 
     /// Instructs kernel to fetch nodes based on a fixed memory budget. It's OK for this operation
-    /// to fail, it's just integral for search to work.
+    /// to fail, it's not integral for search to work.
     fn prefetch_graph(
         rtxn: &RoTxn,
         database: &Database<D>,
