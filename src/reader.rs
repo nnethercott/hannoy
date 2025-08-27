@@ -208,7 +208,7 @@ impl<'t, D: Distance> Reader<'t, D> {
         let mut added = RoaringBitmap::new();
 
         for lvl in (1..=metadata.max_level).rev() {
-            for result in database.remap_data_type::<Bytes>().iter(&rtxn)? {
+            for result in database.remap_data_type::<Bytes>().iter(rtxn)? {
                 if available_memory < largest_alloc.load(Ordering::Relaxed) {
                     return Ok(());
                 }
@@ -228,13 +228,13 @@ impl<'t, D: Distance> Reader<'t, D> {
             if available_memory < largest_alloc.load(Ordering::Relaxed) {
                 return Ok(());
             }
-            if let Some(Node::Links(links)) = database.get(&rtxn, &Key::links(index, item, 0))? {
+            if let Some(Node::Links(links)) = database.get(rtxn, &Key::links(index, item, 0))? {
                 for l in links.iter() {
                     if !added.insert(l) {
                         continue;
                     }
                     if let Some(bytes) =
-                        database.remap_data_type::<Bytes>().get(&rtxn, &Key::item(index, l))?
+                        database.remap_data_type::<Bytes>().get(rtxn, &Key::item(index, l))?
                     {
                         available_memory -= madvise_page(bytes);
                         queue.push_back(l);
