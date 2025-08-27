@@ -6,14 +6,13 @@ use heed::{PutFlags, RoTxn, RwTxn};
 use rand::{Rng, SeedableRng};
 use roaring::RoaringBitmap;
 use steppe::NoProgress;
-use tracing::debug;
+use tracing::{debug, info};
 
 use crate::distance::Distance;
 use crate::hnsw::HnswBuilder;
 use crate::internals::KeyCodec;
 use crate::item_iter::ItemIter;
 use crate::node::{Item, ItemIds, Links, NodeCodec};
-use crate::node_id::{NodeId, NodeMode};
 use crate::parallel::{ImmutableItems, ImmutableLinks};
 use crate::progress::HannoyBuild;
 use crate::reader::get_item;
@@ -211,6 +210,8 @@ impl<D: Distance> Writer<D> {
         wtxn: &mut RwTxn,
         options: &BuildOption<P>,
     ) -> Result<()> {
+        use crate::node_id::{NodeId, NodeMode};
+
         debug!("Preparing dumpless upgrade from arroy to hannoy");
         options.progress.update(HannoyBuild::ConvertingArroyToHannoy);
 
@@ -453,14 +454,14 @@ impl<D: Distance> Writer<D> {
 
         let stats =
             hnsw.build(to_insert, &to_delete, self.database, self.index, wtxn, rng, options)?;
-        tracing::info!("{stats:?}");
+        info!("{stats:?}");
 
         // Remove deleted links from lmdb AFTER build; in DiskANN we use a deleted item's
         // neighbours when filling in the "gaps" left in the graph from deletions. See
         // [`HnswBuilder::maybe_patch_old_links`] for more details.
         self.delete_links_from_db(to_delete, wtxn)?;
 
-        tracing::debug!("write the metadata...");
+        debug!("write the metadata...");
         options.progress.update(HannoyBuild::WriteTheMetadata);
 
         let metadata = Metadata {
@@ -492,7 +493,7 @@ impl<D: Distance> Writer<D> {
     where
         P: steppe::Progress,
     {
-        tracing::debug!("reset and retrieve the updated items...");
+        debug!("reset and retrieve the updated items...");
         options.progress.update(HannoyBuild::RetrieveTheUpdatedItems);
 
         let mut updated_items = RoaringBitmap::new();
@@ -523,7 +524,7 @@ impl<D: Distance> Writer<D> {
     where
         P: steppe::Progress,
     {
-        tracing::debug!("started retrieving all the items ids...");
+        debug!("started retrieving all the items ids...");
         options.progress.update(HannoyBuild::RetrievingTheItemsIds);
 
         let mut indices = RoaringBitmap::new();
