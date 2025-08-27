@@ -188,12 +188,16 @@ impl<'t, D: Distance> Reader<'t, D> {
         index: u16,
         metadata: &Metadata,
     ) -> Result<()> {
+        let page_size = page_size::get();
         let mut available_memory: usize = std::env::var(READER_AVAILABLE_MEMORY)
             .ok()
             .and_then(|num| num.parse::<usize>().ok())
             .unwrap_or(DEFAULT_AVAILABLE_MEMORY);
 
-        let page_size = page_size::get();
+        if available_memory<page_size{
+            return Ok(());
+        }
+
         let largest_alloc = AtomicUsize::new(0);
 
         let madvise_page = |item: &[u8]| -> Result<usize> {
