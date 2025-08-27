@@ -34,7 +34,7 @@ jobs:
           args: --all-features
       - uses: actions-rs/cargo@v1
         env:
-          # We encounter Os errors if trying to fetch too much memory in gh runners
+          # We encounter OS errors if trying to fetch too much memory in gh runners
           READER_AVAILABLE_MEMORY: 0
         with:
           command: test
