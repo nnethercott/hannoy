@@ -205,6 +205,7 @@ impl<D: Distance> Writer<D> {
 
     /// After opening an arroy database this function will prepare it for conversion,
     /// cleanup the arroy database and only keep the items/vectors entries.
+    #[cfg(any(test, feature = "arroy"))]
     pub(crate) fn prepare_arroy_conversion<P: steppe::Progress>(
         &self,
         wtxn: &mut RwTxn,
