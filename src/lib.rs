@@ -60,7 +60,6 @@
 //!     Ok(())
 //! }
 //! ```
-
 #![warn(missing_docs)]
 #![doc(
     html_favicon_url = "https://raw.githubusercontent.com/nnethercott/hannoy/main/assets/ed_tmp.png?raw=true"
