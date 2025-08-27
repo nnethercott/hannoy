@@ -21,7 +21,6 @@ jobs:
         rust:
           - stable
           - beta
-
     steps:
       - uses: actions/checkout@v1
       - uses: dtolnay/rust-toolchain@1.85
@@ -34,6 +33,9 @@ jobs:
           command: test
           args: --all-features
       - uses: actions-rs/cargo@v1
+        env:
+          # We encounter Os errors if trying to fetch too much memory in gh runners
+          READER_AVAILABLE_MEMORY: 0
         with:
           command: test
 

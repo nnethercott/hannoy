@@ -9,6 +9,7 @@ use heed::RoTxn;
 use madvise::AccessPattern;
 use min_max_heap::MinMaxHeap;
 use roaring::RoaringBitmap;
+use tracing::{error, warn};
 
 use crate::distance::Distance;
 use crate::hnsw::ScoredLink;
@@ -23,6 +24,7 @@ use crate::{Database, Error, ItemId, Key, MetadataCodec, Node, Prefix, PrefixCod
 
 /// A good default value for the `ef` parameter.
 const DEFAULT_EF_SEARCH: usize = 100;
+const READER_AVAILABLE_MEMORY: &'static str = "READER_AVAILABLE_MEMORY";
 const DEFAULT_AVAILABLE_MEMORY: usize = 100 * 1024 * 1024;
 
 #[cfg(not(test))]
@@ -178,16 +180,23 @@ impl<'t, D: Distance> Reader<'t, D> {
         })
     }
 
+    /// Instructs kernel to fetch nodes based on a fixed memory budget. It's OK for this operation
+    /// to fail, it's just integral for search to work.
     fn prefetch_graph(
         rtxn: &RoTxn,
         database: &Database<D>,
         index: u16,
         metadata: &Metadata,
     ) -> Result<()> {
+        let mut available_memory: usize = std::env::var(READER_AVAILABLE_MEMORY)
+            .ok()
+            .and_then(|num| usize::from_str_radix(&num, 10).ok())
+            .unwrap_or(DEFAULT_AVAILABLE_MEMORY);
+
         let page_size = page_size::get();
         let largest_alloc = AtomicUsize::new(0);
 
-        let madvise_page = |item: &[u8]| -> usize {
+        let madvise_page = |item: &[u8]| -> Result<usize> {
             let start_ptr = item.as_ptr() as usize;
             let end_ptr = start_ptr + metadata.dimensions as usize;
             let start_page = start_ptr - (start_ptr % page_size);
@@ -195,18 +204,15 @@ impl<'t, D: Distance> Reader<'t, D> {
             let advised_size = end_page - start_page;
 
             unsafe {
-                madvise::madvise(start_page as *const u8, advised_size, AccessPattern::WillNeed)
-                    .expect("Advisory failed");
+                madvise::madvise(start_page as *const u8, advised_size, AccessPattern::WillNeed)?;
             }
 
             largest_alloc.fetch_max(advised_size, Ordering::Relaxed);
-            advised_size
+            Ok(advised_size)
         };
 
         // Load links and vectors for layers > 0.
-        let mut available_memory = DEFAULT_AVAILABLE_MEMORY;
         let mut added = RoaringBitmap::new();
-
         for lvl in (1..=metadata.max_level).rev() {
             for result in database.remap_data_type::<Bytes>().iter(rtxn)? {
                 if available_memory < largest_alloc.load(Ordering::Relaxed) {
@@ -216,13 +222,18 @@ impl<'t, D: Distance> Reader<'t, D> {
                 if key.node.layer != lvl {
                     continue;
                 }
-                available_memory -= madvise_page(item);
+                match madvise_page(item) {
+                    Ok(usage) => available_memory -= usage,
+                    Err(e) => {
+                        warn!(e=?e);
+                        return Ok(());
+                    }
+                }
                 added.insert(key.node.item);
             }
         }
 
-        // If we still have memory left over fanout from neighbours of added in layer 0 until we
-        // hit the mem threshold.
+        // If we still have memory left over try fetching other nodes in layer zero.
         let mut queue = VecDeque::from_iter(added.iter());
         while let Some(item) = queue.pop_front() {
             if available_memory < largest_alloc.load(Ordering::Relaxed) {
@@ -236,7 +247,13 @@ impl<'t, D: Distance> Reader<'t, D> {
                     if let Some(bytes) =
                         database.remap_data_type::<Bytes>().get(rtxn, &Key::item(index, l))?
                     {
-                        available_memory -= madvise_page(bytes);
+                        match madvise_page(bytes) {
+                            Ok(usage) => available_memory -= usage,
+                            Err(e) => {
+                                warn!(e=?e);
+                                return Ok(());
+                            }
+                        }
                         queue.push_back(l);
                     }
                 }
