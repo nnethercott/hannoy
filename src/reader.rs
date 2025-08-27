@@ -2,6 +2,7 @@ use std::cmp::Reverse;
 use std::collections::BinaryHeap;
 use std::marker;
 use std::num::NonZeroUsize;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use heed::types::{Bytes, DecodeIgnore};
 use heed::RoTxn;
@@ -22,6 +23,7 @@ use crate::{Database, Error, ItemId, Key, MetadataCodec, Node, Prefix, PrefixCod
 
 /// A good default value for the `ef` parameter.
 const DEFAULT_EF_SEARCH: usize = 100;
+const DEFAULT_AVAILABLE_MEMORY: usize = 100 * 1024 * 1024;
 
 #[cfg(not(test))]
 /// The threshold at which linear search is used instead of the HNSW algorithm.
@@ -162,7 +164,7 @@ impl<'t, D: Distance> Reader<'t, D> {
         }
 
         // Hint to the kernel that we'll probably need some vectors in RAM.
-        Self::prefetch_graph(rtxn, &database, &metadata)?;
+        Self::prefetch_graph(rtxn, &database, index, &metadata)?;
 
         Ok(Reader {
             database: database.remap_data_type(),
@@ -176,35 +178,64 @@ impl<'t, D: Distance> Reader<'t, D> {
         })
     }
 
-    // TODO: impose an `available_memory` for the number of pages we can load in
-    fn prefetch_graph(rtxn: &RoTxn, database: &Database<D>, metadata: &Metadata) -> Result<()> {
+    fn prefetch_graph(
+        rtxn: &RoTxn,
+        database: &Database<D>,
+        index: u16,
+        metadata: &Metadata,
+    ) -> Result<()> {
         let page_size = page_size::get();
+        let largest_alloc = AtomicUsize::new(0);
 
-        let madvise_page = |item: &[u8]| {
+        let madvise_page = |item: &[u8]| -> usize {
             let start_ptr = item.as_ptr() as usize;
             let end_ptr = start_ptr + metadata.dimensions as usize;
             let start_page = start_ptr - (start_ptr % page_size);
             let end_page = end_ptr + ((end_ptr + page_size - 1) % page_size);
+            let advised_size = end_page - start_page;
 
             unsafe {
-                madvise::madvise(
-                    start_page as *const u8,
-                    end_page - start_page,
-                    AccessPattern::WillNeed,
-                )
-                .expect("Advisory failed");
+                madvise::madvise(start_page as *const u8, advised_size, AccessPattern::WillNeed)
+                    .expect("Advisory failed");
             }
+
+            largest_alloc.fetch_max(advised_size, Ordering::Relaxed);
+            advised_size
         };
 
-        // Load links and vectors.
-        // let mut cone = RoaringBitmap::new();
-        for lvl in (1..=metadata.max_level).rev() {
+        // Load links and vectors for layers > 0.
+        let mut available_memory = DEFAULT_AVAILABLE_MEMORY;
+        let mut added_items = RoaringBitmap::new();
+
+        for lvl in (0..=metadata.max_level).rev() {
             for result in database.remap_data_type::<Bytes>().iter(&rtxn)? {
+                if available_memory < largest_alloc.load(Ordering::Relaxed) {
+                    return Ok(());
+                }
                 let (key, item) = result?;
                 if key.node.layer != lvl {
                     continue;
                 }
-                madvise_page(item);
+                available_memory -= madvise_page(item);
+                added_items.insert(key.node.item);
+            }
+        }
+
+        // If we still have memory left over fetch the neighbours of `added`
+        // NOTE: this is still bad; we should first build a bitmap seperately THEN iterate over it.
+        // Here we don't check uniqueness of items in links which is wasteful
+        for item in &added_items {
+            if available_memory < largest_alloc.load(Ordering::Relaxed) {
+                return Ok(());
+            }
+            if let Some(Node::Links(links)) = database.get(&rtxn, &Key::links(index, item, 0))? {
+                for l in RoaringBitmap::from_iter(links.iter()) - &added_items {
+                    if let Some(bytes) =
+                        database.remap_data_type::<Bytes>().get(&rtxn, &Key::item(index, l))?
+                    {
+                        available_memory -= madvise_page(bytes);
+                    }
+                }
             }
         }
 
