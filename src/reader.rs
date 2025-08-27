@@ -24,7 +24,7 @@ use crate::{Database, Error, ItemId, Key, MetadataCodec, Node, Prefix, PrefixCod
 
 /// A good default value for the `ef` parameter.
 const DEFAULT_EF_SEARCH: usize = 100;
-const READER_AVAILABLE_MEMORY: &'static str = "READER_AVAILABLE_MEMORY";
+const READER_AVAILABLE_MEMORY: &str = "READER_AVAILABLE_MEMORY";
 const DEFAULT_AVAILABLE_MEMORY: usize = 100 * 1024 * 1024;
 
 #[cfg(not(test))]
@@ -190,7 +190,7 @@ impl<'t, D: Distance> Reader<'t, D> {
     ) -> Result<()> {
         let mut available_memory: usize = std::env::var(READER_AVAILABLE_MEMORY)
             .ok()
-            .and_then(|num| usize::from_str_radix(&num, 10).ok())
+            .and_then(|num| num.parse::<usize>().ok())
             .unwrap_or(DEFAULT_AVAILABLE_MEMORY);
 
         let page_size = page_size::get();
