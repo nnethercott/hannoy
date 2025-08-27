@@ -1,5 +1,5 @@
 use std::cmp::Reverse;
-use std::collections::BinaryHeap;
+use std::collections::{BinaryHeap, VecDeque};
 use std::marker;
 use std::num::NonZeroUsize;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -205,9 +205,9 @@ impl<'t, D: Distance> Reader<'t, D> {
 
         // Load links and vectors for layers > 0.
         let mut available_memory = DEFAULT_AVAILABLE_MEMORY;
-        let mut added_items = RoaringBitmap::new();
+        let mut added = RoaringBitmap::new();
 
-        for lvl in (0..=metadata.max_level).rev() {
+        for lvl in (1..=metadata.max_level).rev() {
             for result in database.remap_data_type::<Bytes>().iter(&rtxn)? {
                 if available_memory < largest_alloc.load(Ordering::Relaxed) {
                     return Ok(());
@@ -217,23 +217,27 @@ impl<'t, D: Distance> Reader<'t, D> {
                     continue;
                 }
                 available_memory -= madvise_page(item);
-                added_items.insert(key.node.item);
+                added.insert(key.node.item);
             }
         }
 
-        // If we still have memory left over fetch the neighbours of `added`
-        // NOTE: this is still bad; we should first build a bitmap seperately THEN iterate over it.
-        // Here we don't check uniqueness of items in links which is wasteful
-        for item in &added_items {
+        // If we still have memory left over fanout from neighbours of added in layer 0 until we
+        // hit the mem threshold.
+        let mut queue = VecDeque::from_iter(added.iter());
+        while let Some(item) = queue.pop_front() {
             if available_memory < largest_alloc.load(Ordering::Relaxed) {
                 return Ok(());
             }
             if let Some(Node::Links(links)) = database.get(&rtxn, &Key::links(index, item, 0))? {
-                for l in RoaringBitmap::from_iter(links.iter()) - &added_items {
+                for l in links.iter() {
+                    if !added.insert(l) {
+                        continue;
+                    }
                     if let Some(bytes) =
                         database.remap_data_type::<Bytes>().get(&rtxn, &Key::item(index, l))?
                     {
                         available_memory -= madvise_page(bytes);
+                        queue.push_back(l);
                     }
                 }
             }
