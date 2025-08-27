@@ -194,7 +194,7 @@ impl<'t, D: Distance> Reader<'t, D> {
             .and_then(|num| num.parse::<usize>().ok())
             .unwrap_or(DEFAULT_AVAILABLE_MEMORY);
 
-        if available_memory<page_size{
+        if available_memory < page_size {
             return Ok(());
         }
 
