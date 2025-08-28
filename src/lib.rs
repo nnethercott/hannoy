@@ -62,10 +62,10 @@
 //! ```
 #![warn(missing_docs)]
 #![doc(
-    html_favicon_url = "https://raw.githubusercontent.com/nnethercott/hannoy/main/assets/ed_tmp.png?raw=true"
+    html_favicon_url = "https://raw.githubusercontent.com/nnethercott/hannoy/main/assets/hanoi_new.png?raw=true"
 )]
 #![doc(
-    html_logo_url = "https://raw.githubusercontent.com/nnethercott/hannoy/main/assets/ed_tmp.png?raw=true"
+    html_logo_url = "https://raw.githubusercontent.com/nnethercott/hannoy/main/assets/hanoi_new.png?raw=true"
 )]
 #![warn(clippy::todo)]
 
