@@ -1,4 +1,4 @@
-<p align="center"><img width="280px" title="this is a cowboy bebop ref" src="assets/ed_tmp.png"></a>
+<p align="center"><img width="280px" title="this is a cowboy bebop ref" src="assets/hanoi_new.png"></a>
 <h1 align="center">hannoy 🗼</h1>
 
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
