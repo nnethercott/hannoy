@@ -92,6 +92,9 @@ mod tests;
 mod ordered_float;
 mod unaligned_vector;
 
+#[cfg(feature="python")]
+mod python;
+
 pub use distance::Distance;
 pub use error::Error;
 use key::{Key, Prefix, PrefixCodec};
