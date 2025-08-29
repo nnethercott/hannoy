@@ -120,50 +120,7 @@ impl Default for BuildOptions {
 #[pyclass(name = "Writer")]
 pub(super) struct PyWriter(DynWriter, BuildOptions);
 
-#[pymethods]
-#[gen_stub_pymethods]
 impl PyWriter {
-    #[setter]
-    fn ef_construction(&mut self, ef: usize) -> PyResult<()> {
-        self.1.ef = ef;
-        Ok(())
-    }
-
-    #[pyo3(signature = ())] // make pyo3_stub_gen ignore “slf”
-    fn __enter__<'py>(slf: Bound<'py, Self>) -> Bound<'py, Self> {
-        slf
-    }
-
-    fn __exit__<'py>(
-        &self,
-        _exc_type: Option<Bound<'py, PyType>>,
-        _exc_value: Option<Bound<'py, PyAny /*PyBaseException*/>>,
-        _traceback: Option<Bound<'py, PyAny /*PyTraceback*/>>,
-    ) -> PyResult<()> {
-        self.build()?;
-
-        PyDatabase::commit_rw_txn().map_err(|e| {
-            PyDatabase::abort_rw_txn(); // Abort txn and rethrow on failure.
-            e
-        })?;
-
-        Ok(())
-    }
-
-    /// Store a vector associated with an item ID in the database.
-    fn add_item(&self, item: ItemId, vector: Vec<f32>) -> PyResult<()> {
-        let mut wtxn = get_rw_txn()?;
-        match &self.0 {
-            DynWriter::Cosine(writer) => {
-                writer.add_item(&mut wtxn, item, &vector).map_err(h2py_err)?
-            }
-            DynWriter::Euclidean(writer) => {
-                writer.add_item(&mut wtxn, item, &vector).map_err(h2py_err)?
-            }
-        }
-        Ok(())
-    }
-
     fn build(&self) -> PyResult<()> {
         use rand::{rngs::StdRng, SeedableRng};
 
@@ -188,14 +145,56 @@ impl PyWriter {
         }
 
         let BuildOptions { ef, m, m0 } = self.1;
-
-        let res = match &self.0 {
-            DynWriter::Cosine(writer) => hnsw!(writer, (m, m0), ef),
-            DynWriter::Euclidean(writer) => hnsw!(writer, (m, m0), ef),
+        match &self.0 {
+            DynWriter::Cosine(writer) => hnsw!(writer, (m, m0), ef).map_err(h2py_err)?,
+            DynWriter::Euclidean(writer) => hnsw!(writer, (m, m0), ef).map_err(h2py_err)?,
         };
+        Ok(())
+    }
+}
 
-        res.map_err(h2py_err)?;
+#[pymethods]
+#[gen_stub_pymethods]
+impl PyWriter {
+    #[setter]
+    fn ef_construction(&mut self, ef: usize) -> PyResult<()> {
+        self.1.ef = ef;
+        Ok(())
+    }
 
+    #[pyo3(signature = ())] // make pyo3_stub_gen ignore “slf”
+    fn __enter__<'py>(slf: Bound<'py, Self>) -> Bound<'py, Self> {
+        slf
+    }
+
+    fn __exit__<'py>(
+        &self,
+        _exc_type: Option<Bound<'py, PyType>>,
+        _exc_value: Option<Bound<'py, PyAny /*PyBaseException*/>>,
+        _traceback: Option<Bound<'py, PyAny /*PyTraceback*/>>,
+    ) -> PyResult<()> {
+        self.build()?;
+
+        // Commit the txn; abort and rethrow on failure.
+        PyDatabase::commit_rw_txn().map_err(|e| {
+            PyDatabase::abort_rw_txn();
+            e
+        })?;
+
+        Ok(())
+    }
+
+    /// Store a vector associated with an item ID in the database.
+    fn add_item(&self, item: ItemId, vector: Vec<f32>) -> PyResult<()> {
+        let mut wtxn = get_rw_txn()?;
+        match &self.0 {
+            DynWriter::Cosine(writer) => {
+                writer.add_item(&mut wtxn, item, &vector).map_err(h2py_err)?
+            }
+            DynWriter::Euclidean(writer) => {
+                writer.add_item(&mut wtxn, item, &vector).map_err(h2py_err)?
+            }
+        }
         Ok(())
     }
 }
@@ -217,13 +216,4 @@ fn get_rw_txn<'a>() -> PyResult<MappedMutexGuard<'a, RwTxn<'static>>> {
         *maybe_txn = Some(wtxn);
     }
     Ok(MutexGuard::map(maybe_txn, |txn| txn.as_mut().unwrap()))
-}
-
-#[pyo3::pymodule]
-#[pyo3(name = "hannoy")]
-fn hannoy_module(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    m.add_class::<PyDistance>()?;
-    m.add_class::<PyDatabase>()?;
-    m.add_class::<PyWriter>()?;
-    Ok(())
 }
