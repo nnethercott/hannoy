@@ -1,5 +1,4 @@
 use heed::{Env, RwTxn};
-use once_cell::sync::OnceCell;
 use parking_lot::{MappedMutexGuard, Mutex, MutexGuard};
 use pyo3::{
     exceptions::{PyIOError, PyRuntimeError},
@@ -9,16 +8,15 @@ use pyo3::{
 use pyo3_stub_gen::derive::{gen_stub_pyclass, gen_stub_pyclass_enum, gen_stub_pymethods};
 use std::{path::PathBuf, sync::LazyLock};
 
-use crate::{distance, Database, ItemId, Writer};
+use crate::{distance, python::ENV, Database, ItemId, Writer};
 static DEFAULT_ENV_SIZE: usize = 1024 * 1024 * 1024 * 1; // 1GiB
 
-static ENV: OnceCell<heed::Env> = OnceCell::new();
 static RW_TXN: LazyLock<Mutex<Option<heed::RwTxn<'static>>>> = LazyLock::new(|| Mutex::new(None));
 
 #[gen_stub_pyclass_enum]
 #[pyclass(name = "Metric")]
 #[derive(Clone)]
-enum PyDistance {
+pub(super) enum PyDistance {
     Cosine,
     Euclidean,
 }
@@ -43,7 +41,7 @@ impl DynDatabase {
 
 #[gen_stub_pyclass]
 #[pyclass(name = "Database")]
-struct PyDatabase(DynDatabase);
+pub(super) struct PyDatabase(DynDatabase);
 
 #[gen_stub_pymethods]
 #[pymethods]
@@ -120,7 +118,7 @@ impl Default for BuildOptions {
 
 #[gen_stub_pyclass]
 #[pyclass(name = "Writer")]
-struct PyWriter(DynWriter, BuildOptions);
+pub(super) struct PyWriter(DynWriter, BuildOptions);
 
 #[pymethods]
 #[gen_stub_pymethods]
