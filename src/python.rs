@@ -1,4 +1,5 @@
-use heed::{Env, RwTxn};
+use heed::{RoTxn, RwTxn, WithTls};
+use once_cell::sync::OnceCell;
 use parking_lot::{MappedMutexGuard, Mutex, MutexGuard};
 use pyo3::{
     exceptions::{PyIOError, PyRuntimeError},
@@ -8,10 +9,15 @@ use pyo3::{
 use pyo3_stub_gen::derive::{gen_stub_pyclass, gen_stub_pyclass_enum, gen_stub_pymethods};
 use std::{path::PathBuf, sync::LazyLock};
 
-use crate::{distance, python::ENV, Database, ItemId, Writer};
+use crate::{distance, Database, ItemId, Reader, Writer};
 static DEFAULT_ENV_SIZE: usize = 1024 * 1024 * 1024 * 1; // 1GiB
 
+// LMDB environment.
+static ENV: OnceCell<heed::Env<WithTls>> = OnceCell::new();
 static RW_TXN: LazyLock<Mutex<Option<heed::RwTxn<'static>>>> = LazyLock::new(|| Mutex::new(None));
+
+//FIXME: gonna need to provision either a static rotxn or a pool of them; and clear on writer
+//commit
 
 #[gen_stub_pyclass_enum]
 #[pyclass(name = "Metric")]
@@ -27,7 +33,7 @@ enum DynDatabase {
 }
 impl DynDatabase {
     pub fn new(
-        env: &Env,
+        env: &heed::Env<WithTls>,
         wtxn: &mut RwTxn,
         name: Option<&str>,
         distance: PyDistance,
@@ -56,7 +62,9 @@ impl PyDatabase {
     ) -> PyResult<PyDatabase> {
         let size = env_size.unwrap_or(DEFAULT_ENV_SIZE);
         let env = ENV
-            .get_or_try_init(|| unsafe { heed::EnvOpenOptions::new().map_size(size).open(path) })
+            .get_or_try_init(|| unsafe {
+                heed::EnvOpenOptions::new().read_txn_with_tls().map_size(size).open(path)
+            })
             .map_err(h2py_err)?;
         let mut wtxn = get_rw_txn()?;
         let db = DynDatabase::new(env, &mut wtxn, name, distance).map_err(h2py_err)?;
@@ -76,6 +84,17 @@ impl PyDatabase {
             }
         }
     }
+
+    // fn reader(&self, index: u16) -> PyResult<()> {
+    //     let opts = SearchOpts::default();
+    //     let rtxn = get_ro_txn()?;
+    //
+    //     match self.0 {
+    //         DynDatabase::Cosine(database) => todo!(),
+    //         DynDatabase::Euclidean(database) => todo!(),
+    //     };
+    //     Ok(())
+    // }
 
     #[staticmethod]
     fn commit_rw_txn() -> PyResult<bool> {
@@ -128,26 +147,22 @@ impl PyWriter {
         let mut wtxn = get_rw_txn()?;
 
         // NOTE: maybe proc macro this to inject all combos up to a point...
-        macro_rules! hnsw {
-            ($w:expr, ($m:expr, $m0:expr), $ef: expr) => {
-                match ($m, $m0) {
-                    (4, 8) => $w.builder(&mut rng).ef_construction($ef).build::<4, 8>(&mut wtxn),
-                    (8, 16) => $w.builder(&mut rng).ef_construction($ef).build::<8, 16>(&mut wtxn),
-                    (16, 32) => {
-                        $w.builder(&mut rng).ef_construction($ef).build::<16, 32>(&mut wtxn)
-                    }
-                    (24, 48) => {
-                        $w.builder(&mut rng).ef_construction($ef).build::<32, 64>(&mut wtxn)
-                    }
+        let BuildOptions { ef, m, m0 } = self.1;
+        macro_rules! hnsw_build {
+            ($w:expr) => {
+                match (m, m0) {
+                    (4, 8) => $w.builder(&mut rng).ef_construction(ef).build::<4, 8>(&mut wtxn),
+                    (8, 16) => $w.builder(&mut rng).ef_construction(ef).build::<8, 16>(&mut wtxn),
+                    (16, 32) => $w.builder(&mut rng).ef_construction(ef).build::<16, 32>(&mut wtxn),
+                    (24, 48) => $w.builder(&mut rng).ef_construction(ef).build::<32, 64>(&mut wtxn),
                     _ => panic!("not supported"),
                 }
+                .map_err(h2py_err)
             };
         }
-
-        let BuildOptions { ef, m, m0 } = self.1;
         match &self.0 {
-            DynWriter::Cosine(writer) => hnsw!(writer, (m, m0), ef).map_err(h2py_err)?,
-            DynWriter::Euclidean(writer) => hnsw!(writer, (m, m0), ef).map_err(h2py_err)?,
+            DynWriter::Cosine(writer) => hnsw_build!(writer)?,
+            DynWriter::Euclidean(writer) => hnsw_build!(writer)?,
         };
         Ok(())
     }
@@ -199,6 +214,42 @@ impl PyWriter {
     }
 }
 
+enum DynReader {
+    Cosine(Reader<'static, distance::Cosine>),
+    Euclidean(Reader<'static, distance::Euclidean>),
+}
+
+#[derive(Clone, Default)]
+struct SearchOpts {
+    ef_search: usize,
+    count: usize,
+}
+
+/// A thread-local Database reader.
+#[gen_stub_pyclass]
+#[pyclass(name = "Reader", unsendable)]
+struct PyReader(DynReader, SearchOpts);
+
+#[pymethods]
+impl PyReader {
+    fn get(&self, query: Vec<f32>) -> PyResult<Vec<(ItemId, f32)>> {
+        let rtxn = get_ro_txn()?;
+        let SearchOpts { ef_search, count } = self.1;
+
+        macro_rules! hnsw_search {
+            ($read:expr, $q:expr) => {
+                $read.nns(count).ef_search(ef_search).by_vector(&rtxn, $q).map_err(h2py_err)
+            };
+        }
+
+        let neighbours = match &self.0 {
+            DynReader::Cosine(reader) => hnsw_search!(reader, &query)?,
+            DynReader::Euclidean(reader) => hnsw_search!(reader, &query)?,
+        };
+        Ok(neighbours)
+    }
+}
+
 fn h2py_err<E: Into<crate::error::Error>>(e: E) -> PyErr {
     match e.into() {
         crate::Error::Heed(heed::Error::Io(e)) | crate::Error::Io(e) => {
@@ -216,4 +267,19 @@ fn get_rw_txn<'a>() -> PyResult<MappedMutexGuard<'a, RwTxn<'static>>> {
         *maybe_txn = Some(wtxn);
     }
     Ok(MutexGuard::map(maybe_txn, |txn| txn.as_mut().unwrap()))
+}
+
+fn get_ro_txn<'a>() -> PyResult<RoTxn<'a, WithTls>> {
+    let env = ENV.get().ok_or_else(|| PyRuntimeError::new_err("No environment"))?;
+    let rtxn = env.read_txn().map_err(h2py_err)?;
+    Ok(rtxn)
+}
+
+#[pyo3::pymodule]
+#[pyo3(name = "hannoy")]
+fn hannoy_module(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_class::<PyDistance>()?;
+    m.add_class::<PyDatabase>()?;
+    m.add_class::<PyWriter>()?;
+    Ok(())
 }
