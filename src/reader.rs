@@ -1,17 +1,21 @@
 use std::cmp::Reverse;
-use std::collections::BinaryHeap;
+use std::collections::{BinaryHeap, VecDeque};
 use std::marker;
 use std::num::NonZeroUsize;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
-use heed::types::DecodeIgnore;
+use heed::types::{Bytes, DecodeIgnore};
 use heed::RoTxn;
+use madvise::AccessPattern;
 use min_max_heap::MinMaxHeap;
 use roaring::RoaringBitmap;
+use tracing::warn;
 
 use crate::distance::Distance;
 use crate::hnsw::ScoredLink;
 use crate::internals::KeyCodec;
 use crate::item_iter::ItemIter;
+use crate::metadata::Metadata;
 use crate::node::{Item, ItemIds, Links};
 use crate::ordered_float::OrderedFloat;
 use crate::unaligned_vector::UnalignedVector;
@@ -20,6 +24,8 @@ use crate::{Database, Error, ItemId, Key, MetadataCodec, Node, Prefix, PrefixCod
 
 /// A good default value for the `ef` parameter.
 const DEFAULT_EF_SEARCH: usize = 100;
+const READER_AVAILABLE_MEMORY: &str = "READER_AVAILABLE_MEMORY";
+const DEFAULT_AVAILABLE_MEMORY: usize = 100 * 1024 * 1024;
 
 #[cfg(not(test))]
 /// The threshold at which linear search is used instead of the HNSW algorithm.
@@ -159,6 +165,9 @@ impl<'t, D: Distance> Reader<'t, D> {
             return Err(Error::NeedBuild(index));
         }
 
+        // Hint to the kernel that we'll probably need some vectors in RAM.
+        Self::prefetch_graph(rtxn, &database, index, &metadata)?;
+
         Ok(Reader {
             database: database.remap_data_type(),
             index,
@@ -169,6 +178,93 @@ impl<'t, D: Distance> Reader<'t, D> {
             version,
             _marker: marker::PhantomData,
         })
+    }
+
+    /// Instructs kernel to fetch nodes based on a fixed memory budget. It's OK for this operation
+    /// to fail, it's not integral for search to work.
+    fn prefetch_graph(
+        rtxn: &RoTxn,
+        database: &Database<D>,
+        index: u16,
+        metadata: &Metadata,
+    ) -> Result<()> {
+        let page_size = page_size::get();
+        let mut available_memory: usize = std::env::var(READER_AVAILABLE_MEMORY)
+            .ok()
+            .and_then(|num| num.parse::<usize>().ok())
+            .unwrap_or(DEFAULT_AVAILABLE_MEMORY);
+
+        if available_memory < page_size {
+            return Ok(());
+        }
+
+        let largest_alloc = AtomicUsize::new(0);
+
+        let madvise_page = |item: &[u8]| -> Result<usize> {
+            let start_ptr = item.as_ptr() as usize;
+            let end_ptr = start_ptr + metadata.dimensions as usize;
+            let start_page = start_ptr - (start_ptr % page_size);
+            let end_page = end_ptr + ((end_ptr + page_size - 1) % page_size);
+            let advised_size = end_page - start_page;
+
+            unsafe {
+                madvise::madvise(start_page as *const u8, advised_size, AccessPattern::WillNeed)?;
+            }
+
+            largest_alloc.fetch_max(advised_size, Ordering::Relaxed);
+            Ok(advised_size)
+        };
+
+        // Load links and vectors for layers > 0.
+        let mut added = RoaringBitmap::new();
+        for lvl in (1..=metadata.max_level).rev() {
+            for result in database.remap_data_type::<Bytes>().iter(rtxn)? {
+                if available_memory < largest_alloc.load(Ordering::Relaxed) {
+                    return Ok(());
+                }
+                let (key, item) = result?;
+                if key.node.layer != lvl {
+                    continue;
+                }
+                match madvise_page(item) {
+                    Ok(usage) => available_memory -= usage,
+                    Err(e) => {
+                        warn!(e=?e);
+                        return Ok(());
+                    }
+                }
+                added.insert(key.node.item);
+            }
+        }
+
+        // If we still have memory left over try fetching other nodes in layer zero.
+        let mut queue = VecDeque::from_iter(added.iter());
+        while let Some(item) = queue.pop_front() {
+            if available_memory < largest_alloc.load(Ordering::Relaxed) {
+                return Ok(());
+            }
+            if let Some(Node::Links(links)) = database.get(rtxn, &Key::links(index, item, 0))? {
+                for l in links.iter() {
+                    if !added.insert(l) {
+                        continue;
+                    }
+                    if let Some(bytes) =
+                        database.remap_data_type::<Bytes>().get(rtxn, &Key::item(index, l))?
+                    {
+                        match madvise_page(bytes) {
+                            Ok(usage) => available_memory -= usage,
+                            Err(e) => {
+                                warn!(e=?e);
+                                return Ok(());
+                            }
+                        }
+                        queue.push_back(l);
+                    }
+                }
+            }
+        }
+
+        Ok(())
     }
 
     /// Returns the number of dimensions in the index.
