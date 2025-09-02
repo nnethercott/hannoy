@@ -79,15 +79,18 @@ mod hnsw {
         builder.ef_construction(32).build::<M, M0>(&mut wtxn).unwrap();
         wtxn.commit().unwrap();
 
+        // reader should have a lifetime to this
+        let rtxn = env.read_txn().unwrap();
+
         bencher
             .with_inputs(|| {
                 let mut query = [f32::default(); DIM];
                 thread_rng().fill(&mut query);
-                query
-            })
-            .bench_local_values(|query| {
-                let rtxn = env.read_txn().unwrap();
+                // Reader::open can incur some system calls that mess with profiling
                 let reader = Reader::<Cosine>::open(&rtxn, 0, db).unwrap();
+                (reader, query)
+            })
+            .bench_local_values(|(reader, query)| {
                 reader.nns(10).by_vector(&rtxn, &query).unwrap();
             });
     }
