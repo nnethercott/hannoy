@@ -12,7 +12,7 @@ use crate::distance::Distance;
 use crate::hnsw::ScoredLink;
 use crate::internals::KeyCodec;
 use crate::item_iter::ItemIter;
-use crate::node::{Item, ItemIds, Links};
+use crate::node::{Item, Links};
 use crate::ordered_float::OrderedFloat;
 use crate::unaligned_vector::UnalignedVector;
 use crate::version::{Version, VersionCodec};
@@ -31,7 +31,7 @@ const LINEAR_SEARCH_THRESHOLD: u64 = 0;
 
 /// Options used to make a query against an hannoy [`Reader`].
 pub struct QueryBuilder<'a, D: Distance> {
-    reader: &'a Reader<'a, D>,
+    reader: &'a Reader<D>,
     candidates: Option<&'a RoaringBitmap>,
     count: usize,
     ef: usize,
@@ -115,10 +115,10 @@ impl<'a, D: Distance> QueryBuilder<'a, D> {
 
 /// A reader over the hannoy hnsw graph
 #[derive(Debug)]
-pub struct Reader<'t, D: Distance> {
+pub struct Reader<D: Distance> {
     database: Database<D>,
     index: u16,
-    entry_points: ItemIds<'t>,
+    entry_points: Vec<ItemId>,
     max_level: usize,
     dimensions: usize,
     items: RoaringBitmap,
@@ -126,9 +126,9 @@ pub struct Reader<'t, D: Distance> {
     _marker: marker::PhantomData<D>,
 }
 
-impl<'t, D: Distance> Reader<'t, D> {
+impl<D: Distance> Reader<D> {
     /// Returns a reader over the database with the specified [`Distance`] type.
-    pub fn open(rtxn: &'t RoTxn, index: u16, database: Database<D>) -> Result<Reader<'t, D>> {
+    pub fn open(rtxn: &RoTxn, index: u16, database: Database<D>) -> Result<Reader<D>> {
         let metadata_key = Key::metadata(index);
 
         let metadata = match database.remap_data_type::<MetadataCodec>().get(rtxn, &metadata_key)? {
@@ -162,7 +162,7 @@ impl<'t, D: Distance> Reader<'t, D> {
         Ok(Reader {
             database: database.remap_data_type(),
             index,
-            entry_points: metadata.entry_points,
+            entry_points: Vec::from_iter(metadata.entry_points.iter()),
             max_level: metadata.max_level as usize,
             dimensions: metadata.dimensions.try_into().unwrap(),
             items: metadata.items,
@@ -202,12 +202,12 @@ impl<'t, D: Distance> Reader<'t, D> {
     }
 
     /// Returns the number of nodes in the index. Useful to run an exhaustive search.
-    pub fn n_nodes(&self, rtxn: &'t RoTxn) -> Result<Option<NonZeroUsize>> {
+    pub fn n_nodes(&self, rtxn: &RoTxn) -> Result<Option<NonZeroUsize>> {
         Ok(NonZeroUsize::new(self.database.len(rtxn)? as usize))
     }
 
     /// Returns the vector for item `i` that was previously added.
-    pub fn item_vector(&self, rtxn: &'t RoTxn, item_id: ItemId) -> Result<Option<Vec<f32>>> {
+    pub fn item_vector(&self, rtxn: &RoTxn, item_id: ItemId) -> Result<Option<Vec<f32>>> {
         Ok(get_item(self.database, self.index, rtxn, item_id)?.map(|item| {
             let mut vec = item.vector.to_vec();
             vec.truncate(self.dimensions());
@@ -230,7 +230,7 @@ impl<'t, D: Distance> Reader<'t, D> {
     }
 
     /// Returns an iterator over the items vector.
-    pub fn iter(&self, rtxn: &'t RoTxn) -> Result<ItemIter<'t, D>> {
+    pub fn iter<'a>(&self, rtxn: &'a RoTxn) -> Result<ItemIter<'a, D>> {
         ItemIter::new(self.database, self.index, rtxn).map_err(Into::into)
     }
 
@@ -303,7 +303,7 @@ impl<'t, D: Distance> Reader<'t, D> {
 
     fn nns_by_vec(
         &self,
-        rtxn: &'t RoTxn,
+        rtxn: &RoTxn,
         query: &Item<D>,
         opt: &QueryBuilder<D>,
     ) -> Result<Vec<(ItemId, f32)>> {
@@ -327,7 +327,7 @@ impl<'t, D: Distance> Reader<'t, D> {
             return Ok(item_distances);
         }
 
-        let mut eps = Vec::from_iter(self.entry_points.iter());
+        let mut eps = self.entry_points.clone();
 
         // search layers L->1 with ef=1
         for lvl in (1..=self.max_level).rev() {
@@ -400,7 +400,7 @@ impl<'t, D: Distance> Reader<'t, D> {
 
         // 3. Check entry points
         for ep in self.entry_points.iter() {
-            assert!(item_ids.contains(ep));
+            assert!(item_ids.contains(*ep));
         }
 
         Ok(())
