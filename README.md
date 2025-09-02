@@ -70,17 +70,13 @@ fn main() -> Result<()> {
 }
 ```
 
-<!-- ## ideas for improvement -->
-<!-- - keep a counter of most frequently accessed nodes during build and make those entry points (e.g. use centroid-like) -->
-<!-- - merge upper layers of graph if they only have one element -->
-<!-- - product quantization `UnalignedVectorCodec` -->
-<!-- - cache layers 1->L in RAM (speeds up M*(L-1) reads) using a hash table storing raw byte offsets and lengths -->
-<!-- - *threadpool for `Reader` to parallelize searching neighbours -->
-<!---->
-<!-- - change Metadata.entry_points from `Vec<u32>` to a `RoaringBitmap` to avoid manually deduplicating entries -->
-<!---->
-<!-- - TODO: check if using \alpha sng improves recall on incremental builds, e.g. with alpha=1.2 or something (single pass not twice over) -->
-<!--   - id *does* but it also increases build time (if used for entire build). also not a magic bullet. -->
-<!-- - ask what's wrong with a global pool for doing vector-vector ops and sending back to search thread ? -->
-<!-- - could we also reindex points on levels > 0 during incremental build ? -->
-<!-- - need to try building whole index, then deleting & inserting instead of 2-phase build -->
+## Tips and tricks
+### Reducing cold start latencies
+Search in an hnsw always traverses from the top to bottom layers of the graph, so we know a priori some vectors will be needed. We can hint to the kernel that these vectors (and their neighbours) should be loaded into RAM using [`madvise`](https://man7.org/linux/man-pages/man2/madvise.2.html) to speed up search.
+
+Doing so can reduce cold-start latencies by several milliseconds, and is configured through the `HANNOY_READER_PREFETCH_MEM` environment variable.
+
+E.g. prefetching 10MiB of vectors into RAM.
+```bash
+export HANNOY_READER_PREFETCH_MEM=10485760
+```

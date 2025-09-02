@@ -27,10 +27,6 @@ use crate::stats::BuildStats;
 use crate::writer::{BuildOption, FrozenReader};
 use crate::{Database, Distance, Error, ItemId, Result, CANCELLATION_PROBING};
 
-// TODO:
-// - add dedicated 0th layer with M0 and fix corresponding code
-// - add a NodeState.links() method or something
-
 pub(crate) type ScoredLink = (OrderedFloat, ItemId);
 
 /// State with stack-allocated graph edges

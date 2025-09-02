@@ -24,8 +24,7 @@ use crate::{Database, Error, ItemId, Key, MetadataCodec, Node, Prefix, PrefixCod
 
 /// A good default value for the `ef` parameter.
 const DEFAULT_EF_SEARCH: usize = 100;
-const READER_AVAILABLE_MEMORY: &str = "READER_AVAILABLE_MEMORY";
-const DEFAULT_AVAILABLE_MEMORY: usize = 100 * 1024 * 1024;
+const READER_AVAILABLE_MEMORY: &str = "HANNOY_READER_PREFETCH_MEM";
 
 #[cfg(not(test))]
 /// The threshold at which linear search is used instead of the HNSW algorithm.
@@ -192,7 +191,7 @@ impl<'t, D: Distance> Reader<'t, D> {
         let mut available_memory: usize = std::env::var(READER_AVAILABLE_MEMORY)
             .ok()
             .and_then(|num| num.parse::<usize>().ok())
-            .unwrap_or(DEFAULT_AVAILABLE_MEMORY);
+            .unwrap_or(0);
 
         if available_memory < page_size {
             return Ok(());
