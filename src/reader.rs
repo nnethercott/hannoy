@@ -39,7 +39,7 @@ const LINEAR_SEARCH_THRESHOLD: u64 = 0;
 pub struct QueryBuilder<'a, D: Distance> {
     reader: &'a Reader<'a, D>,
     candidates: Option<&'a RoaringBitmap>,
-    filter: Option<fn(u32, f32) -> bool>,
+    filter: Option<Box<dyn Fn(u32, f32) -> bool + 'a>>,
     count: usize,
     ef: usize,
 }
@@ -113,8 +113,8 @@ impl<'a, D: Distance> QueryBuilder<'a, D> {
     /// # let (reader, rtxn): (Reader<Euclidean>, heed::RoTxn) = todo!();
     /// reader.nns(20).filter(|id, distance| id % 2 == 0).by_item(&rtxn, 6);
     /// ```
-    pub fn filter(&mut self, filter: fn(u32, f32) -> bool) -> &mut Self {
-        self.filter = Some(filter);
+    pub fn filter<F: Fn(u32, f32) -> bool + 'a>(&mut self, filter: F) -> &mut Self {
+        self.filter = Some(Box::new(filter));
         self
     }
 
@@ -454,7 +454,7 @@ impl<'t, D: Distance> Reader<'t, D> {
 
         let mut nns = Vec::with_capacity(opt.count);
         while let Some((OrderedFloat(f), id)) = neighbours.pop_min() {
-            if let Some(filter) = opt.filter {
+            if let Some(filter) = &opt.filter {
                 if !filter(id, f) {
                     continue;
                 }
