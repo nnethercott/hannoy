@@ -74,9 +74,9 @@ fn main() -> Result<()> {
 ### Reducing cold start latencies
 Search in an hnsw always traverses from the top to bottom layers of the graph, so we know a priori some vectors will be needed. We can hint to the kernel that these vectors (and their neighbours) should be loaded into RAM using [`madvise`](https://man7.org/linux/man-pages/man2/madvise.2.html) to speed up search.
 
-Doing so can reduce cold-start latencies by several milliseconds, and is configured through the `HANNOY_READER_PREFETCH_MEM` environment variable.
+Doing so can reduce cold-start latencies by several milliseconds, and is configured through the `HANNOY_READER_PREFETCH_MEMORY` environment variable.
 
 E.g. prefetching 10MiB of vectors into RAM.
 ```bash
-export HANNOY_READER_PREFETCH_MEM=10485760
+export HANNOY_READER_PREFETCH_MEMORY=10485760
 ```

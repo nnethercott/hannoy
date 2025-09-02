@@ -24,7 +24,7 @@ use crate::{Database, Error, ItemId, Key, MetadataCodec, Node, Prefix, PrefixCod
 
 /// A good default value for the `ef` parameter.
 const DEFAULT_EF_SEARCH: usize = 100;
-const READER_AVAILABLE_MEMORY: &str = "HANNOY_READER_PREFETCH_MEM";
+const READER_AVAILABLE_MEMORY: &str = "HANNOY_READER_PREFETCH_MEMORY";
 
 #[cfg(not(test))]
 /// The threshold at which linear search is used instead of the HNSW algorithm.

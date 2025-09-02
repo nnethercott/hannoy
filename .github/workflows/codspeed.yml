@@ -34,7 +34,7 @@ jobs:
       - name: Run the benchmarks
         uses: CodSpeedHQ/action@v3
         env:
-          HANNOY_READER_PREFETCH_MEM: 1048576 # 1MiB
+          HANNOY_READER_PREFETCH_MEMORY: 1048576 # 1MiB
         with:
           run: cargo codspeed run
           token: ${{ secrets.CODSPEED_TOKEN }}
