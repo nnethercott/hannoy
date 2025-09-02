@@ -327,7 +327,7 @@ impl<'t, D: Distance> Reader<'t, D> {
 
     /// Returns an iterator over the items vector.
     pub fn iter(&self, rtxn: &'t RoTxn) -> Result<ItemIter<'t, D>> {
-        ItemIter::new(self.database, self.index, rtxn).map_err(Into::into)
+        ItemIter::new(self.database, self.index, self.dimensions, rtxn).map_err(Into::into)
     }
 
     /// Return a [`QueryBuilder`] that lets you configure and execute a search request.
