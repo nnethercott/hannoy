@@ -1,4 +1,4 @@
-use heed::{RoTxn, RwTxn, WithTls};
+use heed::{RoTxn, RwTxn, WithoutTls};
 use once_cell::sync::OnceCell;
 use parking_lot::{MappedMutexGuard, Mutex, MutexGuard};
 use pyo3::{
@@ -13,11 +13,11 @@ use crate::{distance, Database, ItemId, Reader, Writer};
 static DEFAULT_ENV_SIZE: usize = 1024 * 1024 * 1024 * 1; // 1GiB
 
 // LMDB environment.
-static ENV: OnceCell<heed::Env<WithTls>> = OnceCell::new();
+static ENV: OnceCell<heed::Env<WithoutTls>> = OnceCell::new();
 static RW_TXN: LazyLock<Mutex<Option<heed::RwTxn<'static>>>> = LazyLock::new(|| Mutex::new(None));
-
-//FIXME: gonna need to provision either a static rotxn or a pool of them; and clear on writer
-//commit
+// FIXME: find better way to do this
+static RO_TXN: LazyLock<Mutex<Option<heed::RoTxn<'static, WithoutTls>>>> =
+    LazyLock::new(|| Mutex::new(None));
 
 #[gen_stub_pyclass_enum]
 #[pyclass(name = "Metric")]
@@ -33,7 +33,7 @@ enum DynDatabase {
 }
 impl DynDatabase {
     pub fn new(
-        env: &heed::Env<WithTls>,
+        env: &heed::Env<WithoutTls>,
         wtxn: &mut RwTxn,
         name: Option<&str>,
         distance: PyDistance,
@@ -63,7 +63,7 @@ impl PyDatabase {
         let size = env_size.unwrap_or(DEFAULT_ENV_SIZE);
         let env = ENV
             .get_or_try_init(|| unsafe {
-                heed::EnvOpenOptions::new().read_txn_with_tls().map_size(size).open(path)
+                heed::EnvOpenOptions::new().read_txn_without_tls().map_size(size).open(path)
             })
             .map_err(h2py_err)?;
         let mut wtxn = get_rw_txn()?;
@@ -85,16 +85,23 @@ impl PyDatabase {
         }
     }
 
-    // fn reader(&self, index: u16) -> PyResult<()> {
-    //     let opts = SearchOpts::default();
-    //     let rtxn = get_ro_txn()?;
-    //
-    //     match self.0 {
-    //         DynDatabase::Cosine(database) => todo!(),
-    //         DynDatabase::Euclidean(database) => todo!(),
-    //     };
-    //     Ok(())
-    // }
+    /// Get a reader for a specific index and dimensions
+    fn reader(&self, index: u16) -> PyResult<PyReader> {
+        let opts = SearchOpts::default();
+        let rtxn = get_ro_txn()?;
+
+        let reader = match self.0 {
+            DynDatabase::Cosine(database) => {
+                let reader = Reader::open(&rtxn, index, database).map_err(h2py_err)?;
+                PyReader(DynReader::Cosine(reader), opts)
+            }
+            DynDatabase::Euclidean(database) => {
+                let reader = Reader::open(&rtxn, index, database).map_err(h2py_err)?;
+                PyReader(DynReader::Euclidean(reader), opts)
+            }
+        };
+        Ok(reader)
+    }
 
     #[staticmethod]
     fn commit_rw_txn() -> PyResult<bool> {
@@ -215,8 +222,8 @@ impl PyWriter {
 }
 
 enum DynReader {
-    Cosine(Reader<'static, distance::Cosine>),
-    Euclidean(Reader<'static, distance::Euclidean>),
+    Cosine(Reader<distance::Cosine>),
+    Euclidean(Reader<distance::Euclidean>),
 }
 
 #[derive(Clone, Default)]
@@ -269,10 +276,14 @@ fn get_rw_txn<'a>() -> PyResult<MappedMutexGuard<'a, RwTxn<'static>>> {
     Ok(MutexGuard::map(maybe_txn, |txn| txn.as_mut().unwrap()))
 }
 
-fn get_ro_txn<'a>() -> PyResult<RoTxn<'a, WithTls>> {
-    let env = ENV.get().ok_or_else(|| PyRuntimeError::new_err("No environment"))?;
-    let rtxn = env.read_txn().map_err(h2py_err)?;
-    Ok(rtxn)
+fn get_ro_txn<'a>() -> PyResult<MappedMutexGuard<'a, RoTxn<'static, WithoutTls>>> {
+    let mut maybe_txn = RO_TXN.lock();
+    if maybe_txn.is_none() {
+        let env = ENV.get().ok_or_else(|| PyRuntimeError::new_err("No environment"))?;
+        let wtxn = env.read_txn().map_err(h2py_err)?;
+        *maybe_txn = Some(wtxn);
+    }
+    Ok(MutexGuard::map(maybe_txn, |txn| txn.as_mut().unwrap()))
 }
 
 #[pyo3::pymodule]
