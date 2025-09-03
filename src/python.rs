@@ -15,7 +15,10 @@ static DEFAULT_ENV_SIZE: usize = 1024 * 1024 * 1024 * 1; // 1GiB
 // LMDB environment.
 static ENV: OnceCell<heed::Env<WithoutTls>> = OnceCell::new();
 static RW_TXN: LazyLock<Mutex<Option<heed::RwTxn<'static>>>> = LazyLock::new(|| Mutex::new(None));
-// FIXME: find better way to do this
+// FIXME: find better way to do this; since the variable is static we need it to be Sync ? but the
+// heed::RoTxn is !Sync (it's Send) so we need to wrap it in something. 
+// But i guess we'd also like to invalidate the rtxn if a new wtxn is created (check heed docs) so
+// we need a notion of interior mutability
 static RO_TXN: LazyLock<Mutex<Option<heed::RoTxn<'static, WithoutTls>>>> =
     LazyLock::new(|| Mutex::new(None));
 

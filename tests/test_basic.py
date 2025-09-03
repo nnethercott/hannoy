@@ -19,4 +19,4 @@ def test_create(tmp_path: Path) -> None:
     breakpoint()
 
     assert item_id == 1
-    assert dist == 0.
+    assert dist == 0.0
