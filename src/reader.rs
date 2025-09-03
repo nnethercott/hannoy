@@ -13,7 +13,7 @@ use tracing::warn;
 
 use crate::distance::Distance;
 use crate::hnsw::ScoredLink;
-use crate::internals::KeyCodec;
+use crate::internals::{KeyCodec, UnalignedVectorCodec};
 use crate::item_iter::ItemIter;
 use crate::metadata::Metadata;
 use crate::node::{Item, ItemIds, Links};
@@ -199,9 +199,13 @@ impl<'t, D: Distance> Reader<'t, D> {
 
         let largest_alloc = AtomicUsize::new(0);
 
+        // adjusted length in memory of a vector
+        let item_length = (metadata.dimensions as usize)
+            .div_ceil(<D::VectorCodec as UnalignedVectorCodec>::quantized_word_size());
+
         let madvise_page = |item: &[u8]| -> Result<usize> {
             let start_ptr = item.as_ptr() as usize;
-            let end_ptr = start_ptr + metadata.dimensions as usize;
+            let end_ptr = start_ptr + item_length;
             let start_page = start_ptr - (start_ptr % page_size);
             let end_page = end_ptr + ((end_ptr + page_size - 1) % page_size);
             let advised_size = end_page - start_page;

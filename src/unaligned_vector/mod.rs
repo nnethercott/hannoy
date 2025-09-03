@@ -45,6 +45,11 @@ pub trait UnalignedVectorCodec: std::borrow::ToOwned + Sized {
 
     /// Returns true if all the elements in the vector are equal to 0.
     fn is_zero(vec: &UnalignedVector<Self>) -> bool;
+
+    /// Returns the bit-packing size if quantized
+    fn quantized_word_size() -> usize {
+        1
+    }
 }
 
 /// A wrapper struct that is used to read unaligned vectors directly from memory.

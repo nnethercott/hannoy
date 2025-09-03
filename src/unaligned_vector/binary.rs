@@ -71,6 +71,10 @@ impl UnalignedVectorCodec for Binary {
     fn is_zero(vec: &UnalignedVector<Self>) -> bool {
         vec.as_bytes().iter().all(|b| *b == 0)
     }
+
+    fn quantized_word_size() -> usize {
+        PACKED_WORD_BITS
+    }
 }
 
 pub(super) fn from_slice_non_optimized(slice: &[f32]) -> Vec<u8> {
