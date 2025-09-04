@@ -47,7 +47,7 @@ pub trait UnalignedVectorCodec: std::borrow::ToOwned + Sized {
     fn is_zero(vec: &UnalignedVector<Self>) -> bool;
 
     /// Returns the bit-packing size if quantized
-    fn quantized_word_size() -> usize {
+    fn word_size() -> usize {
         1
     }
 }

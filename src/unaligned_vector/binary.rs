@@ -72,7 +72,7 @@ impl UnalignedVectorCodec for Binary {
         vec.as_bytes().iter().all(|b| *b == 0)
     }
 
-    fn quantized_word_size() -> usize {
+    fn word_size() -> usize {
         PACKED_WORD_BITS
     }
 }
