@@ -240,6 +240,8 @@ struct SearchOpts {
 #[pyclass(name = "Reader", unsendable)]
 struct PyReader(DynReader, SearchOpts);
 
+// TODO: make pyreader hold it's own (Send) rtxn !
+
 #[pymethods]
 impl PyReader {
     fn get(&self, query: Vec<f32>) -> PyResult<Vec<(ItemId, f32)>> {
