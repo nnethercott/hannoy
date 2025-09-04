@@ -201,7 +201,7 @@ impl<'t, D: Distance> Reader<'t, D> {
 
         // adjusted length in memory of a vector
         let item_length = (metadata.dimensions as usize)
-            .div_ceil(<D::VectorCodec as UnalignedVectorCodec>::quantized_word_size());
+            .div_ceil(<D::VectorCodec as UnalignedVectorCodec>::word_size());
 
         let madvise_page = |item: &[u8]| -> Result<usize> {
             let start_ptr = item.as_ptr() as usize;
