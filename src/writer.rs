@@ -353,13 +353,7 @@ impl<D: Distance> Writer<D> {
 
     /// Returns an iterator over the items vector.
     pub fn iter<'t>(&self, rtxn: &'t RoTxn) -> Result<ItemIter<'t, D>> {
-        Ok(ItemIter {
-            inner: self
-                .database
-                .remap_key_type::<PrefixCodec>()
-                .prefix_iter(rtxn, &Prefix::item(self.index))?
-                .remap_key_type::<KeyCodec>(),
-        })
+        Ok(ItemIter::new(self.database, self.index, self.dimensions, rtxn)?)
     }
 
     /// Add an item associated to a vector in the database.

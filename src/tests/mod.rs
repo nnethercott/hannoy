@@ -9,6 +9,7 @@ use tempfile::TempDir;
 use crate::version::VersionCodec;
 use crate::{Database, Distance, MetadataCodec, NodeCodec, NodeMode, Reader};
 
+mod reader;
 mod writer;
 
 pub struct DatabaseHandle<D> {
