@@ -2,12 +2,12 @@ use heed::{RoTxn, RwTxn, WithoutTls};
 use once_cell::sync::OnceCell;
 use parking_lot::{MappedMutexGuard, Mutex, MutexGuard};
 use pyo3::{
-    exceptions::{PyIOError, PyRuntimeError},
+    exceptions::{PyIOError, PyRuntimeError, PyValueError},
     prelude::*,
     types::PyType,
 };
 use pyo3_stub_gen::derive::{gen_stub_pyclass, gen_stub_pyclass_enum, gen_stub_pymethods};
-use std::{path::PathBuf, sync::LazyLock};
+use std::{path::PathBuf, str::FromStr, sync::LazyLock};
 
 use crate::{distance, Database, ItemId, Reader, Writer};
 static DEFAULT_ENV_SIZE: usize = 1024 * 1024 * 1024 * 1; // 1GiB
@@ -15,19 +15,43 @@ static DEFAULT_ENV_SIZE: usize = 1024 * 1024 * 1024 * 1; // 1GiB
 // LMDB environment.
 static ENV: OnceCell<heed::Env<WithoutTls>> = OnceCell::new();
 static RW_TXN: LazyLock<Mutex<Option<heed::RwTxn<'static>>>> = LazyLock::new(|| Mutex::new(None));
-// FIXME: find better way to do this; since the variable is static we need it to be Sync ? but the
-// heed::RoTxn is !Sync (it's Send) so we need to wrap it in something. 
-// But i guess we'd also like to invalidate the rtxn if a new wtxn is created (check heed docs) so
-// we need a notion of interior mutability
-static RO_TXN: LazyLock<Mutex<Option<heed::RoTxn<'static, WithoutTls>>>> =
-    LazyLock::new(|| Mutex::new(None));
 
 #[gen_stub_pyclass_enum]
 #[pyclass(name = "Metric")]
 #[derive(Clone)]
 pub(super) enum PyDistance {
+    #[pyo3(name = "COSINE")]
     Cosine,
+    #[pyo3(name = "EUCLIDEAN")]
     Euclidean,
+}
+
+impl FromStr for PyDistance {
+    type Err = &'static str;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "cosine" => Ok(Self::Cosine),
+            "euclidean" => Ok(Self::Euclidean),
+            _ => Err("unknown metric"),
+        }
+    }
+}
+
+#[gen_stub_pymethods]
+#[pymethods]
+impl PyDistance {
+    #[new]
+    fn new(variant: &str) -> PyResult<Self> {
+        Self::from_str(variant).map_err(|e| PyValueError::new_err(e))
+    }
+
+    fn __str__(&self) -> String {
+        match self {
+            PyDistance::Cosine => "cosine".into(),
+            PyDistance::Euclidean => "euclidean".into(),
+        }
+    }
 }
 
 enum DynDatabase {
@@ -56,12 +80,12 @@ pub(super) struct PyDatabase(DynDatabase);
 #[pymethods]
 impl PyDatabase {
     #[new]
-    #[pyo3(signature = (path, name=None, env_size=None, distance=PyDistance::Euclidean))]
+    #[pyo3(signature = (path, distance=PyDistance::Euclidean, name=None, env_size=None))]
     fn new(
         path: PathBuf,
+        distance: PyDistance,
         name: Option<&str>,
         env_size: Option<usize>,
-        distance: PyDistance,
     ) -> PyResult<PyDatabase> {
         let size = env_size.unwrap_or(DEFAULT_ENV_SIZE);
         let env = ENV
@@ -90,17 +114,18 @@ impl PyDatabase {
 
     /// Get a reader for a specific index and dimensions
     fn reader(&self, index: u16) -> PyResult<PyReader> {
-        let opts = SearchOpts::default();
         let rtxn = get_ro_txn()?;
 
         let reader = match self.0 {
             DynDatabase::Cosine(database) => {
                 let reader = Reader::open(&rtxn, index, database).map_err(h2py_err)?;
-                PyReader(DynReader::Cosine(reader), opts)
+                let dyn_reader = DynReader::Cosine(reader);
+                PyReader { dyn_reader, rtxn }
             }
             DynDatabase::Euclidean(database) => {
                 let reader = Reader::open(&rtxn, index, database).map_err(h2py_err)?;
-                PyReader(DynReader::Euclidean(reader), opts)
+                let dyn_reader = DynReader::Euclidean(reader);
+                PyReader { dyn_reader, rtxn }
             }
         };
         Ok(reader)
@@ -229,32 +254,27 @@ enum DynReader {
     Euclidean(Reader<distance::Euclidean>),
 }
 
-#[derive(Clone, Default)]
-struct SearchOpts {
-    ef_search: usize,
-    count: usize,
-}
-
-/// A thread-local Database reader.
+/// A thread-local Database reader holding its own `RoTxn`.
 #[gen_stub_pyclass]
 #[pyclass(name = "Reader", unsendable)]
-struct PyReader(DynReader, SearchOpts);
-
-// TODO: make pyreader hold it's own (Send) rtxn !
+struct PyReader {
+    dyn_reader: DynReader,
+    rtxn: RoTxn<'static, WithoutTls>,
+}
 
 #[pymethods]
 impl PyReader {
-    fn get(&self, query: Vec<f32>) -> PyResult<Vec<(ItemId, f32)>> {
-        let rtxn = get_ro_txn()?;
-        let SearchOpts { ef_search, count } = self.1;
+    #[pyo3(signature = (query, n=10, ef_search=200))]
+    fn by_vec(&self, query: Vec<f32>, n: usize, ef_search: usize) -> PyResult<Vec<(ItemId, f32)>> {
+        let rtxn = &self.rtxn;
 
         macro_rules! hnsw_search {
             ($read:expr, $q:expr) => {
-                $read.nns(count).ef_search(ef_search).by_vector(&rtxn, $q).map_err(h2py_err)
+                $read.nns(n).ef_search(ef_search).by_vector(&rtxn, $q).map_err(h2py_err)
             };
         }
 
-        let neighbours = match &self.0 {
+        let neighbours = match &self.dyn_reader {
             DynReader::Cosine(reader) => hnsw_search!(reader, &query)?,
             DynReader::Euclidean(reader) => hnsw_search!(reader, &query)?,
         };
@@ -281,14 +301,10 @@ fn get_rw_txn<'a>() -> PyResult<MappedMutexGuard<'a, RwTxn<'static>>> {
     Ok(MutexGuard::map(maybe_txn, |txn| txn.as_mut().unwrap()))
 }
 
-fn get_ro_txn<'a>() -> PyResult<MappedMutexGuard<'a, RoTxn<'static, WithoutTls>>> {
-    let mut maybe_txn = RO_TXN.lock();
-    if maybe_txn.is_none() {
-        let env = ENV.get().ok_or_else(|| PyRuntimeError::new_err("No environment"))?;
-        let wtxn = env.read_txn().map_err(h2py_err)?;
-        *maybe_txn = Some(wtxn);
-    }
-    Ok(MutexGuard::map(maybe_txn, |txn| txn.as_mut().unwrap()))
+fn get_ro_txn<'a>() -> PyResult<RoTxn<'static, WithoutTls>> {
+    let env = ENV.get().ok_or_else(|| PyRuntimeError::new_err("No environment"))?;
+    let rtxn = env.read_txn().map_err(h2py_err)?;
+    Ok(rtxn)
 }
 
 #[pyo3::pymodule]
