@@ -99,20 +99,23 @@ impl PyDatabase {
     }
 
     /// Get a writer for a specific index and dimensions.
-    fn writer(&self, index: u16, dimensions: usize) -> PyWriter {
-        let opts = BuildOptions::default();
+    #[pyo3(signature = (dimensions, index=0, m=16, ef=96))]
+    fn writer(&self, dimensions: usize, index: u16, m: usize, ef: usize) -> PyWriter {
+        let opts = BuildOptions { ef, m, m0: 2 * m };
 
         match self.0 {
             DynDatabase::Cosine(db) => {
-                PyWriter(DynWriter::Cosine(Writer::new(db, index, dimensions)), opts)
+                PyWriter { dyn_writer: DynWriter::Cosine(Writer::new(db, index, dimensions)), opts }
             }
-            DynDatabase::Euclidean(db) => {
-                PyWriter(DynWriter::Euclidean(Writer::new(db, index, dimensions)), opts)
-            }
+            DynDatabase::Euclidean(db) => PyWriter {
+                dyn_writer: DynWriter::Euclidean(Writer::new(db, index, dimensions)),
+                opts,
+            },
         }
     }
 
     /// Get a reader for a specific index and dimensions
+    #[pyo3(signature = (index = 0))]
     fn reader(&self, index: u16) -> PyResult<PyReader> {
         let rtxn = get_ro_txn()?;
 
@@ -164,15 +167,12 @@ struct BuildOptions {
     pub m0: usize,
 }
 
-impl Default for BuildOptions {
-    fn default() -> Self {
-        BuildOptions { ef: 100, m: 16, m0: 32 }
-    }
-}
-
 #[gen_stub_pyclass]
 #[pyclass(name = "Writer")]
-pub(super) struct PyWriter(DynWriter, BuildOptions);
+pub(super) struct PyWriter {
+    dyn_writer: DynWriter,
+    opts: BuildOptions,
+}
 
 impl PyWriter {
     fn build(&self) -> PyResult<()> {
@@ -181,13 +181,14 @@ impl PyWriter {
         let mut rng = StdRng::seed_from_u64(42);
         let mut wtxn = get_rw_txn()?;
 
-        // NOTE: maybe proc macro this to inject all combos up to a point...
-        let BuildOptions { ef, m, m0 } = self.1;
+        // TODO: add proc macro here
+        let BuildOptions { ef, m, m0 } = self.opts;
         macro_rules! hnsw_build {
             ($w:expr) => {
                 match (m, m0) {
                     (4, 8) => $w.builder(&mut rng).ef_construction(ef).build::<4, 8>(&mut wtxn),
                     (8, 16) => $w.builder(&mut rng).ef_construction(ef).build::<8, 16>(&mut wtxn),
+                    (12, 24) => $w.builder(&mut rng).ef_construction(ef).build::<12, 24>(&mut wtxn),
                     (16, 32) => $w.builder(&mut rng).ef_construction(ef).build::<16, 32>(&mut wtxn),
                     (24, 48) => $w.builder(&mut rng).ef_construction(ef).build::<32, 64>(&mut wtxn),
                     _ => panic!("not supported"),
@@ -195,7 +196,7 @@ impl PyWriter {
                 .map_err(h2py_err)
             };
         }
-        match &self.0 {
+        match &self.dyn_writer {
             DynWriter::Cosine(writer) => hnsw_build!(writer)?,
             DynWriter::Euclidean(writer) => hnsw_build!(writer)?,
         };
@@ -206,12 +207,6 @@ impl PyWriter {
 #[pymethods]
 #[gen_stub_pymethods]
 impl PyWriter {
-    #[setter]
-    fn ef_construction(&mut self, ef: usize) -> PyResult<()> {
-        self.1.ef = ef;
-        Ok(())
-    }
-
     #[pyo3(signature = ())] // make pyo3_stub_gen ignore “slf”
     fn __enter__<'py>(slf: Bound<'py, Self>) -> Bound<'py, Self> {
         slf
@@ -224,20 +219,14 @@ impl PyWriter {
         _traceback: Option<Bound<'py, PyAny /*PyTraceback*/>>,
     ) -> PyResult<()> {
         self.build()?;
-
-        // Commit the txn; abort and rethrow on failure.
-        PyDatabase::commit_rw_txn().map_err(|e| {
-            PyDatabase::abort_rw_txn();
-            e
-        })?;
-
+        PyDatabase::commit_rw_txn()?;
         Ok(())
     }
 
     /// Store a vector associated with an item ID in the database.
     fn add_item(&self, item: ItemId, vector: Vec<f32>) -> PyResult<()> {
         let mut wtxn = get_rw_txn()?;
-        match &self.0 {
+        match &self.dyn_writer {
             DynWriter::Cosine(writer) => {
                 writer.add_item(&mut wtxn, item, &vector).map_err(h2py_err)?
             }
