@@ -14,10 +14,11 @@ Many popular HNSW libraries are built in memory, meaning you need enough RAM to 
 
 ## Features
 - Supported metrics: [euclidean](https://en.wikipedia.org/wiki/Euclidean_distance#:~:text=In%20mathematics%2C%20the%20Euclidean%20distance,occasionally%20called%20the%20Pythagorean%20distance.), [cosine](https://en.wikipedia.org/wiki/Cosine_similarity#Cosine_distance), [manhattan](https://en.wikipedia.org/wiki/Taxicab_geometry), [hamming](https://en.wikipedia.org/wiki/Hamming_distance), as well as quantized counterparts.
+- Python bindings with [maturin](https://github.com/PyO3/maturin) and [pyo3](https://github.com/PyO3/pyo3) 
 - Multithreaded builds using rayon
-- Build index on disk to enable indexing big datasets that won't fit into memory using LMDB
-- [Compressed bitmaps](https://github.com/RoaringBitmap/roaring-rs) to store graph edges with minimal overhead, adding overhead of only ~200 bytes per vector
-- Dynamic document insertions and deletions
+- Disk-backed storage to enable indexing datasets that won't fit in RAM using LMDB
+- [Compressed bitmaps](https://github.com/RoaringBitmap/roaring-rs) to store graph edges with minimal overhead, adding ~200 bytes per vector
+- Dynamic document insertions and deletions without full re-indexing
 
 ## Missing Features
 - GPU-accelerated indexing
