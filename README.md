@@ -77,13 +77,11 @@ import tempfile
 tmp_dir = tempfile.gettempdir()
 db = hannoy.Database(tmp_dir, Metric.COSINE)
 
-# Build with the hannoy context manager
 with db.writer(3, m=4, ef=10) as writer:
     writer.add_item(0, [1.0, 0.0, 0.0])
     writer.add_item(1, [0.0, 1.0, 0.0])
     writer.add_item(2, [0.0, 0.0, 1.0])
 
-# Open a reader
 reader = db.reader()
 nns = reader.by_vec([0.0, 1.0, 0.0], n=2)
 
