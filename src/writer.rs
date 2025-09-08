@@ -43,7 +43,7 @@ impl Default for BuildOption<'_, NoProgress> {
     fn default() -> Self {
         Self {
             ef_construction: 100,
-            alpha: 1.1,
+            alpha: 1.0,
             available_memory: None,
             cancel: Box::new(|| false),
             progress: NoProgress,
