@@ -21,6 +21,7 @@ use crate::{Database, Distance, ItemId, LayerId};
 /// It is safe to share between threads as the pointer are pointing
 /// in the mmapped file and the transaction is kept here and therefore
 /// no longer touches the database.
+#[derive(Clone, Debug)]
 pub struct ImmutableItems<'t, D> {
     items: HashMap<ItemId, *const u8, FxBuildHasher>,
     constant_length: Option<usize>,
@@ -92,6 +93,7 @@ unsafe impl<D> Sync for ImmutableItems<'_, D> {}
 /// It is safe to share between threads as the pointers are pointing
 /// in the mmapped file and the transaction is kept here and therefore
 /// no longer touches the database.
+#[derive(Clone, Debug)]
 pub struct ImmutableLinks<'t, D> {
     links: HashMap<(u32, u8), (usize, *const u8), FxBuildHasher>,
     _marker: marker::PhantomData<(&'t (), D)>,

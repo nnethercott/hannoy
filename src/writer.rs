@@ -585,11 +585,11 @@ impl<D: Distance> Writer<D> {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub(crate) struct FrozenReader<'a, D: Distance> {
     pub index: u16,
-    pub items: &'a ImmutableItems<'a, D>,
-    pub links: &'a ImmutableLinks<'a, D>,
+    pub items: ImmutableItems<'a, D>,
+    pub links: ImmutableLinks<'a, D>,
 }
 
 impl<'a, D: Distance> FrozenReader<'a, D> {

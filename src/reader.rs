@@ -18,8 +18,10 @@ use crate::item_iter::ItemIter;
 use crate::metadata::Metadata;
 use crate::node::{Item, ItemIds, Links};
 use crate::ordered_float::OrderedFloat;
+use crate::parallel::{ImmutableItems, ImmutableLinks};
 use crate::unaligned_vector::UnalignedVector;
 use crate::version::{Version, VersionCodec};
+use crate::writer::{BuildOption, FrozenReader};
 use crate::{Database, Error, ItemId, Key, MetadataCodec, Node, Prefix, PrefixCodec, Result};
 
 /// A good default value for the `ef` parameter.
@@ -127,6 +129,7 @@ pub struct Reader<'t, D: Distance> {
     max_level: usize,
     dimensions: usize,
     items: RoaringBitmap,
+    lmdb: FrozenReader<'t, D>,
     version: Version,
     _marker: marker::PhantomData<D>,
 }
@@ -167,6 +170,17 @@ impl<'t, D: Distance> Reader<'t, D> {
         // Hint to the kernel that we'll probably need some vectors in RAM.
         Self::prefetch_graph(rtxn, &database, index, &metadata)?;
 
+        // fetching pointers to everything would certainly be faster, non ?
+        let items = ImmutableItems::new(rtxn, database, index, &BuildOption::default())?;
+        let links = ImmutableLinks::new(
+            rtxn,
+            database,
+            index,
+            database.len(rtxn)?,
+            &BuildOption::default(),
+        )?;
+        let lmdb = FrozenReader { index, items, links };
+
         Ok(Reader {
             database: database.remap_data_type(),
             index,
@@ -174,6 +188,7 @@ impl<'t, D: Distance> Reader<'t, D> {
             max_level: metadata.max_level as usize,
             dimensions: metadata.dimensions.try_into().unwrap(),
             items: metadata.items,
+            lmdb,
             version,
             _marker: marker::PhantomData,
         })
@@ -338,15 +353,12 @@ impl<'t, D: Distance> Reader<'t, D> {
 
     /// Get a generic read node from the database using the version of the database found while creating the reader.
     /// Must be used every time we retrieve a node in this file.
-    // FIXME: this is more or less a direct copy of the builder, except we use a single
-    // RoTxn instead of a FrozzenReader
     fn explore_layer(
         &self,
         query: &Item<D>,
         eps: &[ItemId],
         level: usize,
         ef: usize,
-        rtxn: &RoTxn,
     ) -> Result<MinMaxHeap<ScoredLink>> {
         let mut candidates = BinaryHeap::new();
         let mut res = MinMaxHeap::with_capacity(ef);
@@ -354,7 +366,7 @@ impl<'t, D: Distance> Reader<'t, D> {
 
         // Register all entry points as visited and populate candidates
         for &ep in eps {
-            let ve = get_item(self.database, self.index, rtxn, ep)?.unwrap();
+            let ve = self.lmdb.get_item(ep)?;
             let dist = D::distance(query, &ve);
 
             candidates.push((Reverse(OrderedFloat(dist)), ep));
@@ -370,21 +382,23 @@ impl<'t, D: Distance> Reader<'t, D> {
             let (_, c) = candidates.pop().unwrap(); // Now safe to pop
 
             // Get neighborhood of candidate either from self or LMDB
-            let proximity = match get_links(rtxn, self.database, self.index, c, level)? {
-                Some(Links { links }) => links.iter().collect::<Vec<ItemId>>(),
-                None => unreachable!("Links must exist"),
-            };
-            for point in proximity {
+            let Links { links: proximity } = self.lmdb.get_links(c, level)?;
+            for point in proximity.iter() {
                 if !visited.insert(point) {
                     continue;
                 }
-                let dist =
-                    D::distance(query, &get_item(self.database, self.index, rtxn, point)?.unwrap());
+                // If the item isn't in the frozzen reader it must have been deleted from the index,
+                // in which case its OK not to explore it
+                let item = match self.lmdb.get_item(point) {
+                    Ok(item) => item,
+                    Err(Error::MissingKey { .. }) => continue,
+                    Err(e) => return Err(e),
+                };
+                let dist = D::distance(query, &item);
 
                 if res.len() < ef || dist < f_max {
                     candidates.push((Reverse(OrderedFloat(dist)), point));
 
-                    // optimized insert & removal maintaining original len
                     if res.len() == ef {
                         let _ = res.push_pop_max((OrderedFloat(dist), point));
                     } else {
@@ -393,6 +407,7 @@ impl<'t, D: Distance> Reader<'t, D> {
                 }
             }
         }
+
         Ok(res)
     }
 
@@ -426,13 +441,13 @@ impl<'t, D: Distance> Reader<'t, D> {
 
         // search layers L->1 with ef=1
         for lvl in (1..=self.max_level).rev() {
-            let neighbours = self.explore_layer(query, &eps, lvl, 1, rtxn)?;
+            let neighbours = self.explore_layer(query, &eps, lvl, 1)?;
             let closest = neighbours.peek_min().map(|(_, n)| n).expect("No neighbor was found");
             eps = vec![*closest];
         }
 
         // search layer 0 with ef=max(ef, count)
-        let mut neighbours = self.explore_layer(query, &eps, 0, opt.ef, rtxn)?;
+        let mut neighbours = self.explore_layer(query, &eps, 0, opt.ef)?;
 
         let mut nns = Vec::with_capacity(opt.count);
         while let Some((OrderedFloat(f), id)) = neighbours.pop_min() {

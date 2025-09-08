@@ -138,7 +138,7 @@ impl<'a, D: Distance, const M: usize, const M0: usize> HnswBuilder<'a, D, M, M0>
 
         let items = ImmutableItems::new(wtxn, database, index, options)?;
         let links = ImmutableLinks::new(wtxn, database, index, database.len(wtxn)?, options)?;
-        let lmdb = FrozenReader { index, items: &items, links: &links };
+        let lmdb = FrozenReader { index, items, links };
 
         // Generate a random level for each point
         let mut cur_max_level = usize::MIN;
