@@ -33,6 +33,7 @@ pub struct HannoyBuilder<'a, D: Distance, R: Rng + SeedableRng, P> {
 /// The options available when building the hannoy database.
 pub(crate) struct BuildOption<'a, P> {
     pub(crate) ef_construction: usize,
+    pub(crate) alpha: f32,
     pub(crate) available_memory: Option<usize>,
     pub(crate) cancel: Box<dyn Fn() -> bool + 'a + Sync + Send>,
     pub(crate) progress: P,
@@ -42,6 +43,7 @@ impl Default for BuildOption<'_, NoProgress> {
     fn default() -> Self {
         Self {
             ef_construction: 100,
+            alpha: 1.0,
             available_memory: None,
             cancel: Box::new(|| false),
             progress: NoProgress,
@@ -110,13 +112,13 @@ impl<'a, D: Distance, R: Rng + SeedableRng, P> HannoyBuilder<'a, D, R, P> {
         let HannoyBuilder {
             writer,
             rng,
-            inner: BuildOption { ef_construction, available_memory, cancel, progress: _ },
+            inner: BuildOption { ef_construction, available_memory, cancel, progress: _, alpha },
         } = self;
 
         HannoyBuilder {
             writer,
             rng,
-            inner: BuildOption { ef_construction, available_memory, cancel, progress },
+            inner: BuildOption { ef_construction, available_memory, cancel, progress, alpha },
         }
     }
 
@@ -140,6 +142,29 @@ impl<'a, D: Distance, R: Rng + SeedableRng, P> HannoyBuilder<'a, D, R, P> {
     /// ```
     pub fn ef_construction(&mut self, ef_construction: usize) -> &mut Self {
         self.inner.ef_construction = ef_construction;
+        self
+    }
+
+    /// Tunable hyperparameter for the graph building process. Alpha decreases the tolerance for
+    /// link creation during index time. Alpha = 1 is the normal HNSW build while alpha > 1 is
+    /// more similar to DiskANN. Increasing alpha increases indexing times as more neighbours are
+    /// considered per linking step, but results in higher recall.
+    ///
+    /// DiskANN authors suggest using alpha=1.1 or alpha=1.2. By default alpha=1.0 in hannoy.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// # use hannoy::{Writer, distances::Euclidean};
+    /// # let (writer, wtxn): (Writer<Euclidean>, heed::RwTxn) = todo!();
+    /// use rand::rngs::StdRng;
+    /// use rand::SeedableRng;
+    ///
+    /// let mut rng = StdRng::seed_from_u64(4729);
+    /// writer.builder(&mut rng).alpha(1.1).build::<16,32>(&mut wtxn);
+    /// ```
+    pub fn alpha(&mut self, alpha: f32) -> &mut Self {
+        self.inner.alpha = alpha;
         self
     }
 
@@ -353,13 +378,7 @@ impl<D: Distance> Writer<D> {
 
     /// Returns an iterator over the items vector.
     pub fn iter<'t>(&self, rtxn: &'t RoTxn) -> Result<ItemIter<'t, D>> {
-        Ok(ItemIter {
-            inner: self
-                .database
-                .remap_key_type::<PrefixCodec>()
-                .prefix_iter(rtxn, &Prefix::item(self.index))?
-                .remap_key_type::<KeyCodec>(),
-        })
+        Ok(ItemIter::new(self.database, self.index, self.dimensions, rtxn)?)
     }
 
     /// Add an item associated to a vector in the database.
