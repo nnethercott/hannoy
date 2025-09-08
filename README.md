@@ -20,12 +20,10 @@ Many popular HNSW libraries are built in memory, meaning you need enough RAM to 
 - Dynamic document insertions and deletions
 
 ## Missing Features
-- Python support
 - GPU-accelerated indexing
 
 ## Usage
-Here's a quick demo:
-
+### Rust
 ```rust
 use hannoy::{distances::Cosine, Database, Reader, Result, Writer};
 use heed::EnvOpenOptions;
@@ -68,6 +66,28 @@ fn main() -> Result<()> {
     dbg!("{:?}", &nns);
     Ok(())
 }
+```
+
+### Python
+```python
+import hannoy
+from hannoy import Metric
+import tempfile
+
+tmp_dir = tempfile.gettempdir()
+db = hannoy.Database(tmp_dir, Metric.COSINE)
+
+# Build with the hannoy context manager
+with db.writer(3, m=4, ef=10) as writer:
+    writer.add_item(0, [1.0, 0.0, 0.0])
+    writer.add_item(1, [0.0, 1.0, 0.0])
+    writer.add_item(2, [0.0, 0.0, 1.0])
+
+# Open a reader
+reader = db.reader()
+nns = reader.by_vec([0.0, 1.0, 0.0], n=2)
+
+(closest, dist) = nns[0]
 ```
 
 <!-- ## ideas for improvement -->
