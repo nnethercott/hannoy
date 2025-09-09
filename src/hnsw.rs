@@ -7,7 +7,7 @@ use std::marker::PhantomData;
 use std::sync::atomic::Ordering::Relaxed;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use heed::RwTxn;
+use heed::{RoTxn, RwTxn};
 use min_max_heap::MinMaxHeap;
 use papaya::HashMap;
 use rand::distributions::WeightedIndex;
@@ -592,6 +592,82 @@ impl<'a, D: Distance, const M: usize, const M0: usize> HnswBuilder<'a, D, M, M0>
         Ok(selected)
     }
 }
+
+pub(crate) trait Visitor {
+    type Metric: Distance;
+    fn get_item<'a>(
+        &self,
+        rtxn: &'a RoTxn,
+        item_id: ItemId,
+    ) -> Result<Option<Item<'a, Self::Metric>>>;
+    fn get_links<'a>(
+        &self,
+        rtxn: &'a RoTxn,
+        item_id: ItemId,
+        level: usize,
+    ) -> Result<Option<Links<'a>>>;
+
+    /// Get a generic read node from the database using the version of the database found while creating the reader.
+    /// Must be used every time we retrieve a node in this file.
+    fn explore_layer(
+        &self,
+        query: &Item<Self::Metric>,
+        rtxn: &RoTxn,
+        eps: &[ItemId],
+        level: usize,
+        ef: usize,
+    ) -> Result<MinMaxHeap<ScoredLink>> {
+        let mut candidates = BinaryHeap::new();
+        let mut res = MinMaxHeap::with_capacity(ef);
+        let mut visited = RoaringBitmap::new();
+
+        // Register all entry points as visited and populate candidates
+        for &ep in eps {
+            let ve = self.get_item(rtxn, ep)?.unwrap();
+            let dist = <Self::Metric as Distance>::distance(query, &ve);
+
+            candidates.push((Reverse(OrderedFloat(dist)), ep));
+            res.push((OrderedFloat(dist), ep));
+            visited.insert(ep);
+        }
+
+        while let Some(&(Reverse(OrderedFloat(f)), _)) = candidates.peek() {
+            let &(OrderedFloat(f_max), _) = res.peek_max().unwrap();
+            if f > f_max {
+                break;
+            }
+            let (_, c) = candidates.pop().unwrap(); // Now safe to pop
+
+            // Get neighborhood of candidate either from self or LMDB
+            let proximity = match self.get_links(rtxn, c, level)? {
+                Some(Links { links }) => links.iter().collect::<Vec<ItemId>>(),
+                None => unreachable!("Links must exist"),
+            };
+            for point in proximity {
+                if !visited.insert(point) {
+                    continue;
+                }
+                let dist = <Self::Metric as Distance>::distance(
+                    query,
+                    &self.get_item(rtxn, point)?.unwrap(),
+                );
+
+                if res.len() < ef || dist < f_max {
+                    candidates.push((Reverse(OrderedFloat(dist)), point));
+
+                    // optimized insert & removal maintaining original len
+                    if res.len() == ef {
+                        let _ = res.push_pop_max((OrderedFloat(dist), point));
+                    } else {
+                        res.push((OrderedFloat(dist), point));
+                    }
+                }
+            }
+        }
+        Ok(res)
+    }
+}
+
 
 #[cfg(test)]
 mod tests {

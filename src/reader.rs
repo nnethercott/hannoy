@@ -12,7 +12,7 @@ use roaring::RoaringBitmap;
 use tracing::warn;
 
 use crate::distance::Distance;
-use crate::hnsw::ScoredLink;
+use crate::hnsw::{ScoredLink, Visitor};
 use crate::internals::{KeyCodec, UnalignedVectorCodec};
 use crate::item_iter::ItemIter;
 use crate::metadata::Metadata;
@@ -307,7 +307,9 @@ impl<'t, D: Distance> Reader<'t, D> {
 
     /// Returns the vector for item `i` that was previously added.
     pub fn item_vector(&self, rtxn: &'t RoTxn, item_id: ItemId) -> Result<Option<Vec<f32>>> {
-        Ok(get_item(self.database, self.index, rtxn, item_id)?.map(|item| {
+        let visitor = LmdbVisitor { database: self.database, index: self.index };
+
+        Ok(visitor.get_item(rtxn, item_id)?.map(|item| {
             let mut vec = item.vector.to_vec();
             vec.truncate(self.dimensions());
             vec
@@ -340,66 +342,6 @@ impl<'t, D: Distance> Reader<'t, D> {
         QueryBuilder { reader: self, candidates: None, count, ef: DEFAULT_EF_SEARCH }
     }
 
-    /// Get a generic read node from the database using the version of the database found while creating the reader.
-    /// Must be used every time we retrieve a node in this file.
-    // FIXME: this is more or less a direct copy of the builder, except we use a single
-    // RoTxn instead of a FrozzenReader
-    fn explore_layer(
-        &self,
-        query: &Item<D>,
-        eps: &[ItemId],
-        level: usize,
-        ef: usize,
-        rtxn: &RoTxn,
-    ) -> Result<MinMaxHeap<ScoredLink>> {
-        let mut candidates = BinaryHeap::new();
-        let mut res = MinMaxHeap::with_capacity(ef);
-        let mut visited = RoaringBitmap::new();
-
-        // Register all entry points as visited and populate candidates
-        for &ep in eps {
-            let ve = get_item(self.database, self.index, rtxn, ep)?.unwrap();
-            let dist = D::distance(query, &ve);
-
-            candidates.push((Reverse(OrderedFloat(dist)), ep));
-            res.push((OrderedFloat(dist), ep));
-            visited.insert(ep);
-        }
-
-        while let Some(&(Reverse(OrderedFloat(f)), _)) = candidates.peek() {
-            let &(OrderedFloat(f_max), _) = res.peek_max().unwrap();
-            if f > f_max {
-                break;
-            }
-            let (_, c) = candidates.pop().unwrap(); // Now safe to pop
-
-            // Get neighborhood of candidate either from self or LMDB
-            let proximity = match get_links(rtxn, self.database, self.index, c, level)? {
-                Some(Links { links }) => links.iter().collect::<Vec<ItemId>>(),
-                None => unreachable!("Links must exist"),
-            };
-            for point in proximity {
-                if !visited.insert(point) {
-                    continue;
-                }
-                let dist =
-                    D::distance(query, &get_item(self.database, self.index, rtxn, point)?.unwrap());
-
-                if res.len() < ef || dist < f_max {
-                    candidates.push((Reverse(OrderedFloat(dist)), point));
-
-                    // optimized insert & removal maintaining original len
-                    if res.len() == ef {
-                        let _ = res.push_pop_max((OrderedFloat(dist), point));
-                    } else {
-                        res.push((OrderedFloat(dist), point));
-                    }
-                }
-            }
-        }
-        Ok(res)
-    }
-
     fn nns_by_vec(
         &self,
         rtxn: &'t RoTxn,
@@ -410,6 +352,8 @@ impl<'t, D: Distance> Reader<'t, D> {
         if opt.candidates.is_some_and(|c| self.item_ids().is_disjoint(c)) {
             return Ok(Vec::new());
         }
+
+        let visitor = LmdbVisitor { database: self.database, index: self.index };
 
         // If the number of candidates is less than a given threshold, perform linear search
         if let Some(candidates) = opt.candidates.filter(|c| c.len() < LINEAR_SEARCH_THRESHOLD) {
@@ -430,13 +374,13 @@ impl<'t, D: Distance> Reader<'t, D> {
 
         // search layers L->1 with ef=1
         for lvl in (1..=self.max_level).rev() {
-            let neighbours = self.explore_layer(query, &eps, lvl, 1, rtxn)?;
+            let neighbours = visitor.explore_layer(query, rtxn, &eps, lvl, 1)?;
             let closest = neighbours.peek_min().map(|(_, n)| n).expect("No neighbor was found");
             eps = vec![*closest];
         }
 
         // search layer 0 with ef=max(ef, count)
-        let mut neighbours = self.explore_layer(query, &eps, 0, opt.ef, rtxn)?;
+        let mut neighbours = visitor.explore_layer(query, rtxn, &eps, 0, opt.ef)?;
 
         let mut nns = Vec::with_capacity(opt.count);
         while let Some((OrderedFloat(f), id)) = neighbours.pop_min() {
@@ -506,29 +450,40 @@ impl<'t, D: Distance> Reader<'t, D> {
     }
 }
 
-pub fn get_item<'a, D: Distance>(
+struct LmdbVisitor<D: Distance> {
     database: Database<D>,
     index: u16,
-    rtxn: &'a RoTxn,
-    item: ItemId,
-) -> Result<Option<Item<'a, D>>> {
-    match database.get(rtxn, &Key::item(index, item))? {
-        Some(Node::Item(item)) => Ok(Some(item)),
-        Some(Node::Links(_)) => Ok(None),
-        None => Ok(None),
-    }
 }
 
-pub fn get_links<'a, D: Distance>(
-    rtxn: &'a RoTxn,
-    database: Database<D>,
-    index: u16,
-    item_id: ItemId,
-    level: usize,
-) -> Result<Option<Links<'a>>> {
-    match database.get(rtxn, &Key::links(index, item_id, level as u8))? {
-        Some(Node::Links(links)) => Ok(Some(links)),
-        Some(Node::Item(_)) => Ok(None),
-        None => Ok(None),
+impl<D: Distance> Visitor for LmdbVisitor<D> {
+    type Metric = D;
+
+    fn get_item<'a>(
+        &self,
+        rtxn: &'a RoTxn,
+        item_id: ItemId,
+    ) -> Result<Option<Item<'a, Self::Metric>>> {
+        let key = Key::item(self.index, item_id);
+
+        match self.database.get(rtxn, &key)? {
+            Some(Node::Item(item)) => Ok(Some(item)),
+            Some(Node::Links(_)) => Ok(None),
+            None => Ok(None),
+        }
+    }
+
+    fn get_links<'a>(
+        &self,
+        rtxn: &'a RoTxn,
+        item_id: ItemId,
+        level: usize,
+    ) -> Result<Option<Links<'a>>> {
+        let key = Key::links(self.index, item_id, level as u8);
+
+        match self.database.get(rtxn, &key)? {
+            Some(Node::Links(links)) => Ok(Some(links)),
+            Some(Node::Item(_)) => Ok(None),
+            None => Ok(None),
+        }
     }
 }
