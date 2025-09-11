@@ -68,7 +68,6 @@ pub struct HnswBuilder<'a, D, const M: usize, const M0: usize> {
 impl<'a, D: Distance, const M: usize, const M0: usize> HnswBuilder<'a, D, M, M0> {
     pub fn new<P: steppe::Progress>(opts: &'a BuildOption<P>) -> Self {
         let assign_probas = Self::get_default_probas();
-
         Self {
             assign_probas,
             ef_construction: opts.ef_construction,

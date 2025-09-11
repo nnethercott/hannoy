@@ -6,3 +6,7 @@ target
 lock.mdb
 data.mdb
 example/assets
+.pytest_cache
+.venv
+__pycache__
+uv.lock
