@@ -16,7 +16,7 @@ use crate::hnsw::ScoredLink;
 use crate::internals::{KeyCodec, UnalignedVectorCodec};
 use crate::item_iter::ItemIter;
 use crate::metadata::Metadata;
-use crate::node::{Item, ItemIds, Links};
+use crate::node::{Item, Links};
 use crate::ordered_float::OrderedFloat;
 use crate::unaligned_vector::UnalignedVector;
 use crate::version::{Version, VersionCodec};
@@ -329,14 +329,14 @@ impl<D: Distance> Reader<D> {
     }
 
     /// Returns an iterator over the items vector.
-    pub fn iter(&self, rtxn: &'t RoTxn) -> Result<ItemIter<'t, D>> {
+    pub fn iter<'t>(&self, rtxn: &'t RoTxn) -> Result<ItemIter<'t, D>> {
         ItemIter::new(self.database, self.index, self.dimensions, rtxn).map_err(Into::into)
     }
 
     /// Return a [`QueryBuilder`] that lets you configure and execute a search request.
     ///
     /// You must provide the number of items you want to receive.
-    pub fn nns(&self, count: usize) -> QueryBuilder<D> {
+    pub fn nns(&self, count: usize) -> QueryBuilder<'_, D> {
         QueryBuilder { reader: self, candidates: None, count, ef: DEFAULT_EF_SEARCH }
     }
 
