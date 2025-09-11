@@ -92,7 +92,7 @@ mod tests;
 mod ordered_float;
 mod unaligned_vector;
 
-#[cfg(feature="python")]
+#[cfg(feature = "python")]
 mod python;
 
 pub use distance::Distance;

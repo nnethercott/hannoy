@@ -24,6 +24,16 @@ pub(super) enum PyDistance {
     Cosine,
     #[pyo3(name = "EUCLIDEAN")]
     Euclidean,
+    #[pyo3(name = "MANHATTAN")]
+    Manhattan,
+    #[pyo3(name = "BQ_COSINE")]
+    BqCosine,
+    #[pyo3(name = "BQ_EUCLIDEAN")]
+    BqEuclidean,
+    #[pyo3(name = "BQ_MANHATTAN")]
+    BqManhattan,
+    #[pyo3(name = "HAMMING")]
+    Hamming,
 }
 
 impl FromStr for PyDistance {
@@ -33,6 +43,11 @@ impl FromStr for PyDistance {
         match s {
             "cosine" => Ok(Self::Cosine),
             "euclidean" => Ok(Self::Euclidean),
+            "manhattan" => Ok(Self::Manhattan),
+            "bq_cosine" => Ok(Self::BqCosine),
+            "bq_euclidean" => Ok(Self::BqEuclidean),
+            "bq_manhattan" => Ok(Self::BqManhattan),
+            "hamming" => Ok(Self::Hamming),
             _ => Err("unknown metric"),
         }
     }
@@ -50,6 +65,11 @@ impl PyDistance {
         match self {
             PyDistance::Cosine => "cosine".into(),
             PyDistance::Euclidean => "euclidean".into(),
+            PyDistance::Manhattan => "manhattan".into(),
+            PyDistance::BqCosine => "bq_cosine".into(),
+            PyDistance::BqEuclidean => "bq_euclidean".into(),
+            PyDistance::BqManhattan => "bq_manhattan".into(),
+            PyDistance::Hamming => "hamming".into(),
         }
     }
 }
@@ -57,6 +77,11 @@ impl PyDistance {
 enum DynDatabase {
     Cosine(Database<distance::Cosine>),
     Euclidean(Database<distance::Euclidean>),
+    Manhattan(Database<distance::Manhattan>),
+    BqCosine(Database<distance::BinaryQuantizedCosine>),
+    BqEuclidean(Database<distance::BinaryQuantizedEuclidean>),
+    BqManhattan(Database<distance::BinaryQuantizedManhattan>),
+    Hamming(Database<distance::Hamming>),
 }
 impl DynDatabase {
     pub fn new(
@@ -68,6 +93,15 @@ impl DynDatabase {
         match distance {
             PyDistance::Cosine => Ok(DynDatabase::Cosine(env.create_database(wtxn, name)?)),
             PyDistance::Euclidean => Ok(DynDatabase::Euclidean(env.create_database(wtxn, name)?)),
+            PyDistance::Manhattan => Ok(DynDatabase::Manhattan(env.create_database(wtxn, name)?)),
+            PyDistance::BqCosine => Ok(DynDatabase::BqCosine(env.create_database(wtxn, name)?)),
+            PyDistance::BqEuclidean => {
+                Ok(DynDatabase::BqEuclidean(env.create_database(wtxn, name)?))
+            }
+            PyDistance::BqManhattan => {
+                Ok(DynDatabase::BqManhattan(env.create_database(wtxn, name)?))
+            }
+            PyDistance::Hamming => Ok(DynDatabase::Hamming(env.create_database(wtxn, name)?)),
         }
     }
 }
@@ -111,6 +145,26 @@ impl PyDatabase {
                 dyn_writer: DynWriter::Euclidean(Writer::new(db, index, dimensions)),
                 opts,
             },
+            DynDatabase::Manhattan(db) => PyWriter {
+                dyn_writer: DynWriter::Manhattan(Writer::new(db, index, dimensions)),
+                opts,
+            },
+            DynDatabase::BqCosine(db) => PyWriter {
+                dyn_writer: DynWriter::BqCosine(Writer::new(db, index, dimensions)),
+                opts,
+            },
+            DynDatabase::BqEuclidean(db) => PyWriter {
+                dyn_writer: DynWriter::BqEuclidean(Writer::new(db, index, dimensions)),
+                opts,
+            },
+            DynDatabase::BqManhattan(db) => PyWriter {
+                dyn_writer: DynWriter::BqManhattan(Writer::new(db, index, dimensions)),
+                opts,
+            },
+            DynDatabase::Hamming(db) => PyWriter {
+                dyn_writer: DynWriter::Hamming(Writer::new(db, index, dimensions)),
+                opts,
+            },
         }
     }
 
@@ -128,6 +182,31 @@ impl PyDatabase {
             DynDatabase::Euclidean(database) => {
                 let reader = Reader::open(&rtxn, index, database).map_err(h2py_err)?;
                 let dyn_reader = DynReader::Euclidean(reader);
+                PyReader { dyn_reader, rtxn }
+            }
+            DynDatabase::Manhattan(database) => {
+                let reader = Reader::open(&rtxn, index, database).map_err(h2py_err)?;
+                let dyn_reader = DynReader::Manhattan(reader);
+                PyReader { dyn_reader, rtxn }
+            }
+            DynDatabase::BqCosine(database) => {
+                let reader = Reader::open(&rtxn, index, database).map_err(h2py_err)?;
+                let dyn_reader = DynReader::BqCosine(reader);
+                PyReader { dyn_reader, rtxn }
+            }
+            DynDatabase::BqEuclidean(database) => {
+                let reader = Reader::open(&rtxn, index, database).map_err(h2py_err)?;
+                let dyn_reader = DynReader::BqEuclidean(reader);
+                PyReader { dyn_reader, rtxn }
+            }
+            DynDatabase::BqManhattan(database) => {
+                let reader = Reader::open(&rtxn, index, database).map_err(h2py_err)?;
+                let dyn_reader = DynReader::BqManhattan(reader);
+                PyReader { dyn_reader, rtxn }
+            }
+            DynDatabase::Hamming(database) => {
+                let reader = Reader::open(&rtxn, index, database).map_err(h2py_err)?;
+                let dyn_reader = DynReader::Hamming(reader);
                 PyReader { dyn_reader, rtxn }
             }
         };
@@ -158,6 +237,11 @@ impl PyDatabase {
 enum DynWriter {
     Cosine(Writer<distance::Cosine>),
     Euclidean(Writer<distance::Euclidean>),
+    Manhattan(Writer<distance::Manhattan>),
+    BqCosine(Writer<distance::BinaryQuantizedCosine>),
+    BqEuclidean(Writer<distance::BinaryQuantizedEuclidean>),
+    BqManhattan(Writer<distance::BinaryQuantizedManhattan>),
+    Hamming(Writer<distance::Hamming>),
 }
 
 #[derive(Clone)]
@@ -197,24 +281,18 @@ impl PyWriter {
         // the real macro
         macro_rules! hnsw_build {
             ($w:expr) => {{
-                match_table! {$w =>(3, 6), (4, 8), (5, 10), (6, 12), (7, 14), (8, 16), (9, 18), (10, 20),
-                (11, 22), (12, 24), (13, 26), (14, 28), (15, 30), (16, 32), (17, 34), (18, 36), (19, 38),
-                (20, 40), (21, 42), (22, 44), (23, 46), (24, 48), (25, 50), (26, 52), (27, 54), (28, 56),
-                (29, 58), (30, 60), (31, 62), (32, 64), (33, 66), (34, 68), (35, 70), (36, 72), (37, 74),
-                (38, 76), (39, 78), (40, 80), (41, 82), (42, 84), (43, 86), (44, 88), (45, 90), (46, 92),
-                (47, 94), (48, 96), (49, 98), (50, 100), (51, 102), (52, 104), (53, 106), (54, 108), (55, 110),
-                (56, 112), (57, 114), (58, 116), (59, 118), (60, 120), (61, 122), (62, 124), (63, 126),
-                (64, 128), (65, 130), (66, 132), (67, 134), (68, 136), (69, 138), (70, 140), (71, 142),
-                (72, 144), (73, 146), (74, 148), (75, 150), (76, 152), (77, 154), (78, 156), (79, 158),
-                (80, 160), (81, 162), (82, 164), (83, 166), (84, 168), (85, 170), (86, 172), (87, 174),
-                (88, 176), (89, 178), (90, 180), (91, 182), (92, 184), (93, 186), (94, 188), (95, 190),
-                (96, 192), (97, 194), (98, 196), (99, 198), (100, 200)}
+                match_table!{$w => (4, 8), (8, 16), (12, 24), (16, 32), (24, 48), (32, 64)}
             }};
         }
 
         match &self.dyn_writer {
             DynWriter::Cosine(writer) => hnsw_build!(writer),
             DynWriter::Euclidean(writer) => hnsw_build!(writer),
+            DynWriter::Manhattan(writer) => hnsw_build!(writer),
+            DynWriter::BqCosine(writer) => hnsw_build!(writer),
+            DynWriter::BqEuclidean(writer) => hnsw_build!(writer),
+            DynWriter::BqManhattan(writer) => hnsw_build!(writer),
+            DynWriter::Hamming(writer) => hnsw_build!(writer),
         };
         Ok(())
     }
@@ -249,6 +327,21 @@ impl PyWriter {
             DynWriter::Euclidean(writer) => {
                 writer.add_item(&mut wtxn, item, &vector).map_err(h2py_err)?
             }
+            DynWriter::Manhattan(writer) => {
+                writer.add_item(&mut wtxn, item, &vector).map_err(h2py_err)?
+            }
+            DynWriter::BqCosine(writer) => {
+                writer.add_item(&mut wtxn, item, &vector).map_err(h2py_err)?
+            }
+            DynWriter::BqEuclidean(writer) => {
+                writer.add_item(&mut wtxn, item, &vector).map_err(h2py_err)?
+            }
+            DynWriter::BqManhattan(writer) => {
+                writer.add_item(&mut wtxn, item, &vector).map_err(h2py_err)?
+            }
+            DynWriter::Hamming(writer) => {
+                writer.add_item(&mut wtxn, item, &vector).map_err(h2py_err)?
+            }
         }
         Ok(())
     }
@@ -257,6 +350,11 @@ impl PyWriter {
 enum DynReader {
     Cosine(Reader<distance::Cosine>),
     Euclidean(Reader<distance::Euclidean>),
+    Manhattan(Reader<distance::Manhattan>),
+    BqCosine(Reader<distance::BinaryQuantizedCosine>),
+    BqEuclidean(Reader<distance::BinaryQuantizedEuclidean>),
+    BqManhattan(Reader<distance::BinaryQuantizedManhattan>),
+    Hamming(Reader<distance::Hamming>),
 }
 
 /// A thread-local Database reader holding its own `RoTxn`.
@@ -282,6 +380,11 @@ impl PyReader {
         let neighbours = match &self.dyn_reader {
             DynReader::Cosine(reader) => hnsw_search!(reader, &query)?,
             DynReader::Euclidean(reader) => hnsw_search!(reader, &query)?,
+            DynReader::Manhattan(reader) => hnsw_search!(reader, &query)?,
+            DynReader::BqCosine(reader) => hnsw_search!(reader, &query)?,
+            DynReader::BqEuclidean(reader) => hnsw_search!(reader, &query)?,
+            DynReader::BqManhattan(reader) => hnsw_search!(reader, &query)?,
+            DynReader::Hamming(reader) => hnsw_search!(reader, &query)?,
         };
         Ok(neighbours)
     }
