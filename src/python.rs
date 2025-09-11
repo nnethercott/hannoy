@@ -181,24 +181,40 @@ impl PyWriter {
         let mut rng = StdRng::seed_from_u64(42);
         let mut wtxn = get_rw_txn()?;
 
-        // TODO: add proc macro here
         let BuildOptions { ef, m, m0 } = self.opts;
-        macro_rules! hnsw_build {
-            ($w:expr) => {
+
+        // a helper macro to auto generating some matches
+        macro_rules! match_table {
+            ($w:expr => $(($M:literal, $M0:literal)),* $(,)?) => {
                 match (m, m0) {
-                    (4, 8) => $w.builder(&mut rng).ef_construction(ef).build::<4, 8>(&mut wtxn),
-                    (8, 16) => $w.builder(&mut rng).ef_construction(ef).build::<8, 16>(&mut wtxn),
-                    (12, 24) => $w.builder(&mut rng).ef_construction(ef).build::<12, 24>(&mut wtxn),
-                    (16, 32) => $w.builder(&mut rng).ef_construction(ef).build::<16, 32>(&mut wtxn),
-                    (24, 48) => $w.builder(&mut rng).ef_construction(ef).build::<32, 64>(&mut wtxn),
-                    _ => panic!("not supported"),
-                }
-                .map_err(h2py_err)
+                    $(
+                        ($M, $M0) => $w.builder(&mut rng).ef_construction(ef).build::<$M, $M0>(&mut wtxn),
+                    )*
+                    _ => panic!("not supported: m = {}, m0 = {}", m, m0),
+                }.map_err(h2py_err)?
             };
         }
+        // the real macro
+        macro_rules! hnsw_build {
+            ($w:expr) => {{
+                match_table! {$w =>(3, 6), (4, 8), (5, 10), (6, 12), (7, 14), (8, 16), (9, 18), (10, 20),
+                (11, 22), (12, 24), (13, 26), (14, 28), (15, 30), (16, 32), (17, 34), (18, 36), (19, 38),
+                (20, 40), (21, 42), (22, 44), (23, 46), (24, 48), (25, 50), (26, 52), (27, 54), (28, 56),
+                (29, 58), (30, 60), (31, 62), (32, 64), (33, 66), (34, 68), (35, 70), (36, 72), (37, 74),
+                (38, 76), (39, 78), (40, 80), (41, 82), (42, 84), (43, 86), (44, 88), (45, 90), (46, 92),
+                (47, 94), (48, 96), (49, 98), (50, 100), (51, 102), (52, 104), (53, 106), (54, 108), (55, 110),
+                (56, 112), (57, 114), (58, 116), (59, 118), (60, 120), (61, 122), (62, 124), (63, 126),
+                (64, 128), (65, 130), (66, 132), (67, 134), (68, 136), (69, 138), (70, 140), (71, 142),
+                (72, 144), (73, 146), (74, 148), (75, 150), (76, 152), (77, 154), (78, 156), (79, 158),
+                (80, 160), (81, 162), (82, 164), (83, 166), (84, 168), (85, 170), (86, 172), (87, 174),
+                (88, 176), (89, 178), (90, 180), (91, 182), (92, 184), (93, 186), (94, 188), (95, 190),
+                (96, 192), (97, 194), (98, 196), (99, 198), (100, 200)}
+            }};
+        }
+
         match &self.dyn_writer {
-            DynWriter::Cosine(writer) => hnsw_build!(writer)?,
-            DynWriter::Euclidean(writer) => hnsw_build!(writer)?,
+            DynWriter::Cosine(writer) => hnsw_build!(writer),
+            DynWriter::Euclidean(writer) => hnsw_build!(writer),
         };
         Ok(())
     }
