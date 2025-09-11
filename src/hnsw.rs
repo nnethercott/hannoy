@@ -27,10 +27,6 @@ use crate::stats::BuildStats;
 use crate::writer::{BuildOption, FrozenReader};
 use crate::{Database, Distance, Error, ItemId, Result, CANCELLATION_PROBING};
 
-// TODO:
-// - add dedicated 0th layer with M0 and fix corresponding code
-// - add a NodeState.links() method or something
-
 pub(crate) type ScoredLink = (OrderedFloat, ItemId);
 
 /// State with stack-allocated graph edges
@@ -61,6 +57,7 @@ impl<const M: usize> Debug for NodeState<M> {
 pub struct HnswBuilder<'a, D, const M: usize, const M0: usize> {
     assign_probas: Vec<f32>,
     ef_construction: usize,
+    alpha: f32,
     cancel: &'a (dyn Fn() -> bool + 'a + Sync + Send),
     pub max_level: usize,
     pub entry_points: Vec<ItemId>,
@@ -74,6 +71,7 @@ impl<'a, D: Distance, const M: usize, const M0: usize> HnswBuilder<'a, D, M, M0>
         Self {
             assign_probas,
             ef_construction: opts.ef_construction,
+            alpha: opts.alpha,
             cancel: &opts.cancel,
             max_level: 0,
             entry_points: Vec::new(),
@@ -318,7 +316,7 @@ impl<'a, D: Distance, const M: usize, const M0: usize> HnswBuilder<'a, D, M, M0>
                 .into_vec();
 
             eps.clear();
-            for (dist, n) in self.robust_prune(neighbours, level, false, lmdb)? {
+            for (dist, n) in self.robust_prune(neighbours, level, self.alpha, lmdb)? {
                 // add links in both directions
                 self.add_link(query, (dist, n), lvl, lmdb)?;
                 self.add_link(n, (dist, query), lvl, lmdb)?;
@@ -403,7 +401,7 @@ impl<'a, D: Distance, const M: usize, const M0: usize> HnswBuilder<'a, D, M, M0>
                 let dist = D::distance(&lmdb.get_item(id)?, &lmdb.get_item(other)?);
                 new_links.push((OrderedFloat(dist), other));
             }
-            let pruned = self.robust_prune(new_links, lvl, false, lmdb)?;
+            let pruned = self.robust_prune(new_links, lvl, self.alpha, lmdb)?;
             let _ = map_guard.insert(id, NodeState { links: ArrayVec::from_iter(pruned) });
             Ok(())
         })?;
@@ -542,7 +540,7 @@ impl<'a, D: Distance, const M: usize, const M0: usize> HnswBuilder<'a, D, M, M0>
             }
 
             let new_links = self
-                .robust_prune(links.to_vec(), level, false, lmdb)
+                .robust_prune(links.to_vec(), level, self.alpha, lmdb)
                 .map(ArrayVec::from_iter)
                 .unwrap_or_else(|_| node_state.links);
 
@@ -563,14 +561,12 @@ impl<'a, D: Distance, const M: usize, const M0: usize> HnswBuilder<'a, D, M, M0>
         &self,
         mut candidates: Vec<ScoredLink>,
         level: usize,
-        keep_discarded: bool,
+        alpha: f32,
         lmdb: &FrozenReader<'_, D>,
     ) -> Result<Vec<ScoredLink>> {
         let cap = if level == 0 { M0 } else { M };
         candidates.sort_by(|a, b| b.cmp(a));
-
         let mut selected: Vec<ScoredLink> = Vec::with_capacity(cap);
-        let mut discared = vec![];
 
         while let Some((dist_to_query, c)) = candidates.pop() {
             if selected.len() == cap {
@@ -581,7 +577,7 @@ impl<'a, D: Distance, const M: usize, const M0: usize> HnswBuilder<'a, D, M, M0>
             let mut ok_to_add = true;
             for i in selected.iter().map(|(_, i)| *i) {
                 let d = D::distance(&lmdb.get_item(c)?, &lmdb.get_item(i)?);
-                if OrderedFloat(d) < dist_to_query {
+                if OrderedFloat(d * alpha) < dist_to_query {
                     ok_to_add = false;
                     break;
                 }
@@ -589,13 +585,7 @@ impl<'a, D: Distance, const M: usize, const M0: usize> HnswBuilder<'a, D, M, M0>
 
             if ok_to_add {
                 selected.push((dist_to_query, c));
-            } else if keep_discarded {
-                discared.push((dist_to_query, c));
             }
-        }
-
-        while keep_discarded && selected.len() < cap && !discared.is_empty() {
-            selected.push(discared.remove(0));
         }
 
         Ok(selected)

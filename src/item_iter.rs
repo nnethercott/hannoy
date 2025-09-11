@@ -9,15 +9,22 @@ use crate::{Database, ItemId, Node, NodeCodec, Result};
 // used by the reader
 pub struct ItemIter<'t, D: Distance> {
     pub inner: heed::RoPrefix<'t, KeyCodec, NodeCodec<D>>,
+    dimensions: usize,
 }
 
 impl<'t, D: Distance> ItemIter<'t, D> {
-    pub fn new(database: Database<D>, index: u16, rtxn: &'t RoTxn) -> heed::Result<Self> {
+    pub fn new(
+        database: Database<D>,
+        index: u16,
+        dimensions: usize,
+        rtxn: &'t RoTxn,
+    ) -> heed::Result<Self> {
         Ok(ItemIter {
             inner: database
                 .remap_key_type::<PrefixCodec>()
                 .prefix_iter(rtxn, &Prefix::item(index))?
                 .remap_key_type::<KeyCodec>(),
+            dimensions,
         })
     }
 }
@@ -29,7 +36,12 @@ impl<D: Distance> Iterator for ItemIter<'_, D> {
         match self.inner.next() {
             Some(Ok((key, node))) => match node {
                 Node::Item(Item { header: _, vector }) => {
-                    Some(Ok((key.node.item, vector.to_vec())))
+                    let mut vector = vector.to_vec();
+                    if vector.len() != self.dimensions {
+                        // quantized codecs pad to 8-bytes so we truncate to recover len
+                        vector.truncate(self.dimensions);
+                    }
+                    Some(Ok((key.node.item, vector)))
                 }
                 Node::Links(_) => unreachable!("Node must not be a link"),
             },
