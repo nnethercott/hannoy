@@ -10,7 +10,7 @@ use pyo3_stub_gen::derive::{gen_stub_pyclass, gen_stub_pyclass_enum, gen_stub_py
 use std::{path::PathBuf, str::FromStr, sync::LazyLock};
 
 use crate::{distance, Database, ItemId, Reader, Writer};
-static DEFAULT_ENV_SIZE: usize = 1024 * 1024 * 1024 * 1; // 1GiB
+static DEFAULT_ENV_SIZE: usize = 1024 * 1024 * 1024; // 1GiB
 
 // LMDB environment.
 static ENV: OnceCell<heed::Env<WithoutTls>> = OnceCell::new();
@@ -43,7 +43,7 @@ impl FromStr for PyDistance {
 impl PyDistance {
     #[new]
     fn new(variant: &str) -> PyResult<Self> {
-        Self::from_str(variant).map_err(|e| PyValueError::new_err(e))
+        Self::from_str(variant).map_err(PyValueError::new_err)
     }
 
     fn __str__(&self) -> String {
@@ -224,7 +224,7 @@ impl PyWriter {
 #[gen_stub_pymethods]
 impl PyWriter {
     #[pyo3(signature = ())] // make pyo3_stub_gen ignore “slf”
-    fn __enter__<'py>(slf: Bound<'py, Self>) -> Bound<'py, Self> {
+    fn __enter__(slf: Bound<Self>) -> Bound<Self> {
         slf
     }
 
@@ -306,7 +306,7 @@ fn get_rw_txn<'a>() -> PyResult<MappedMutexGuard<'a, RwTxn<'static>>> {
     Ok(MutexGuard::map(maybe_txn, |txn| txn.as_mut().unwrap()))
 }
 
-fn get_ro_txn<'a>() -> PyResult<RoTxn<'static, WithoutTls>> {
+fn get_ro_txn() -> PyResult<RoTxn<'static, WithoutTls>> {
     let env = ENV.get().ok_or_else(|| PyRuntimeError::new_err("No environment"))?;
     let rtxn = env.read_txn().map_err(h2py_err)?;
     Ok(rtxn)
