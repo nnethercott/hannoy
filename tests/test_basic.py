@@ -44,7 +44,7 @@ def test_multithreaded_reads(db) -> None:
 
     threads = []
     for q in [[1.0, 0.0, 0.0,], [0.0, 1.0, 0.0]]:
-        t = threading.Thread(target=_read, args=(db,q))
+        t = threading.Thread(target=_read, args=(db, q))
         threads.append(t)
 
     for t in threads:
