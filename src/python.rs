@@ -281,7 +281,7 @@ impl PyWriter {
         // the real macro
         macro_rules! hnsw_build {
             ($w:expr) => {{
-                match_table!{$w => (4, 8), (8, 16), (12, 24), (16, 32), (24, 48), (32, 64)}
+                match_table! {$w => (4, 8), (8, 16), (12, 24), (16, 32), (24, 48), (32, 64)}
             }};
         }
 
