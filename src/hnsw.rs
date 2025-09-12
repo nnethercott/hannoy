@@ -422,100 +422,6 @@ impl<'a, D: Distance, const M: usize, const M0: usize> HnswBuilder<'a, D, M, M0>
         }
     }
 
-    /// Returns only the Id's of our neighbours. Always check lmdb first.
-    fn get_neighbours(
-        &self,
-        lmdb: &FrozenReader<'_, D>,
-        item_id: ItemId,
-        level: usize,
-        build_stats: &BuildStats<D>,
-    ) -> Result<Vec<ItemId>> {
-        let mut res = Vec::new();
-
-        // O(1) from frozzenreader
-        if let Ok(Links { links }) = lmdb.get_links(item_id, level) {
-            build_stats.incr_lmdb_hits();
-            res.extend(links.iter());
-        }
-
-        // O(1) from self.layers
-        let Some(map) = self.layers.get(level) else { return Ok(res) };
-        match map.pin().get(&item_id) {
-            Some(node_state) => res.extend(node_state.links.iter().map(|(_, i)| *i)),
-            None => {
-                if res.is_empty() {
-                    error!(
-                        "the links for `item_id` must exist in either self.layers, lmdb, or both"
-                    );
-                    build_stats.incr_link_misses();
-                }
-            }
-        }
-
-        Ok(res)
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn explore_layer(
-        &self,
-        query: &Item<D>,
-        eps: &[ItemId],
-        level: usize,
-        ef: usize,
-        lmdb: &FrozenReader<'_, D>,
-        build_stats: &BuildStats<D>,
-    ) -> Result<MinMaxHeap<ScoredLink>> {
-        let mut candidates = BinaryHeap::new();
-        let mut res = MinMaxHeap::with_capacity(ef);
-        let mut visited = RoaringBitmap::new();
-
-        // Register all entry points as visited and populate candidates
-        for &ep in eps {
-            let ve = lmdb.get_item(ep)?;
-            let dist = D::distance(query, &ve);
-
-            candidates.push((Reverse(OrderedFloat(dist)), ep));
-            res.push((OrderedFloat(dist), ep));
-            visited.insert(ep);
-        }
-
-        while let Some(&(Reverse(OrderedFloat(f)), _)) = candidates.peek() {
-            let &(OrderedFloat(f_max), _) = res.peek_max().unwrap();
-            if f > f_max {
-                break;
-            }
-            let (_, c) = candidates.pop().unwrap(); // Now safe to pop
-
-            // Get neighborhood of candidate either from self or LMDB
-            let proximity = self.get_neighbours(lmdb, c, level, build_stats)?;
-            for point in proximity {
-                if !visited.insert(point) {
-                    continue;
-                }
-                // If the item isn't in the frozzen reader it must have been deleted from the index,
-                // in which case its OK not to explore it
-                let item = match lmdb.get_item(point) {
-                    Ok(item) => item,
-                    Err(Error::MissingKey { .. }) => continue,
-                    Err(e) => return Err(e),
-                };
-                let dist = D::distance(query, &item);
-
-                if res.len() < ef || dist < f_max {
-                    candidates.push((Reverse(OrderedFloat(dist)), point));
-
-                    if res.len() == ef {
-                        let _ = res.push_pop_max((OrderedFloat(dist), point));
-                    } else {
-                        res.push((OrderedFloat(dist), point));
-                    }
-                }
-            }
-        }
-
-        Ok(res)
-    }
-
     /// Tries to add a new link between nodes in a single direction.
     // TODO: prevent duplicate links the other way. I think this arises ONLY for entrypoints since
     // we pre-emptively add them in each layer before
@@ -597,8 +503,8 @@ impl<'a, D: Distance, const M: usize, const M0: usize> HnswBuilder<'a, D, M, M0>
 }
 
 pub(crate) trait Visitor<D: Distance> {
-    fn get_item(&self, item_id: ItemId) -> Result<Option<Item<D>>>;
-    fn get_links(&self, item_id: ItemId, level: usize) -> Result<Option<Links>>;
+    fn get_item(&self, item_id: ItemId) -> Result<Option<Item<'_, D>>>;
+    fn get_links(&self, item_id: ItemId, level: usize) -> Result<Option<Links<'_>>>;
 
     /// Get a generic read node from the database using the version of the database found while creating the reader.
     /// Must be used every time we retrieve a node in this file.
@@ -686,7 +592,7 @@ impl<'a, D: Distance, const M: usize> Visitor<D> for MaybeInMemoryVisitor<'a, D,
         maybe_item.map(Some)
     }
 
-    fn get_links(&self, item_id: ItemId, level: usize) -> Result<Option<Links>> {
+    fn get_links(&self, item_id: ItemId, level: usize) -> Result<Option<Links<'_>>> {
         let mut res = RoaringBitmap::new();
 
         // O(1) from frozzenreader
