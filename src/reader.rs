@@ -459,7 +459,7 @@ struct LmdbVisitor<'a, D: Distance> {
 impl<'a, D: Distance> Visitor<D> for LmdbVisitor<'a, D> {
     fn get_item(&self, item_id: ItemId) -> Result<Option<Item<'a, D>>> {
         // defer this
-        get_item(self.database, self.index, self.rtxn, item_id)
+        lmdb_get_item(self.database, self.index, self.rtxn, item_id)
     }
 
     fn get_links(&self, item_id: ItemId, level: usize) -> Result<Option<Links<'a>>> {
@@ -473,7 +473,7 @@ impl<'a, D: Distance> Visitor<D> for LmdbVisitor<'a, D> {
     }
 }
 
-pub fn get_item<'a, D: Distance>(
+pub fn lmdb_get_item<'a, D: Distance>(
     db: Database<D>,
     index: u16,
     rtxn: &'a RoTxn,

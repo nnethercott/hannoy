@@ -15,7 +15,7 @@ use crate::item_iter::ItemIter;
 use crate::node::{Item, ItemIds, Links, NodeCodec};
 use crate::parallel::{ImmutableItems, ImmutableLinks};
 use crate::progress::HannoyBuild;
-use crate::reader::get_item;
+use crate::reader::lmdb_get_item;
 use crate::unaligned_vector::UnalignedVector;
 use crate::version::{Version, VersionCodec};
 use crate::{
@@ -360,7 +360,7 @@ impl<D: Distance> Writer<D> {
 
     /// Returns an `Option`al vector previous stored in this database.
     pub fn item_vector(&self, rtxn: &RoTxn, item: ItemId) -> Result<Option<Vec<f32>>> {
-        Ok(get_item(self.database, self.index, rtxn, item)?.map(|item| {
+        Ok(lmdb_get_item(self.database, self.index, rtxn, item)?.map(|item| {
             let mut vec = item.vector.to_vec();
             vec.truncate(self.dimensions);
             vec

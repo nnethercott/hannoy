@@ -8,7 +8,7 @@ use roaring::RoaringBitmap;
 use super::{create_database, rng};
 use crate::distance::{Cosine, Euclidean};
 use crate::key::{KeyCodec, Prefix, PrefixCodec};
-use crate::reader::get_item;
+use crate::reader::lmdb_get_item;
 use crate::tests::DatabaseHandle;
 use crate::{Reader, Writer};
 
@@ -613,8 +613,8 @@ fn delete_one_item_no_snapshots() {
 
     // verify neither of items are in db nor their links
     let rtxn = handle.env.read_txn().unwrap();
-    assert!(get_item(handle.database, 0, &rtxn, 3).unwrap().is_none());
-    assert!(get_item(handle.database, 0, &rtxn, 1).unwrap().is_none());
+    assert!(lmdb_get_item(handle.database, 0, &rtxn, 3).unwrap().is_none());
+    assert!(lmdb_get_item(handle.database, 0, &rtxn, 1).unwrap().is_none());
 
     let links_iter = handle
         .database
