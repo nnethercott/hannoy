@@ -458,13 +458,8 @@ struct LmdbVisitor<'a, D: Distance> {
 
 impl<'a, D: Distance> Visitor<D> for LmdbVisitor<'a, D> {
     fn get_item(&self, item_id: ItemId) -> Result<Option<Item<'a, D>>> {
-        let key = Key::item(self.index, item_id);
-
-        match self.database.get(self.rtxn, &key)? {
-            Some(Node::Item(item)) => Ok(Some(item)),
-            Some(Node::Links(_)) => Ok(None),
-            None => Ok(None),
-        }
+        // defer this
+        get_item(self.database, self.index, self.rtxn, item_id)
     }
 
     fn get_links(&self, item_id: ItemId, level: usize) -> Result<Option<Links<'a>>> {
@@ -492,4 +487,3 @@ pub fn get_item<'a, D: Distance>(
         None => Ok(None),
     }
 }
-
