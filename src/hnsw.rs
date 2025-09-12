@@ -7,7 +7,7 @@ use std::marker::PhantomData;
 use std::sync::atomic::Ordering::Relaxed;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use heed::{RoTxn, RwTxn};
+use heed::RwTxn;
 use min_max_heap::MinMaxHeap;
 use papaya::HashMap;
 use rand::distributions::WeightedIndex;
@@ -174,7 +174,12 @@ impl<'a, D: Distance, const M: usize, const M0: usize> HnswBuilder<'a, D, M, M0>
                 {
                     Err(Error::BuildCancelled)
                 } else {
-                    self.insert(item_id, lvl, &lmdb, &build_stats)?;
+                    let visitor = MaybeInMemoryVisitor {
+                        lmdb: &lmdb,
+                        layers: &self.layers,
+                        build_stats: &build_stats,
+                    };
+                    self.insert(item_id, lvl, &visitor, &build_stats)?;
                     item_ctr.fetch_add(1, Relaxed);
                     Ok(())
                 }
@@ -294,16 +299,16 @@ impl<'a, D: Distance, const M: usize, const M0: usize> HnswBuilder<'a, D, M, M0>
         &self,
         query: ItemId,
         level: usize,
-        lmdb: &FrozenReader<'_, D>,
+        visitor: &MaybeInMemoryVisitor<D, M0>,
         build_stats: &BuildStats<D>,
     ) -> Result<()> {
         let mut eps = Vec::from_iter(self.entry_points.clone());
 
-        let q = lmdb.get_item(query)?;
+        let q = visitor.get_item(query)?.unwrap();
 
         // Greedy search with: ef = 1
         for lvl in (level + 1..=self.max_level).rev() {
-            let neighbours = self.explore_layer(&q, &eps, lvl, 1, lmdb, build_stats)?;
+            let neighbours = visitor.explore_layer(&q, &eps, lvl, 1)?;
             let closest = neighbours.peek_min().map(|(_, n)| *n).expect("No neighbor was found");
             eps = vec![closest];
         }
@@ -312,15 +317,13 @@ impl<'a, D: Distance, const M: usize, const M0: usize> HnswBuilder<'a, D, M, M0>
 
         // Beam search with: ef = ef_construction
         for lvl in (0..=level).rev() {
-            let neighbours = self
-                .explore_layer(&q, &eps, lvl, self.ef_construction, lmdb, build_stats)?
-                .into_vec();
+            let neighbours = visitor.explore_layer(&q, &eps, lvl, self.ef_construction)?.into_vec();
 
             eps.clear();
-            for (dist, n) in self.robust_prune(neighbours, level, self.alpha, lmdb)? {
+            for (dist, n) in self.robust_prune(neighbours, level, self.alpha, visitor.lmdb)? {
                 // add links in both directions
-                self.add_link(query, (dist, n), lvl, lmdb)?;
-                self.add_link(n, (dist, query), lvl, lmdb)?;
+                self.add_link(query, (dist, n), lvl, visitor)?;
+                self.add_link(n, (dist, query), lvl, visitor)?;
                 eps.push(n);
 
                 build_stats.incr_link_count(2);
@@ -521,7 +524,7 @@ impl<'a, D: Distance, const M: usize, const M0: usize> HnswBuilder<'a, D, M, M0>
         p: ItemId,
         q: ScoredLink,
         level: usize,
-        lmdb: &FrozenReader<'_, D>,
+        visitor: &MaybeInMemoryVisitor<D, M0>,
     ) -> Result<()> {
         if p == q.1 {
             return Ok(());
@@ -541,7 +544,7 @@ impl<'a, D: Distance, const M: usize, const M0: usize> HnswBuilder<'a, D, M, M0>
             }
 
             let new_links = self
-                .robust_prune(links.to_vec(), level, self.alpha, lmdb)
+                .robust_prune(links.to_vec(), level, self.alpha, visitor.lmdb)
                 .map(ArrayVec::from_iter)
                 .unwrap_or_else(|_| node_state.links);
 
@@ -593,26 +596,15 @@ impl<'a, D: Distance, const M: usize, const M0: usize> HnswBuilder<'a, D, M, M0>
     }
 }
 
-pub(crate) trait Visitor {
-    type Metric: Distance;
-    fn get_item<'a>(
-        &self,
-        rtxn: &'a RoTxn,
-        item_id: ItemId,
-    ) -> Result<Option<Item<'a, Self::Metric>>>;
-    fn get_links<'a>(
-        &self,
-        rtxn: &'a RoTxn,
-        item_id: ItemId,
-        level: usize,
-    ) -> Result<Option<Links<'a>>>;
+pub(crate) trait Visitor<D: Distance> {
+    fn get_item(&self, item_id: ItemId) -> Result<Option<Item<D>>>;
+    fn get_links(&self, item_id: ItemId, level: usize) -> Result<Option<Links>>;
 
     /// Get a generic read node from the database using the version of the database found while creating the reader.
     /// Must be used every time we retrieve a node in this file.
     fn explore_layer(
         &self,
-        query: &Item<Self::Metric>,
-        rtxn: &RoTxn,
+        query: &Item<D>,
         eps: &[ItemId],
         level: usize,
         ef: usize,
@@ -623,8 +615,8 @@ pub(crate) trait Visitor {
 
         // Register all entry points as visited and populate candidates
         for &ep in eps {
-            let ve = self.get_item(rtxn, ep)?.unwrap();
-            let dist = <Self::Metric as Distance>::distance(query, &ve);
+            let ve = self.get_item(ep)?.unwrap();
+            let dist = D::distance(query, &ve);
 
             candidates.push((Reverse(OrderedFloat(dist)), ep));
             res.push((OrderedFloat(dist), ep));
@@ -639,18 +631,20 @@ pub(crate) trait Visitor {
             let (_, c) = candidates.pop().unwrap(); // Now safe to pop
 
             // Get neighborhood of candidate either from self or LMDB
-            let proximity = match self.get_links(rtxn, c, level)? {
-                Some(Links { links }) => links.iter().collect::<Vec<ItemId>>(),
-                None => unreachable!("Links must exist"),
-            };
+            let proximity = self
+                .get_links(c, level)?
+                .map(|Links { links }| links.iter().collect::<Vec<ItemId>>())
+                .unwrap_or_default();
+
             for point in proximity {
                 if !visited.insert(point) {
                     continue;
                 }
-                let dist = <Self::Metric as Distance>::distance(
-                    query,
-                    &self.get_item(rtxn, point)?.unwrap(),
-                );
+                let item = match self.get_item(point)? {
+                    Some(i) => i,
+                    None => continue,
+                };
+                let dist = D::distance(query, &item);
 
                 if res.len() < ef || dist < f_max {
                     candidates.push((Reverse(OrderedFloat(dist)), point));
@@ -668,6 +662,55 @@ pub(crate) trait Visitor {
     }
 }
 
+struct MaybeInMemoryVisitor<'a, D: Distance, const M: usize> {
+    lmdb: &'a FrozenReader<'a, D>,
+    layers: &'a Vec<HashMap<ItemId, NodeState<M>>>,
+    build_stats: &'a BuildStats<D>,
+}
+
+impl<'a, D: Distance, const M: usize> Visitor<D> for MaybeInMemoryVisitor<'a, D, M> {
+    fn get_item(&self, item_id: ItemId) -> Result<Option<Item<'_, D>>> {
+        let maybe_item = self.lmdb.get_item(item_id);
+
+        if let Err(e) = maybe_item {
+            match e {
+                // If the item isn't in the frozzen reader it must have been deleted from the index,
+                // in which case its OK not to explore it
+                Error::MissingKey { .. } => return Ok(None),
+
+                // otherwise rethrow
+                _ => return Err(e),
+            }
+        };
+
+        maybe_item.map(Some)
+    }
+
+    fn get_links(&self, item_id: ItemId, level: usize) -> Result<Option<Links>> {
+        let mut res = RoaringBitmap::new();
+
+        // O(1) from frozzenreader
+        if let Ok(Links { links }) = self.lmdb.get_links(item_id, level) {
+            self.build_stats.incr_lmdb_hits();
+            res.extend(links.iter());
+        }
+
+        // O(1) from self.layers
+        if let Some(map) = self.layers.get(level) {
+            match map.pin().get(&item_id) {
+                Some(node_state) => res.extend(node_state.links.iter().map(|(_, i)| *i)),
+                None => {
+                    if res.is_empty() {
+                        error!("the links for `item_id` must exist in either self.layers, lmdb, or both");
+                        self.build_stats.incr_link_misses();
+                    }
+                }
+            }
+        }
+
+        return Ok(Some(Links { links: Cow::Owned(res) }));
+    }
+}
 
 #[cfg(test)]
 mod tests {

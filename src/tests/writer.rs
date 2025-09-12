@@ -15,8 +15,6 @@ use crate::{Reader, Writer};
 const M: usize = 3;
 const M0: usize = 3;
 
-// do i add edge-cases for the build, e.g. M = e.ciel() as usize ?
-
 #[test]
 fn clear_small_database() {
     let DatabaseHandle { env, database, tempdir: _ } = create_database::<Cosine>();

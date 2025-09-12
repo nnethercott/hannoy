@@ -307,9 +307,9 @@ impl<'t, D: Distance> Reader<'t, D> {
 
     /// Returns the vector for item `i` that was previously added.
     pub fn item_vector(&self, rtxn: &'t RoTxn, item_id: ItemId) -> Result<Option<Vec<f32>>> {
-        let visitor = LmdbVisitor { database: self.database, index: self.index };
+        let visitor = LmdbVisitor { database: self.database, index: self.index, rtxn };
 
-        Ok(visitor.get_item(rtxn, item_id)?.map(|item| {
+        Ok(visitor.get_item(item_id)?.map(|item| {
             let mut vec = item.vector.to_vec();
             vec.truncate(self.dimensions());
             vec
@@ -338,7 +338,7 @@ impl<'t, D: Distance> Reader<'t, D> {
     /// Return a [`QueryBuilder`] that lets you configure and execute a search request.
     ///
     /// You must provide the number of items you want to receive.
-    pub fn nns(&self, count: usize) -> QueryBuilder<D> {
+    pub fn nns(&self, count: usize) -> QueryBuilder<'_, D> {
         QueryBuilder { reader: self, candidates: None, count, ef: DEFAULT_EF_SEARCH }
     }
 
@@ -353,7 +353,7 @@ impl<'t, D: Distance> Reader<'t, D> {
             return Ok(Vec::new());
         }
 
-        let visitor = LmdbVisitor { database: self.database, index: self.index };
+        let disk_hnsw = LmdbVisitor { database: self.database, index: self.index, rtxn };
 
         // If the number of candidates is less than a given threshold, perform linear search
         if let Some(candidates) = opt.candidates.filter(|c| c.len() < LINEAR_SEARCH_THRESHOLD) {
@@ -374,13 +374,13 @@ impl<'t, D: Distance> Reader<'t, D> {
 
         // search layers L->1 with ef=1
         for lvl in (1..=self.max_level).rev() {
-            let neighbours = visitor.explore_layer(query, rtxn, &eps, lvl, 1)?;
+            let neighbours = disk_hnsw.explore_layer(query, &eps, lvl, 1)?;
             let closest = neighbours.peek_min().map(|(_, n)| n).expect("No neighbor was found");
             eps = vec![*closest];
         }
 
         // search layer 0 with ef=max(ef, count)
-        let mut neighbours = visitor.explore_layer(query, rtxn, &eps, 0, opt.ef)?;
+        let mut neighbours = disk_hnsw.explore_layer(query, &eps, 0, opt.ef)?;
 
         let mut nns = Vec::with_capacity(opt.count);
         while let Some((OrderedFloat(f), id)) = neighbours.pop_min() {
@@ -450,40 +450,46 @@ impl<'t, D: Distance> Reader<'t, D> {
     }
 }
 
-struct LmdbVisitor<D: Distance> {
+struct LmdbVisitor<'a, D: Distance> {
     database: Database<D>,
     index: u16,
+    rtxn: &'a RoTxn<'a>,
 }
 
-impl<D: Distance> Visitor for LmdbVisitor<D> {
-    type Metric = D;
-
-    fn get_item<'a>(
-        &self,
-        rtxn: &'a RoTxn,
-        item_id: ItemId,
-    ) -> Result<Option<Item<'a, Self::Metric>>> {
+impl<'a, D: Distance> Visitor<D> for LmdbVisitor<'a, D> {
+    fn get_item(&self, item_id: ItemId) -> Result<Option<Item<'a, D>>> {
         let key = Key::item(self.index, item_id);
 
-        match self.database.get(rtxn, &key)? {
+        match self.database.get(self.rtxn, &key)? {
             Some(Node::Item(item)) => Ok(Some(item)),
             Some(Node::Links(_)) => Ok(None),
             None => Ok(None),
         }
     }
 
-    fn get_links<'a>(
-        &self,
-        rtxn: &'a RoTxn,
-        item_id: ItemId,
-        level: usize,
-    ) -> Result<Option<Links<'a>>> {
+    fn get_links(&self, item_id: ItemId, level: usize) -> Result<Option<Links<'a>>> {
         let key = Key::links(self.index, item_id, level as u8);
 
-        match self.database.get(rtxn, &key)? {
+        match self.database.get(self.rtxn, &key)? {
             Some(Node::Links(links)) => Ok(Some(links)),
             Some(Node::Item(_)) => Ok(None),
             None => Ok(None),
         }
     }
 }
+
+pub fn get_item<'a, D: Distance>(
+    db: Database<D>,
+    index: u16,
+    rtxn: &'a RoTxn,
+    item_id: u32,
+) -> Result<Option<Item<'a, D>>> {
+    let key = Key::item(index, item_id);
+
+    match db.get(rtxn, &key)? {
+        Some(Node::Item(item)) => Ok(Some(item)),
+        Some(Node::Links(_)) => Ok(None),
+        None => Ok(None),
+    }
+}
+
