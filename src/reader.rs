@@ -1,5 +1,4 @@
-use std::cmp::Reverse;
-use std::collections::{BinaryHeap, VecDeque};
+use std::collections::VecDeque;
 use std::marker;
 use std::num::NonZeroUsize;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -7,12 +6,11 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use heed::types::{Bytes, DecodeIgnore};
 use heed::RoTxn;
 use madvise::AccessPattern;
-use min_max_heap::MinMaxHeap;
 use roaring::RoaringBitmap;
 use tracing::warn;
 
 use crate::distance::Distance;
-use crate::hnsw::{ScoredLink, Visitor};
+use crate::hnsw::Visitor;
 use crate::internals::{KeyCodec, UnalignedVectorCodec};
 use crate::item_iter::ItemIter;
 use crate::metadata::Metadata;

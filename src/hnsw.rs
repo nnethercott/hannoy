@@ -322,8 +322,8 @@ impl<'a, D: Distance, const M: usize, const M0: usize> HnswBuilder<'a, D, M, M0>
             eps.clear();
             for (dist, n) in self.robust_prune(neighbours, level, self.alpha, visitor.lmdb)? {
                 // add links in both directions
-                self.add_link(query, (dist, n), lvl, visitor)?;
-                self.add_link(n, (dist, query), lvl, visitor)?;
+                self.add_link(query, (dist, n), lvl, visitor.lmdb)?;
+                self.add_link(n, (dist, query), lvl, visitor.lmdb)?;
                 eps.push(n);
 
                 build_stats.incr_link_count(2);
@@ -430,7 +430,7 @@ impl<'a, D: Distance, const M: usize, const M0: usize> HnswBuilder<'a, D, M, M0>
         p: ItemId,
         q: ScoredLink,
         level: usize,
-        visitor: &MaybeInMemoryVisitor<D, M0>,
+        lmdb: &FrozenReader<'_, D>,
     ) -> Result<()> {
         if p == q.1 {
             return Ok(());
@@ -450,7 +450,7 @@ impl<'a, D: Distance, const M: usize, const M0: usize> HnswBuilder<'a, D, M, M0>
             }
 
             let new_links = self
-                .robust_prune(links.to_vec(), level, self.alpha, visitor.lmdb)
+                .robust_prune(links.to_vec(), level, self.alpha, lmdb)
                 .map(ArrayVec::from_iter)
                 .unwrap_or_else(|_| node_state.links);
 
