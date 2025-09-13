@@ -1,3 +1,4 @@
+//! Python bindings for hannoy.
 use heed::{RoTxn, RwTxn, WithoutTls};
 use once_cell::sync::OnceCell;
 use parking_lot::{MappedMutexGuard, Mutex, MutexGuard};
@@ -6,7 +7,7 @@ use pyo3::{
     prelude::*,
     types::PyType,
 };
-use pyo3_stub_gen::derive::{gen_stub_pyclass, gen_stub_pyclass_enum, gen_stub_pymethods};
+use pyo3_stub_gen::{define_stub_info_gatherer, derive::{gen_stub_pyclass, gen_stub_pyclass_enum, gen_stub_pymethods}};
 use std::{path::PathBuf, str::FromStr, sync::LazyLock};
 
 use crate::{distance, Database, ItemId, Reader, Writer};
@@ -298,8 +299,8 @@ impl PyWriter {
     }
 }
 
-#[pymethods]
 #[gen_stub_pymethods]
+#[pymethods]
 impl PyWriter {
     #[pyo3(signature = ())] // make pyo3_stub_gen ignore “slf”
     fn __enter__(slf: Bound<Self>) -> Bound<Self> {
@@ -365,6 +366,7 @@ struct PyReader {
     rtxn: RoTxn<'static, WithoutTls>,
 }
 
+#[gen_stub_pymethods]
 #[pymethods]
 impl PyReader {
     #[pyo3(signature = (query, n=10, ef_search=200))]
@@ -423,3 +425,6 @@ fn hannoy_module(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyWriter>()?;
     Ok(())
 }
+
+// Define a function to gather stub information.
+define_stub_info_gatherer!(stub_info);

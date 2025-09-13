@@ -21,7 +21,7 @@ def test_exports() -> None:
     assert hannoy.__all__ == ["Metric", "Database", "Writer"]
 
 
-def test_read(db) -> None:
+def test_read(db: hannoy.Database) -> None:
     reader = db.reader(0)
     query = [0.0, 1.0, 0.0]
 
