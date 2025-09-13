@@ -8,6 +8,9 @@ import typing
 from enum import Enum
 
 class Database:
+    r"""
+    An LMDB-backed vector database for vector search.
+    """
     def __new__(cls, path:builtins.str | os.PathLike | pathlib.Path, distance:Metric=..., name:typing.Optional[builtins.str]=None, env_size:typing.Optional[builtins.int]=None) -> Database: ...
     def writer(self, dimensions:builtins.int, index:builtins.int=0, m:builtins.int=16, ef:builtins.int=96) -> Writer:
         r"""
@@ -24,11 +27,38 @@ class Database:
 
 class Reader:
     r"""
-    A thread-local Database reader holding its own `RoTxn`.
+    A thread-local Database reader holding its own `RoTxn`. It is safe to spawn multiple readers in
+    different threads.
+    
+    Example:
+    ```python
+    db = hannoy.Database("./")
+    
+    reader = db.reader()
+    reader.by_vec([1.0, 0.0], n = 1)
+    ```
     """
-    def by_vec(self, query:typing.Sequence[builtins.float], n:builtins.int=10, ef_search:builtins.int=200) -> builtins.list[tuple[builtins.int, builtins.float]]: ...
+    def by_vec(self, query:typing.Sequence[builtins.float], n:builtins.int=10, ef_search:builtins.int=200) -> builtins.list[tuple[builtins.int, builtins.float]]:
+        r"""
+        Retrieve similar items from the db given a query.
+        """
 
 class Writer:
+    r"""
+    A struct for configuring the HNSW build and performing transactional insertions/deletions from
+    LMDB.
+    
+    Example:
+    ```python
+    from hannoy import Database, Metric
+    
+    db = Database("./", Metric.Cosine)
+    
+    with db.writer(2, m=4, ef=10) as writer:
+        writer.add_item(0, [1.0, 0.0])
+        writer.add_item(1, [0.0, 1.0])
+    ```
+    """
     def __enter__(self) -> Writer: ...
     def __exit__(self, _exc_type:typing.Optional[type], _exc_value:typing.Optional[typing.Any], _traceback:typing.Optional[typing.Any]) -> None: ...
     def add_item(self, item:builtins.int, vector:typing.Sequence[builtins.float]) -> None:
@@ -37,6 +67,9 @@ class Writer:
         """
 
 class Metric(Enum):
+    r"""
+    Supported distance metrics in hannoy.
+    """
     COSINE = ...
     EUCLIDEAN = ...
     MANHATTAN = ...

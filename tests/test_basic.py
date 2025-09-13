@@ -2,7 +2,7 @@ from pathlib import Path
 from typing import List
 import pytest
 import hannoy
-from hannoy import Metric
+from hannoy import Metric, Reader, Writer
 
 
 @pytest.fixture(scope="function", autouse=False)
@@ -22,7 +22,7 @@ def test_exports() -> None:
 
 
 def test_read(db: hannoy.Database) -> None:
-    reader = db.reader(0)
+    reader: Reader = db.reader(0)
     query = [0.0, 1.0, 0.0]
 
     res = reader.by_vec(query, n=2)

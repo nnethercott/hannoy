@@ -7,7 +7,10 @@ use pyo3::{
     prelude::*,
     types::PyType,
 };
-use pyo3_stub_gen::{define_stub_info_gatherer, derive::{gen_stub_pyclass, gen_stub_pyclass_enum, gen_stub_pymethods}};
+use pyo3_stub_gen::{
+    define_stub_info_gatherer,
+    derive::{gen_stub_pyclass, gen_stub_pyclass_enum, gen_stub_pymethods},
+};
 use std::{path::PathBuf, str::FromStr, sync::LazyLock};
 
 use crate::{distance, Database, ItemId, Reader, Writer};
@@ -17,6 +20,7 @@ static DEFAULT_ENV_SIZE: usize = 1024 * 1024 * 1024; // 1GiB
 static ENV: OnceCell<heed::Env<WithoutTls>> = OnceCell::new();
 static RW_TXN: LazyLock<Mutex<Option<heed::RwTxn<'static>>>> = LazyLock::new(|| Mutex::new(None));
 
+/// Supported distance metrics in hannoy.
 #[gen_stub_pyclass_enum]
 #[pyclass(name = "Metric")]
 #[derive(Clone)]
@@ -107,6 +111,7 @@ impl DynDatabase {
     }
 }
 
+/// An LMDB-backed vector database for vector search.
 #[gen_stub_pyclass]
 #[pyclass(name = "Database")]
 pub(super) struct PyDatabase(DynDatabase);
@@ -252,6 +257,19 @@ struct BuildOptions {
     pub m0: usize,
 }
 
+/// A struct for configuring the HNSW build and performing transactional insertions/deletions from
+/// LMDB.
+///
+/// Example:
+/// ```python
+/// from hannoy import Database, Metric
+///
+/// db = Database("./", Metric.Cosine)
+///
+/// with db.writer(2, m=4, ef=10) as writer:
+///     writer.add_item(0, [1.0, 0.0])
+///     writer.add_item(1, [0.0, 1.0])
+/// ```
 #[gen_stub_pyclass]
 #[pyclass(name = "Writer")]
 pub(super) struct PyWriter {
@@ -358,7 +376,16 @@ enum DynReader {
     Hamming(Reader<distance::Hamming>),
 }
 
-/// A thread-local Database reader holding its own `RoTxn`.
+/// A thread-local Database reader holding its own `RoTxn`. It is safe to spawn multiple readers in
+/// different threads.
+///
+/// Example:
+/// ```python
+/// db = hannoy.Database("./")
+///
+/// reader = db.reader()
+/// reader.by_vec([1.0, 0.0], n = 1)
+/// ```
 #[gen_stub_pyclass]
 #[pyclass(name = "Reader", unsendable)]
 struct PyReader {
@@ -369,6 +396,7 @@ struct PyReader {
 #[gen_stub_pymethods]
 #[pymethods]
 impl PyReader {
+    /// Retrieve similar items from the db given a query.
     #[pyo3(signature = (query, n=10, ef_search=200))]
     fn by_vec(&self, query: Vec<f32>, n: usize, ef_search: usize) -> PyResult<Vec<(ItemId, f32)>> {
         let rtxn = &self.rtxn;
