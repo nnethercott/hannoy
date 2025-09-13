@@ -93,7 +93,7 @@ mod ordered_float;
 mod unaligned_vector;
 
 #[cfg(feature = "python")]
-mod python;
+pub mod python;
 
 pub use distance::Distance;
 pub use error::Error;

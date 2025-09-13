@@ -76,6 +76,12 @@ extension-module = ["python", "pyo3/extension-module"]
 [profile.dev]
 opt-level = 3
 
+[[bin]]
+name = "stub_gen"
+path = "./src/bin/stub_gen.rs"
+required-features = ["python"]
+
+
 [[bench]]
 name = "benchmark"
 harness = false
