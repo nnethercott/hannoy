@@ -16,7 +16,7 @@ use crate::node::{Item, ItemIds, Links, NodeCodec};
 use crate::parallel::{ImmutableItems, ImmutableLinks};
 use crate::progress::HannoyBuild;
 use crate::reader::get_item;
-use crate::unaligned_vector::{UnalignedVector, UnalignedVectorCodec};
+use crate::unaligned_vector::UnalignedVector;
 use crate::version::{Version, VersionCodec};
 use crate::{
     Database, Error, ItemId, Key, Metadata, MetadataCodec, Node, Prefix, PrefixCodec, Result,
@@ -236,6 +236,7 @@ impl<D: Distance> Writer<D> {
         options: &BuildOption<P>,
     ) -> Result<()> {
         use crate::node_id::{NodeId, NodeMode};
+        use crate::unaligned_vector::UnalignedVectorCodec;
 
         debug!("Preparing dumpless upgrade from arroy to hannoy");
         options.progress.update(HannoyBuild::ConvertingArroyToHannoy);
