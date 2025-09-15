@@ -24,7 +24,7 @@ Many popular HNSW libraries are built in memory, meaning you need enough RAM to 
 - GPU-accelerated indexing
 
 ## Usage
-### Rust
+### Rust 🦀
 ```rust
 use hannoy::{distances::Cosine, Database, Reader, Result, Writer};
 use heed::EnvOpenOptions;
@@ -69,7 +69,7 @@ fn main() -> Result<()> {
 }
 ```
 
-### Python
+### Python 🐍
 ```python
 import hannoy
 from hannoy import Metric
