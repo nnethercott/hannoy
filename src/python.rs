@@ -3,7 +3,7 @@ use heed::{RoTxn, RwTxn, WithoutTls};
 use once_cell::sync::OnceCell;
 use parking_lot::{MappedMutexGuard, Mutex, MutexGuard};
 use pyo3::{
-    exceptions::{PyIOError, PyRuntimeError, PyValueError},
+    exceptions::{PyIOError, PyRuntimeError},
     prelude::*,
     types::PyType,
 };
@@ -11,7 +11,7 @@ use pyo3_stub_gen::{
     define_stub_info_gatherer,
     derive::{gen_stub_pyclass, gen_stub_pyclass_enum, gen_stub_pymethods},
 };
-use std::{path::PathBuf, str::FromStr, sync::LazyLock};
+use std::{path::PathBuf, sync::LazyLock};
 
 use crate::{distance, Database, ItemId, Reader, Writer};
 static DEFAULT_ENV_SIZE: usize = 1024 * 1024 * 1024; // 1GiB
@@ -41,31 +41,9 @@ pub(super) enum PyDistance {
     Hamming,
 }
 
-impl FromStr for PyDistance {
-    type Err = &'static str;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "cosine" => Ok(Self::Cosine),
-            "euclidean" => Ok(Self::Euclidean),
-            "manhattan" => Ok(Self::Manhattan),
-            "bq_cosine" => Ok(Self::BqCosine),
-            "bq_euclidean" => Ok(Self::BqEuclidean),
-            "bq_manhattan" => Ok(Self::BqManhattan),
-            "hamming" => Ok(Self::Hamming),
-            _ => Err("unknown metric"),
-        }
-    }
-}
-
 #[gen_stub_pymethods]
 #[pymethods]
 impl PyDistance {
-    #[new]
-    fn new(variant: &str) -> PyResult<Self> {
-        Self::from_str(variant).map_err(PyValueError::new_err)
-    }
-
     fn __str__(&self) -> String {
         match self {
             PyDistance::Cosine => "cosine".into(),
@@ -445,12 +423,15 @@ fn get_ro_txn() -> PyResult<RoTxn<'static, WithoutTls>> {
     Ok(rtxn)
 }
 
+/// Python bindings for Hannoy <https://github.com/nnethercott/hannoy>; a KV-backed HNSW
+/// implementation in Rust using LMDB <https://en.wikipedia.org/wiki/Lightning_Memory-Mapped_Database>.
 #[pyo3::pymodule]
 #[pyo3(name = "hannoy")]
 fn hannoy_module(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyDistance>()?;
     m.add_class::<PyDatabase>()?;
     m.add_class::<PyWriter>()?;
+    m.add_class::<PyReader>()?;
     Ok(())
 }
 

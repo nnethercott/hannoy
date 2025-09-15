@@ -18,7 +18,7 @@ def db(tmp_path: Path):
 
 
 def test_exports() -> None:
-    assert hannoy.__all__ == ["Metric", "Database", "Writer"]
+    assert hannoy.__all__ == ["Metric", "Database", "Writer", "Reader"]
 
 
 def test_read(db: hannoy.Database) -> None:

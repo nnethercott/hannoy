@@ -1,6 +1,7 @@
 [build-system]
 requires = ["maturin>=1.9.1,<2"]
 build-backend = "maturin"
+description = "Python bindings for Hannoy; a KV-backed HNSW implementation in Rust using LMDB."
 
 [project]
 name = "hannoy"
