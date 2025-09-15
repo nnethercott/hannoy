@@ -16,7 +16,7 @@ use crate::node::{Item, ItemIds, Links, NodeCodec};
 use crate::parallel::{ImmutableItems, ImmutableLinks};
 use crate::progress::HannoyBuild;
 use crate::reader::get_item;
-use crate::unaligned_vector::UnalignedVector;
+use crate::unaligned_vector::{UnalignedVector, UnalignedVectorCodec};
 use crate::version::{Version, VersionCodec};
 use crate::{
     Database, Error, ItemId, Key, Metadata, MetadataCodec, Node, Prefix, PrefixCodec, Result,
@@ -246,6 +246,10 @@ impl<D: Distance> Writer<D> {
             .prefix_iter_mut(wtxn, &Prefix::all(self.index))?
             .remap_key_type::<KeyCodec>();
 
+        // binary quantized have len vec.len().div_ceil(64)*64 >= vec.len()
+        let word_size = <D::VectorCodec as UnalignedVectorCodec>::word_size();
+        let on_disk_dim: usize = self.dimensions.div_ceil(word_size) * word_size;
+
         let mut new_items = RoaringBitmap::new();
         while let Some(result) = iter.next() {
             match result {
@@ -256,9 +260,9 @@ impl<D: Distance> Writer<D> {
                     // We only take care of the entries that can be decoded as Node Items (vectors) and
                     // mark them as newly inserted so the Writer::build method can compute the links for them.
                     new_items.insert(item);
-                    if vector.len() != self.dimensions {
+                    if vector.len() != on_disk_dim {
                         return Err(Error::InvalidVecDimension {
-                            expected: self.dimensions,
+                            expected: on_disk_dim,
                             received: vector.len(),
                         });
                     }

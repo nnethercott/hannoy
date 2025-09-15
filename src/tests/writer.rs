@@ -1,12 +1,13 @@
 use heed::types::DecodeIgnore;
 use proptest::proptest;
+use rand::distributions::Uniform;
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
 use rand::{thread_rng, Rng, SeedableRng};
 use roaring::RoaringBitmap;
 
 use super::{create_database, rng};
-use crate::distance::{Cosine, Euclidean};
+use crate::distance::{BinaryQuantizedCosine, Cosine, Euclidean};
 use crate::key::{KeyCodec, Prefix, PrefixCodec};
 use crate::reader::get_item;
 use crate::tests::DatabaseHandle;
@@ -228,12 +229,15 @@ fn write_random_vectors_to_random_indexes() {
 
 #[test]
 fn convert_from_arroy_to_hannoy() {
+    const DIM: usize = 1025;
+
     // let handle = create_database::<Euclidean>();
     let _ = rayon::ThreadPoolBuilder::new().num_threads(1).build_global();
     let dir = tempfile::tempdir().unwrap();
     let env = unsafe { heed::EnvOpenOptions::new().map_size(200 * 1024 * 1024).open(dir.path()) }
         .unwrap();
     let mut wtxn = env.write_txn().unwrap();
+
     let database: arroy::Database<arroy::distances::Cosine> =
         env.create_database(&mut wtxn, None).unwrap();
     wtxn.commit().unwrap();
@@ -245,11 +249,12 @@ fn convert_from_arroy_to_hannoy() {
     db_indexes.shuffle(&mut rng);
 
     for index in db_indexes.iter().copied() {
-        let writer = arroy::Writer::new(database, index, 1024);
+        let writer = arroy::Writer::new(database, index, DIM);
 
         // We're going to write 100 vectors per index
+        let unif = Uniform::new(-1.0, 1.0);
         for i in 0..100 {
-            let vector: [f32; 1024] = std::array::from_fn(|_| rng.gen());
+            let vector: [f32; DIM] = std::array::from_fn(|_| rng.sample(unif));
             writer.add_item(&mut wtxn, i, &vector).unwrap();
         }
         writer.builder(&mut rng).build(&mut wtxn).unwrap();
@@ -275,9 +280,89 @@ fn convert_from_arroy_to_hannoy() {
         writer.builder(&mut rng).build::<16, 32>(&mut wtxn).unwrap();
 
         for result in pre_commit_arroy_reader.iter(&rtxn).unwrap() {
-            let (item_id, vector) = result.unwrap();
+            let (item_id, mut vector) = result.unwrap();
+            // arroy reader iter currently returns wrong len: https://github.com/meilisearch/arroy/issues/152
+            vector.truncate(DIM);
+
             let reader = Reader::open(&wtxn, index, database).unwrap();
-            assert_eq!(reader.item_vector(&wtxn, item_id).unwrap().as_deref(), Some(&vector[..]));
+            let vec = reader.item_vector(&wtxn, item_id).unwrap();
+            assert_eq!(vec.as_deref(), Some(&vector[..]));
+            let mut found = reader.nns(1).by_vector(&wtxn, &vector).unwrap();
+            dbg!(&found);
+            let (found_item_id, found_distance) = found.pop().unwrap();
+            assert_eq!(found_item_id, item_id);
+            approx::assert_abs_diff_eq!(found_distance, 0.0);
+        }
+    }
+}
+
+// Minimal reproducer for issue #77
+// <https://github.com/nnethercott/hannoy/issues/77>
+#[test]
+fn convert_from_arroy_to_hannoy_binary_quantized() {
+    const DIM: usize = 1025;
+
+    // let handle = create_database::<Euclidean>();
+    let _ = rayon::ThreadPoolBuilder::new().num_threads(1).build_global();
+    let dir = tempfile::tempdir().unwrap();
+    let env = unsafe { heed::EnvOpenOptions::new().map_size(200 * 1024 * 1024).open(dir.path()) }
+        .unwrap();
+    let mut wtxn = env.write_txn().unwrap();
+
+    let database: arroy::Database<arroy::distances::BinaryQuantizedCosine> =
+        env.create_database(&mut wtxn, None).unwrap();
+    wtxn.commit().unwrap();
+
+    let mut rng = rng();
+    let mut wtxn = env.write_txn().unwrap();
+
+    let mut db_indexes: Vec<u16> = (0..10).collect();
+    db_indexes.shuffle(&mut rng);
+
+    for index in db_indexes.iter().copied() {
+        let writer = arroy::Writer::new(database, index, DIM);
+
+        // We're going to write 100 vectors per index
+        let unif = Uniform::new(-1.0, 1.0);
+        for i in 0..100 {
+            let vector: [f32; DIM] = std::array::from_fn(|_| rng.sample(unif));
+            writer.add_item(&mut wtxn, i, &vector).unwrap();
+        }
+        writer.builder(&mut rng).build(&mut wtxn).unwrap();
+    }
+    wtxn.commit().unwrap();
+
+    // Now it's time to convert the indexes
+
+    let mut wtxn = env.write_txn().unwrap();
+    let rtxn = env.read_txn().unwrap();
+    let database: crate::Database<BinaryQuantizedCosine> =
+        env.open_database(&mut wtxn, None).unwrap().unwrap();
+
+    db_indexes.shuffle(&mut rng);
+
+    for index in db_indexes {
+        let pre_commit_arroy_reader =
+            arroy::Reader::<arroy::distances::BinaryQuantizedCosine>::open(
+                &rtxn,
+                index,
+                database.remap_types(),
+            )
+            .unwrap();
+
+        let writer = Writer::new(database, index, pre_commit_arroy_reader.dimensions());
+        writer.builder(&mut rng).prepare_arroy_conversion(&mut wtxn).unwrap();
+        assert!(writer.need_build(&mut wtxn).unwrap());
+        writer.builder(&mut rng).build::<16, 32>(&mut wtxn).unwrap();
+
+        for result in pre_commit_arroy_reader.iter(&rtxn).unwrap() {
+            let (item_id, mut vector) = result.unwrap();
+            // arroy reader iter currently returns wrong len: https://github.com/meilisearch/arroy/issues/152
+            vector.truncate(DIM);
+
+            let reader = Reader::open(&wtxn, index, database).unwrap();
+            let vec = reader.item_vector(&wtxn, item_id).unwrap();
+            assert_eq!(vec.as_deref(), Some(&vector[..]));
             let mut found = reader.nns(1).by_vector(&wtxn, &vector).unwrap();
             dbg!(&found);
             let (found_item_id, found_distance) = found.pop().unwrap();
