@@ -16,7 +16,7 @@ use rand::Rng;
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use roaring::RoaringBitmap;
 use tinyvec::{array_vec, ArrayVec};
-use tracing::{debug, error};
+use tracing::debug;
 
 use crate::key::Key;
 use crate::node::{Item, Links, Node};
@@ -440,8 +440,9 @@ impl<'a, D: Distance, const M: usize, const M0: usize> HnswBuilder<'a, D, M, M0>
             Some(node_state) => res.extend(node_state.links.iter().map(|(_, i)| *i)),
             None => {
                 if res.is_empty() {
-                    error!(
-                        "the links for `item_id` must exist in either self.layers, lmdb, or both"
+                    debug!(
+                        "Race condition found: tried linking `item_id` before exists in either self.layers or lmdb.
+                         Consult `BuildStats.link_misses` to see how frequently this occurs."
                     );
                     build_stats.incr_link_misses();
                 }
