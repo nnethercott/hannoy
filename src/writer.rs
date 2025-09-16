@@ -305,6 +305,7 @@ impl<D: Distance> Writer<D> {
                 .is_none_or(|raw_name| raw_name != D::name())
             {
                 clear_links(wtxn, self.database, self.index)?;
+                self.database.delete(wtxn, &Key::metadata(self.index))?;
             }
 
             let mut cursor = self
@@ -313,9 +314,11 @@ impl<D: Distance> Writer<D> {
                 .prefix_iter_mut(wtxn, &Prefix::item(self.index))?
                 .remap_key_type::<KeyCodec>();
 
+            let mut updated_items = RoaringBitmap::new();
             while let Some((item_id, node)) = cursor.next().transpose()? {
                 match node {
                     Node::Item(Item { header: _, vector }) => {
+                        updated_items.insert(item_id.node.item);
                         let vector = vector.to_vec();
                         let vector = UnalignedVector::from_vec(vector);
                         let new_leaf = Node::Item(Item { header: ND::new_header(&vector), vector });
@@ -330,6 +333,13 @@ impl<D: Distance> Writer<D> {
                     }
                     Node::Links(_) => unreachable!("Node must not be a link"),
                 }
+            }
+
+            drop(cursor);
+
+            for item in updated_items {
+                let key = Key::updated(self.index, item);
+                self.database.remap_types::<KeyCodec, Unit>().put(wtxn, &key, &())?;
             }
         }
 
@@ -613,7 +623,6 @@ impl<'a, D: Distance> FrozenReader<'a, D> {
 
 /// Clears all the links. Starts from the last node and stops at the first item.
 fn clear_links<D: Distance>(wtxn: &mut RwTxn, database: Database<D>, index: u16) -> Result<()> {
-    database.delete(wtxn, &Key::metadata(index))?;
     let mut cursor = database
         .remap_types::<PrefixCodec, DecodeIgnore>()
         .prefix_iter_mut(wtxn, &Prefix::links(index))?
