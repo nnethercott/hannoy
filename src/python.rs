@@ -20,7 +20,7 @@ static DEFAULT_ENV_SIZE: usize = 1024 * 1024 * 1024; // 1GiB
 static ENV: OnceCell<heed::Env<WithoutTls>> = OnceCell::new();
 static RW_TXN: LazyLock<Mutex<Option<heed::RwTxn<'static>>>> = LazyLock::new(|| Mutex::new(None));
 
-/// Supported distance metrics in hannoy.
+/// The supported distance metrics in hannoy.
 #[gen_stub_pyclass_enum]
 #[pyclass(name = "Metric")]
 #[derive(Clone)]
@@ -89,7 +89,7 @@ impl DynDatabase {
     }
 }
 
-/// An LMDB-backed vector database for vector search.
+/// An LMDB-backed database for vector search.
 #[gen_stub_pyclass]
 #[pyclass(name = "Database")]
 pub(super) struct PyDatabase(DynDatabase);
@@ -152,7 +152,7 @@ impl PyDatabase {
         }
     }
 
-    /// Get a reader for a specific index and dimensions
+    /// Open a reader for a specific index.
     #[pyo3(signature = (index = 0))]
     fn reader(&self, index: u16) -> PyResult<PyReader> {
         let rtxn = get_ro_txn()?;
