@@ -6,7 +6,6 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use heed::types::{Bytes, DecodeIgnore};
 use heed::RoTxn;
-use madvise::AccessPattern;
 use min_max_heap::MinMaxHeap;
 use roaring::RoaringBitmap;
 use tracing::warn;
@@ -179,14 +178,28 @@ impl<D: Distance> Reader<D> {
         })
     }
 
-    /// Instructs kernel to fetch nodes based on a fixed memory budget. It's OK for this operation
-    /// to fail, it's not integral for search to work.
+    #[cfg(windows)]
     fn prefetch_graph(
         rtxn: &RoTxn,
         database: &Database<D>,
         index: u16,
         metadata: &Metadata,
     ) -> Result<()> {
+        // madvise crate not supported on windows.
+        Ok(())
+    }
+
+    /// Instructs kernel to fetch nodes based on a fixed memory budget. It's OK for this operation
+    /// to fail, it's not integral for search to work.
+    #[cfg(not(windows))]
+    fn prefetch_graph(
+        rtxn: &RoTxn,
+        database: &Database<D>,
+        index: u16,
+        metadata: &Metadata,
+    ) -> Result<()> {
+        use madvise::AccessPattern;
+
         let page_size = page_size::get();
         let mut available_memory: usize = std::env::var(READER_AVAILABLE_MEMORY)
             .ok()
