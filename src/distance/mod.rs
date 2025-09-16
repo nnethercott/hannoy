@@ -24,8 +24,6 @@ mod manhattan;
 /// compute the split planes, and normalize user vectors.
 #[allow(missing_docs)]
 pub trait Distance: Send + Sync + Sized + Clone + fmt::Debug + 'static {
-    const DEFAULT_OVERSAMPLING: usize = 1;
-
     /// A header structure with informations related to the
     type Header: Pod + Zeroable + fmt::Debug;
     type VectorCodec: UnalignedVectorCodec;
