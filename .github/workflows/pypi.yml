@@ -6,6 +6,9 @@
 name: pypi
 
 on:
+  create:
+    tags:
+      - '*'
   push:
     tags:
       - '*'
