@@ -1,18 +1,16 @@
 use std::cmp::Reverse;
-use std::collections::{BinaryHeap, VecDeque};
+use std::collections::BinaryHeap;
 use std::marker;
 use std::num::NonZeroUsize;
-use std::sync::atomic::{AtomicUsize, Ordering};
 
-use heed::types::{Bytes, DecodeIgnore};
+use heed::types::DecodeIgnore;
 use heed::RoTxn;
 use min_max_heap::MinMaxHeap;
 use roaring::RoaringBitmap;
-use tracing::warn;
 
 use crate::distance::Distance;
 use crate::hnsw::ScoredLink;
-use crate::internals::{KeyCodec, UnalignedVectorCodec};
+use crate::internals::KeyCodec;
 use crate::item_iter::ItemIter;
 use crate::metadata::Metadata;
 use crate::node::{Item, Links};
@@ -23,6 +21,8 @@ use crate::{Database, Error, ItemId, Key, MetadataCodec, Node, Prefix, PrefixCod
 
 /// A good default value for the `ef` parameter.
 const DEFAULT_EF_SEARCH: usize = 100;
+
+#[cfg(not(windows))]
 const READER_AVAILABLE_MEMORY: &str = "HANNOY_READER_PREFETCH_MEMORY";
 
 #[cfg(not(test))]
@@ -178,15 +178,33 @@ impl<D: Distance> Reader<D> {
         })
     }
 
+    #[cfg(windows)]
+    fn prefetch_graph(
+        _rtxn: &RoTxn,
+        _database: &Database<D>,
+        _index: u16,
+        _metadata: &Metadata,
+    ) -> Result<()> {
+        // madvise crate does not support windows.
+        Ok(())
+    }
+
     /// Instructs kernel to fetch nodes based on a fixed memory budget. It's OK for this operation
     /// to fail, it's not integral for search to work.
+    #[cfg(not(windows))]
     fn prefetch_graph(
         rtxn: &RoTxn,
         database: &Database<D>,
         index: u16,
         metadata: &Metadata,
     ) -> Result<()> {
+        use crate::unaligned_vector::UnalignedVectorCodec;
+
+        use heed::types::Bytes;
         use madvise::AccessPattern;
+        use std::collections::VecDeque;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use tracing::warn;
 
         let page_size = page_size::get();
         let mut available_memory: usize = std::env::var(READER_AVAILABLE_MEMORY)
