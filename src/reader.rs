@@ -178,8 +178,20 @@ impl<D: Distance> Reader<D> {
         })
     }
 
+    #[cfg(windows)]
+    fn prefetch_graph(
+        _rtxn: &RoTxn,
+        _database: &Database<D>,
+        _index: u16,
+        _metadata: &Metadata,
+    ) -> Result<()> {
+        /// madvise crate does not support windows.
+        Ok(())
+    }
+
     /// Instructs kernel to fetch nodes based on a fixed memory budget. It's OK for this operation
     /// to fail, it's not integral for search to work.
+    #[cfg(not(windows))]
     fn prefetch_graph(
         rtxn: &RoTxn,
         database: &Database<D>,
