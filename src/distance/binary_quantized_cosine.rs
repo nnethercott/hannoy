@@ -30,8 +30,6 @@ impl fmt::Debug for NodeHeaderBinaryQuantizedCosine {
 }
 
 impl Distance for BinaryQuantizedCosine {
-    const DEFAULT_OVERSAMPLING: usize = 3;
-
     type Header = NodeHeaderBinaryQuantizedCosine;
     type VectorCodec = BinaryQuantized;
 
