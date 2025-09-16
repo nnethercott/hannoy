@@ -29,8 +29,6 @@ impl fmt::Debug for NodeHeaderHamming {
 }
 
 impl Distance for Hamming {
-    const DEFAULT_OVERSAMPLING: usize = 3;
-
     type Header = NodeHeaderHamming;
     type VectorCodec = Binary;
 

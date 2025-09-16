@@ -30,8 +30,6 @@ impl fmt::Debug for NodeHeaderBinaryQuantizedManhattan {
 }
 
 impl Distance for BinaryQuantizedManhattan {
-    const DEFAULT_OVERSAMPLING: usize = 3;
-
     type Header = NodeHeaderBinaryQuantizedManhattan;
     type VectorCodec = unaligned_vector::BinaryQuantized;
 
