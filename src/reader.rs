@@ -6,7 +6,6 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use heed::types::{Bytes, DecodeIgnore};
 use heed::RoTxn;
-use madvise::AccessPattern;
 use min_max_heap::MinMaxHeap;
 use roaring::RoaringBitmap;
 use tracing::warn;
@@ -187,6 +186,8 @@ impl<D: Distance> Reader<D> {
         index: u16,
         metadata: &Metadata,
     ) -> Result<()> {
+        use madvise::AccessPattern;
+
         let page_size = page_size::get();
         let mut available_memory: usize = std::env::var(READER_AVAILABLE_MEMORY)
             .ok()
