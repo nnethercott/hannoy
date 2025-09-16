@@ -9,9 +9,6 @@ on:
   create:
     tags:
       - '*'
-  push:
-    tags:
-      - '*'
   workflow_dispatch:
 
 permissions:
