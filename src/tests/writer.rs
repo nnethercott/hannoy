@@ -373,6 +373,46 @@ fn convert_from_arroy_to_hannoy_binary_quantized() {
 }
 
 #[test]
+fn unreachable_items() {
+    const DIM: usize = 1025;
+
+    let _ = rayon::ThreadPoolBuilder::new().num_threads(1).build_global();
+    let dir = tempfile::tempdir().unwrap();
+    let env = unsafe { heed::EnvOpenOptions::new().map_size(200 * 1024 * 1024).open(dir.path()) }
+        .unwrap();
+    let mut wtxn = env.write_txn().unwrap();
+
+    let database: crate::Database<Cosine> = env.create_database(&mut wtxn, None).unwrap();
+    wtxn.commit().unwrap();
+
+    let mut rng = rng();
+    let mut wtxn = env.write_txn().unwrap();
+
+    let mut db_indexes: Vec<u16> = (1..2).collect();
+    db_indexes.shuffle(&mut rng);
+
+    for index in db_indexes.iter().copied() {
+        let writer = Writer::new(database, index, DIM);
+
+        // We're going to write 100 vectors per index
+        let unif = Uniform::new(-1.0, 1.0);
+        for i in 0..100 {
+            let vector: [f32; DIM] = std::array::from_fn(|_| rng.sample(unif));
+            writer.add_item(&mut wtxn, i, &vector).unwrap();
+        }
+        writer.builder(&mut rng).build::<M, M0>(&mut wtxn).unwrap();
+
+        // Check that all items were written correctly
+        let reader = crate::Reader::<Cosine>::open(&wtxn, index, database).unwrap();
+        assert_eq!(reader.item_ids().len(), 100);
+        assert!((0..100).all(|i| reader.contains_item(&wtxn, i).unwrap()));
+        let found = reader.nns(100).by_vector(&wtxn, &[0.0; DIM]).unwrap();
+        assert_eq!(found.len(), 100);
+    }
+    wtxn.commit().unwrap();
+}
+
+#[test]
 fn overwrite_one_item_incremental() {
     let handle = create_database::<Euclidean>();
     let mut rng = rng();
