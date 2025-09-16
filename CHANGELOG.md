@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.7](https://github.com/nnethercott/hannoy/compare/v0.0.6...v0.0.7) - 2025-09-16
+
+### Fixed
+
+- misc changes to pyi descriptions ([#93](https://github.com/nnethercott/hannoy/pull/93))
+- add windows runner and handle conditional dependencies ([#94](https://github.com/nnethercott/hannoy/pull/94))
+- ci for pypi builds and uploads ([#90](https://github.com/nnethercott/hannoy/pull/90))
+- remove default oversampling from distance trait ([#91](https://github.com/nnethercott/hannoy/pull/91))
+
+### Other
+
+- fix release stuff ([#89](https://github.com/nnethercott/hannoy/pull/89))
+
 ## [0.0.6](https://github.com/nnethercott/hannoy/compare/v0.0.5...v0.0.6) - 2025-09-15
 
 ### Added
