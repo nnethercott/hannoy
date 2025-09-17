@@ -302,7 +302,7 @@ impl<'a, D: Distance, const M: usize, const M0: usize> HnswBuilder<'a, D, M, M0>
 
         // Greedy search with: ef = 1
         for lvl in (level + 1..=self.max_level).rev() {
-            let neighbours = self.explore_layer(&q, &eps, lvl, 1, lmdb, build_stats)?;
+            let neighbours = self.walk_layer(&q, &eps, lvl, 1, lmdb, build_stats)?;
             let closest = neighbours.peek_min().map(|(_, n)| *n).expect("No neighbor was found");
             eps = vec![closest];
         }
@@ -312,7 +312,7 @@ impl<'a, D: Distance, const M: usize, const M0: usize> HnswBuilder<'a, D, M, M0>
         // Beam search with: ef = ef_construction
         for lvl in (0..=level).rev() {
             let neighbours = self
-                .explore_layer(&q, &eps, lvl, self.ef_construction, lmdb, build_stats)?
+                .walk_layer(&q, &eps, lvl, self.ef_construction, lmdb, build_stats)?
                 .into_vec();
 
             eps.clear();
@@ -453,7 +453,7 @@ impl<'a, D: Distance, const M: usize, const M0: usize> HnswBuilder<'a, D, M, M0>
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn explore_layer(
+    fn walk_layer(
         &self,
         query: &Item<D>,
         eps: &[ItemId],

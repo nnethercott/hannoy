@@ -361,7 +361,7 @@ impl<D: Distance> Reader<D> {
 
     /// Get a generic read node from the database using the version of the database found while creating the reader.
     /// Must be used every time we retrieve a node in this file.
-    fn explore_layer(
+    fn walk_layer(
         &self,
         query: &Item<D>,
         eps: &[ItemId],
@@ -481,17 +481,18 @@ impl<D: Distance> Reader<D> {
         let mut seen = RoaringBitmap::new();
 
         for lvl in (1..=self.max_level).rev() {
-            let mut neighbours = self.explore_layer(query, &eps, lvl, 1, &mut seen, None, rtxn)?;
+            let mut neighbours = self.walk_layer(query, &eps, lvl, 1, &mut seen, None, rtxn)?;
             let closest = neighbours.pop_min().map(|(_, n)| n).expect("No neighbor was found");
             eps = vec![closest];
         }
         let ef = opt.ef.max(opt.count);
+
+        // clear `seen` since we only care about items on level 0
         seen.clear();
         let mut neighbours =
-            self.explore_layer(query, &eps, 0, ef, &mut seen, opt.candidates, rtxn)?;
+            self.walk_layer(query, &eps, 0, ef, &mut seen, opt.candidates, rtxn)?;
 
-        // If we still don't have enough nns then do expensive search over unseen items at level
-        // zero.
+        // If we still don't have enough nns then do exhaustive search over unseen items
         if neighbours.len() < opt.count {
             let mut cursor = self
                 .database
@@ -501,15 +502,14 @@ impl<D: Distance> Reader<D> {
 
             while let Some((key, _)) = cursor.next().transpose()? {
                 let id = key.node.item;
-                let lvl = key.node.layer as usize;
                 if seen.contains(id) {
                     continue;
                 }
 
-                let more_nns = self.explore_layer(
+                let more_nns = self.walk_layer(
                     query,
                     &vec![id],
-                    lvl,
+                    0,
                     opt.count - neighbours.len(),
                     &mut seen,
                     opt.candidates,
