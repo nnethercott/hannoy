@@ -42,8 +42,9 @@ fn all_items_are_reachable() {
     const N: usize = 1000;
     let db_indexes = 1..5;
 
+    // build hnsw with most aggressive (M,M0) = (3,3)
     let DatabaseHandle { env, database, tempdir: _ } =
-        create_database_indices_with_items::<Cosine, DIM, M, M0>(db_indexes.clone(), N);
+        create_database_indices_with_items::<Cosine, DIM, 3, 3>(db_indexes.clone(), N);
 
     let rtxn = env.read_txn().unwrap();
     let mut rng = rng();
