@@ -1,4 +1,5 @@
-use rand::{distributions::Uniform, rngs::StdRng, seq::SliceRandom, thread_rng, Rng, SeedableRng};
+use proptest::prelude::*;
+use rand::{rngs::StdRng, seq::SliceRandom, thread_rng, Rng, SeedableRng};
 use roaring::RoaringBitmap;
 
 use crate::{
@@ -37,41 +38,16 @@ fn quantized_iter_has_right_dimensions() {
 }
 
 #[test]
-fn all_items_are_reachable() {
-    const DIM: usize = 768;
-    const N: usize = 1000;
-    let db_indexes = 1..5;
-
-    // build hnsw with most aggressive (M,M0) = (3,3)
-    let DatabaseHandle { env, database, tempdir: _ } =
-        create_database_indices_with_items::<Cosine, DIM, 3, 3>(db_indexes.clone(), N);
-
-    let rtxn = env.read_txn().unwrap();
-    let mut rng = rng();
-    let mut shuffled_indices = Vec::from_iter(db_indexes);
-    shuffled_indices.shuffle(&mut rng);
-
-    for index in shuffled_indices {
-        // Check that all items were written correctly
-        let reader = crate::Reader::<Cosine>::open(&rtxn, index, database).unwrap();
-        assert_eq!(reader.item_ids().len(), N as u64);
-        assert!((0..N as u32).all(|i| reader.contains_item(&rtxn, i).unwrap()));
-
-        let found = reader.nns(N).ef_search(N).by_vector(&rtxn, &[0.0; DIM]).unwrap();
-        assert_eq!(
-            &RoaringBitmap::from_iter(found.into_iter().map(|(id, _)| id)),
-            reader.item_ids()
-        )
-    }
-}
-
-#[test]
 fn search_on_candidates_has_right_num() {
     const DIM: usize = 768;
     let db_indexes = 1..5;
 
     let DatabaseHandle { env, database, tempdir: _ } =
-        create_database_indices_with_items::<Cosine, DIM, M, M0>(db_indexes.clone(), 1000);
+        create_database_indices_with_items::<Cosine, DIM, M, M0, _>(
+            db_indexes.clone(),
+            1000,
+            &mut rng(),
+        );
 
     let rtxn = env.read_txn().unwrap();
     let mut rng = rng();
@@ -92,5 +68,33 @@ fn search_on_candidates_has_right_num() {
         let candidates = RoaringBitmap::from_iter(c);
         let found = reader.nns(1).candidates(&candidates).by_vector(&rtxn, &[0.0; DIM]).unwrap();
         assert_eq!(&RoaringBitmap::from_iter(found.into_iter().map(|(i, _)| i)), &candidates);
+    }
+}
+
+fn all_items_are_reachable<const M: usize, const M0: usize>(n: usize) {
+    const DIM: usize = 768;
+    let mut rng = rng();
+
+    let DatabaseHandle { env, database, tempdir: _ } =
+        create_database_indices_with_items::<Cosine, DIM, M, M0, _>(0..1, n, &mut rng);
+    let rtxn = env.read_txn().unwrap();
+
+    // Check that all items were written correctly
+    let reader = crate::Reader::<Cosine>::open(&rtxn, 0, database).unwrap();
+    assert_eq!(reader.item_ids().len(), n as u64);
+    assert!((0..n as u32).all(|i| reader.contains_item(&rtxn, i).unwrap()));
+
+    let found = reader.nns(n).ef_search(n).by_vector(&rtxn, &[0.0; DIM]).unwrap();
+    assert_eq!(&RoaringBitmap::from_iter(found.into_iter().map(|(id, _)| id)), reader.item_ids())
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig {
+            cases: 64,.. ProptestConfig::default()
+    })]
+
+    #[test]
+    fn all_items_are_reachable_3_3(n in 1..10000usize){
+        all_items_are_reachable::<3,3>(n);
     }
 }

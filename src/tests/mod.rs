@@ -107,12 +107,13 @@ fn create_database_indices_with_items<
     const DIM: usize,
     const M: usize,
     const M0: usize,
+    R: Rng+SeedableRng,
 >(
     indices: Range<u16>,
     n: usize,
+    rng: &mut R,
 ) -> DatabaseHandle<D> {
     let DatabaseHandle { env, database, tempdir } = create_database();
-    let mut rng = rng();
     let mut wtxn = env.write_txn().unwrap();
 
     for i in indices {
@@ -123,7 +124,7 @@ fn create_database_indices_with_items<
             let vector: [f32; DIM] = std::array::from_fn(|_| rng.sample(unif));
             writer.add_item(&mut wtxn, i as u32, &vector).unwrap();
         }
-        writer.builder(&mut rng).build::<M, M0>(&mut wtxn).unwrap();
+        writer.builder(rng).build::<M, M0>(&mut wtxn).unwrap();
     }
 
     wtxn.commit().unwrap();
