@@ -372,7 +372,6 @@ fn convert_from_arroy_to_hannoy_binary_quantized() {
     }
 }
 
-
 #[test]
 fn overwrite_one_item_incremental() {
     let handle = create_database::<Euclidean>();

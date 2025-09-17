@@ -311,9 +311,8 @@ impl<'a, D: Distance, const M: usize, const M0: usize> HnswBuilder<'a, D, M, M0>
 
         // Beam search with: ef = ef_construction
         for lvl in (0..=level).rev() {
-            let neighbours = self
-                .walk_layer(&q, &eps, lvl, self.ef_construction, lmdb, build_stats)?
-                .into_vec();
+            let neighbours =
+                self.walk_layer(&q, &eps, lvl, self.ef_construction, lmdb, build_stats)?.into_vec();
 
             eps.clear();
             for (dist, n) in self.robust_prune(neighbours, level, self.alpha, lmdb)? {

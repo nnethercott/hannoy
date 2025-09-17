@@ -107,7 +107,7 @@ fn create_database_indices_with_items<
     const DIM: usize,
     const M: usize,
     const M0: usize,
-    R: Rng+SeedableRng,
+    R: Rng + SeedableRng,
 >(
     indices: Range<u16>,
     n: usize,
@@ -128,7 +128,7 @@ fn create_database_indices_with_items<
     }
 
     wtxn.commit().unwrap();
-    DatabaseHandle{env, database, tempdir}
+    DatabaseHandle { env, database, tempdir }
 }
 
 fn rng() -> StdRng {
