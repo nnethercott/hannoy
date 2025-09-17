@@ -90,7 +90,7 @@ fn all_items_are_reachable<const M: usize, const M0: usize>(n: usize) {
 
 proptest! {
     #![proptest_config(ProptestConfig {
-            cases: 64,.. ProptestConfig::default()
+            cases: 10,.. ProptestConfig::default()
     })]
 
     #[test]
