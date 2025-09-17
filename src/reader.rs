@@ -388,7 +388,7 @@ impl<D: Distance> Reader<D> {
         // when we've exhausted the search queue
         while let Some(&(Reverse(OrderedFloat(f)), _)) = search_queue.peek() {
             let &(OrderedFloat(f_max), _) = res.peek_max().unwrap();
-            if f > f_max && res.len() == ef {
+            if f > f_max {
                 break;
             }
             let (_, c) = search_queue.pop().unwrap();
@@ -506,9 +506,15 @@ impl<D: Distance> Reader<D> {
                     continue;
                 }
 
-                let more_nns =
-                    self.explore_layer(query, &vec![id], lvl, ef, &mut seen, opt.candidates, rtxn)?;
-
+                let more_nns = self.explore_layer(
+                    query,
+                    &vec![id],
+                    lvl,
+                    opt.count - neighbours.len(),
+                    &mut seen,
+                    opt.candidates,
+                    rtxn,
+                )?;
                 neighbours.extend(more_nns.into_iter());
                 if neighbours.len() >= opt.count {
                     break;

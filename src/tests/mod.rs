@@ -1,13 +1,15 @@
 use std::fmt;
+use std::ops::Range;
 
 use heed::types::LazyDecode;
 use heed::{Env, EnvOpenOptions, WithTls};
+use rand::distributions::Uniform;
 use rand::rngs::StdRng;
-use rand::SeedableRng;
+use rand::{Rng, SeedableRng};
 use tempfile::TempDir;
 
 use crate::version::VersionCodec;
-use crate::{Database, Distance, MetadataCodec, NodeCodec, NodeMode, Reader};
+use crate::{Database, Distance, MetadataCodec, NodeCodec, NodeMode, Reader, Writer};
 
 mod reader;
 mod writer;
@@ -98,6 +100,34 @@ fn create_database<D: Distance>() -> DatabaseHandle<D> {
     let database: Database<D> = env.create_database(&mut wtxn, None).unwrap();
     wtxn.commit().unwrap();
     DatabaseHandle { env, database, tempdir: dir }
+}
+
+fn create_database_indices_with_items<
+    D: Distance,
+    const DIM: usize,
+    const M: usize,
+    const M0: usize,
+>(
+    indices: Range<u16>,
+    n: usize,
+) -> DatabaseHandle<D> {
+    let DatabaseHandle { env, database, tempdir } = create_database();
+    let mut rng = rng();
+    let mut wtxn = env.write_txn().unwrap();
+
+    for i in indices {
+        let writer = Writer::new(database, i, DIM);
+
+        let unif = Uniform::new(-1.0, 1.0);
+        for i in 0..n {
+            let vector: [f32; DIM] = std::array::from_fn(|_| rng.sample(unif));
+            writer.add_item(&mut wtxn, i as u32, &vector).unwrap();
+        }
+        writer.builder(&mut rng).build::<M, M0>(&mut wtxn).unwrap();
+    }
+
+    wtxn.commit().unwrap();
+    DatabaseHandle{env, database, tempdir}
 }
 
 fn rng() -> StdRng {

@@ -1,8 +1,9 @@
-use rand::{distributions::Uniform, rngs::StdRng, seq::SliceRandom, Rng, SeedableRng};
+use rand::{distributions::Uniform, rngs::StdRng, seq::SliceRandom, thread_rng, Rng, SeedableRng};
+use roaring::RoaringBitmap;
 
 use crate::{
     distance::{BinaryQuantizedCosine, Cosine},
-    tests::{create_database, rng, DatabaseHandle},
+    tests::{create_database, create_database_indices_with_items, rng, DatabaseHandle},
     Reader, Writer,
 };
 
@@ -36,45 +37,59 @@ fn quantized_iter_has_right_dimensions() {
 }
 
 #[test]
-fn unreachable_items() {
-    const DIM: usize = 1025;
+fn all_items_are_reachable() {
+    const DIM: usize = 768;
+    const N: usize = 1000;
+    let db_indexes = 1..5;
 
-    let _ = rayon::ThreadPoolBuilder::new().num_threads(1).build_global();
-    let dir = tempfile::tempdir().unwrap();
-    let env = unsafe { heed::EnvOpenOptions::new().map_size(200 * 1024 * 1024).open(dir.path()) }
-        .unwrap();
-    let mut wtxn = env.write_txn().unwrap();
+    let DatabaseHandle { env, database, tempdir: _ } =
+        create_database_indices_with_items::<Cosine, DIM, M, M0>(db_indexes.clone(), N);
 
-    let database: crate::Database<Cosine> = env.create_database(&mut wtxn, None).unwrap();
-    wtxn.commit().unwrap();
-
+    let rtxn = env.read_txn().unwrap();
     let mut rng = rng();
-    let mut wtxn = env.write_txn().unwrap();
+    let mut shuffled_indices = Vec::from_iter(db_indexes);
+    shuffled_indices.shuffle(&mut rng);
 
-    let mut db_indexes: Vec<u16> = (1..2).collect();
-    db_indexes.shuffle(&mut rng);
-
-    const HOW_MANY: usize = 1000;
-
-    for index in db_indexes.iter().copied() {
-        let writer = Writer::new(database, index, DIM);
-
-        // We're going to write 10k vectors per index
-        let unif = Uniform::new(-1.0, 1.0);
-        for i in 0..HOW_MANY {
-            let vector: [f32; DIM] = std::array::from_fn(|_| rng.sample(unif));
-            writer.add_item(&mut wtxn, i as u32, &vector).unwrap();
-        }
-
-        // build with smallest number of links possible
-        writer.builder(&mut rng).build::<3, 3>(&mut wtxn).unwrap();
-
+    for index in shuffled_indices {
         // Check that all items were written correctly
-        let reader = crate::Reader::<Cosine>::open(&wtxn, index, database).unwrap();
-        assert_eq!(reader.item_ids().len(), HOW_MANY as u64);
-        assert!((0..HOW_MANY as u32).all(|i| reader.contains_item(&wtxn, i).unwrap()));
-        let found = reader.nns(HOW_MANY).ef_search(HOW_MANY).by_vector(&wtxn, &[0.0; DIM]).unwrap();
-        assert_eq!(found.len(), HOW_MANY);
+        let reader = crate::Reader::<Cosine>::open(&rtxn, index, database).unwrap();
+        assert_eq!(reader.item_ids().len(), N as u64);
+        assert!((0..N as u32).all(|i| reader.contains_item(&rtxn, i).unwrap()));
+
+        let found = reader.nns(N).ef_search(N).by_vector(&rtxn, &[0.0; DIM]).unwrap();
+        assert_eq!(
+            &RoaringBitmap::from_iter(found.into_iter().map(|(id, _)| id)),
+            reader.item_ids()
+        )
     }
-    wtxn.commit().unwrap();
+}
+
+#[test]
+fn search_on_candidates_has_right_num() {
+    const DIM: usize = 768;
+    let db_indexes = 1..5;
+
+    let DatabaseHandle { env, database, tempdir: _ } =
+        create_database_indices_with_items::<Cosine, DIM, M, M0>(db_indexes.clone(), 1000);
+
+    let rtxn = env.read_txn().unwrap();
+    let mut rng = rng();
+    let mut shuffled_indices = Vec::from_iter(db_indexes);
+    shuffled_indices.shuffle(&mut rng);
+
+    for index in shuffled_indices {
+        let reader = crate::Reader::<Cosine>::open(&rtxn, index, database).unwrap();
+
+        // search with 10 candidates
+        let c: [u32; 10] = std::array::from_fn(|_| thread_rng().gen::<u32>() % 1000);
+        let candidates = RoaringBitmap::from_iter(c);
+        let found = reader.nns(10).candidates(&candidates).by_vector(&rtxn, &[0.0; DIM]).unwrap();
+        assert_eq!(&RoaringBitmap::from_iter(found.into_iter().map(|(i, _)| i)), &candidates);
+
+        // search with 1 candidate
+        let c: [u32; 1] = std::array::from_fn(|_| thread_rng().gen::<u32>() % 1000);
+        let candidates = RoaringBitmap::from_iter(c);
+        let found = reader.nns(1).candidates(&candidates).by_vector(&rtxn, &[0.0; DIM]).unwrap();
+        assert_eq!(&RoaringBitmap::from_iter(found.into_iter().map(|(i, _)| i)), &candidates);
+    }
 }
