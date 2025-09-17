@@ -385,10 +385,18 @@ impl<D: Distance> Reader<D> {
             visited.insert(ep);
         }
 
+        let initial_max = if candidates.is_some() {
+            let tmp = res.pop_max().unwrap();
+            res.clear();
+            tmp
+        } else {
+            (OrderedFloat(f32::MAX), 0)
+        };
+
         // Stop occurs either once we've done at least ef searches and notice no improvements, or
-        // when we've exhausted the search queue
+        // when we've exhausted the search queue.
         while let Some(&(Reverse(OrderedFloat(f)), _)) = search_queue.peek() {
-            let &(OrderedFloat(f_max), _) = res.peek_max().unwrap();
+            let &(OrderedFloat(f_max), _) = res.peek_max().unwrap_or(&initial_max);
             if f > f_max {
                 break;
             }
@@ -482,7 +490,7 @@ impl<D: Distance> Reader<D> {
         let mut seen = RoaringBitmap::new();
 
         for lvl in (1..=self.max_level).rev() {
-            let mut neighbours = self.walk_layer(query, &eps, lvl, 1, &mut seen, None, rtxn)?;
+            let neighbours = self.walk_layer(query, &eps, lvl, 1, &mut seen, None, rtxn)?;
             let closest = neighbours.peek_min().map(|(_, n)| n).expect("No neighbor was found");
             eps = vec![*closest];
         }
@@ -523,17 +531,7 @@ impl<D: Distance> Reader<D> {
             }
         }
 
-        let mut nns = Vec::with_capacity(opt.count);
-        while let Some((OrderedFloat(f), id)) = neighbours.pop_min() {
-            if opt.candidates.is_none_or(|candidates| candidates.contains(id)) {
-                nns.push((id, f));
-            }
-            if nns.len() == opt.count {
-                break;
-            }
-        }
-
-        Ok(nns)
+        Ok(neighbours.drain_asc().map(|(OrderedFloat(f), i)| (i, f)).take(opt.count).collect())
     }
 
     /// NOTE: a [`crate::Reader`] can't be opened unless updates are commited through a build !
