@@ -13,8 +13,8 @@ use crate::reader::get_item;
 use crate::tests::DatabaseHandle;
 use crate::{Reader, Writer};
 
-const M: usize = 16;
-const M0: usize = 32;
+const M: usize = 3;
+const M0: usize = 3;
 
 // do i add edge-cases for the build, e.g. M = e.ciel() as usize ?
 
