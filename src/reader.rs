@@ -406,7 +406,7 @@ impl<D: Distance> Reader<D> {
                     D::distance(query, &get_item(self.database, self.index, rtxn, point)?.unwrap());
 
                 // The search queue can take points that aren't included in the (optional)
-                // candidates bitmap, but the final result must include them.
+                // candidates bitmap, but the final result must *not* include them.
                 if res.len() < ef || dist < f_max {
                     search_queue.push((Reverse(OrderedFloat(dist)), point));
                     if let Some(c) = candidates {
@@ -483,8 +483,8 @@ impl<D: Distance> Reader<D> {
 
         for lvl in (1..=self.max_level).rev() {
             let mut neighbours = self.walk_layer(query, &eps, lvl, 1, &mut seen, None, rtxn)?;
-            let closest = neighbours.pop_min().map(|(_, n)| n).expect("No neighbor was found");
-            eps = vec![closest];
+            let closest = neighbours.peek_min().map(|(_, n)| n).expect("No neighbor was found");
+            eps = vec![*closest];
         }
         let ef = opt.ef.max(opt.count);
 
