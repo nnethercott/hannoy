@@ -5,7 +5,6 @@ use std::num::NonZeroUsize;
 
 use heed::types::DecodeIgnore;
 use heed::RoTxn;
-use itertools::Itertools;
 use min_max_heap::MinMaxHeap;
 use roaring::RoaringBitmap;
 
@@ -15,7 +14,6 @@ use crate::internals::KeyCodec;
 use crate::item_iter::ItemIter;
 use crate::metadata::Metadata;
 use crate::node::{Item, Links};
-use crate::node_id::NodeId;
 use crate::ordered_float::OrderedFloat;
 use crate::unaligned_vector::UnalignedVector;
 use crate::version::{Version, VersionCodec};
@@ -369,32 +367,32 @@ impl<D: Distance> Reader<D> {
         eps: &[ItemId],
         level: usize,
         ef: usize,
+        visited: &mut RoaringBitmap,
+        candidates: Option<&RoaringBitmap>,
         rtxn: &RoTxn,
-    ) -> Result<(MinMaxHeap<ScoredLink>, RoaringBitmap)> {
-        let mut candidates = BinaryHeap::new();
+    ) -> Result<MinMaxHeap<ScoredLink>> {
+        let mut search_queue = BinaryHeap::new();
         let mut res = MinMaxHeap::with_capacity(ef);
-        let mut visited = RoaringBitmap::new();
 
         // Register all entry points as visited and populate candidates
         for &ep in eps {
             let ve = get_item(self.database, self.index, rtxn, ep)?.unwrap();
             let dist = D::distance(query, &ve);
 
-            candidates.push((Reverse(OrderedFloat(dist)), ep));
+            search_queue.push((Reverse(OrderedFloat(dist)), ep));
             res.push((OrderedFloat(dist), ep));
             visited.insert(ep);
         }
 
-        while let Some(&(Reverse(OrderedFloat(f)), _)) = candidates.peek() {
+        // Stop occurs either once we've done at least ef searches and notice no improvements, or
+        // when we've exhausted the search queue
+        while let Some(&(Reverse(OrderedFloat(f)), _)) = search_queue.peek() {
             let &(OrderedFloat(f_max), _) = res.peek_max().unwrap();
-            // Stopping occurs once we've done at least ef-many searches and once we are no longer
-            // improving
             if f > f_max && res.len() == ef {
                 break;
             }
-            let (_, c) = candidates.pop().unwrap(); // Now safe to pop
+            let (_, c) = search_queue.pop().unwrap();
 
-            // Get neighborhood of candidate either from self or LMDB
             let proximity = match get_links(rtxn, self.database, self.index, c, level)? {
                 Some(Links { links }) => links.iter().collect::<Vec<ItemId>>(),
                 None => unreachable!("Links must exist"),
@@ -406,10 +404,15 @@ impl<D: Distance> Reader<D> {
                 let dist =
                     D::distance(query, &get_item(self.database, self.index, rtxn, point)?.unwrap());
 
+                // The search queue can take points that aren't included in the (optional)
+                // candidates bitmap, but the final result must include them.
                 if res.len() < ef || dist < f_max {
-                    candidates.push((Reverse(OrderedFloat(dist)), point));
-
-                    // optimized insert & removal maintaining original len
+                    search_queue.push((Reverse(OrderedFloat(dist)), point));
+                    if let Some(c) = candidates {
+                        if !c.contains(point) {
+                            continue;
+                        }
+                    }
                     if res.len() == ef {
                         let _ = res.push_pop_max((OrderedFloat(dist), point));
                     } else {
@@ -418,7 +421,7 @@ impl<D: Distance> Reader<D> {
                 }
             }
         }
-        Ok((res, visited))
+        Ok(res)
     }
 
     fn nns_by_vec(
@@ -439,10 +442,10 @@ impl<D: Distance> Reader<D> {
             return Ok(nns);
         }
 
-        let nns = self.hnsw_search(query, rtxn, opt)?;
-        Ok(nns)
+        return self.hnsw_search(query, rtxn, opt);
     }
 
+    /// Directly retrieves items in the candidate list and ranks them by distance to the query.
     fn brute_force_search(
         &self,
         query: &Item<D>,
@@ -462,6 +465,12 @@ impl<D: Distance> Reader<D> {
         Ok(item_distances)
     }
 
+    /// Hnsw search according to arXiv:1603.09320.
+    ///
+    /// We perform greedy beam search from the top layer to the bottom, where the search frontier
+    /// is controlled by `opt.ef`. Since the graph is not necessarily acyclic, search may become
+    /// "trapped" in a local sub-graph with fewer elements than `opt.count` - to account for this
+    /// we run an expensive exhaustive search at the end if fewer nns were returned.
     fn hnsw_search(
         &self,
         query: &Item<D>,
@@ -469,26 +478,20 @@ impl<D: Distance> Reader<D> {
         opt: &QueryBuilder<D>,
     ) -> Result<Vec<(ItemId, f32)>> {
         let mut eps = self.entry_points.clone();
-
         let mut seen = RoaringBitmap::new();
 
-        // search layers L->1 with ef=1
         for lvl in (1..=self.max_level).rev() {
-            let (mut neighbours, path) = self.explore_layer(query, &eps, lvl, 1, rtxn)?;
+            let mut neighbours = self.explore_layer(query, &eps, lvl, 1, &mut seen, None, rtxn)?;
             let closest = neighbours.pop_min().map(|(_, n)| n).expect("No neighbor was found");
             eps = vec![closest];
-
-            seen |= path;
         }
+        let ef = opt.ef.max(opt.count);
+        seen.clear();
+        let mut neighbours =
+            self.explore_layer(query, &eps, 0, ef, &mut seen, opt.candidates, rtxn)?;
 
-        // search layer 0 with ef=max(ef, count)
-        let (mut neighbours, path) = self.explore_layer(query, &eps, 0, opt.ef, rtxn)?;
-        seen |= path;
-
-        let mut nns = Vec::with_capacity(opt.count);
-
-        // TODO: move this into another helper with "exhaustive" in name !
-        // and add some info! that we're doing more work argg
+        // If we still don't have enough nns then do expensive search over unseen items at level
+        // zero.
         if neighbours.len() < opt.count {
             let mut cursor = self
                 .database
@@ -499,21 +502,21 @@ impl<D: Distance> Reader<D> {
             while let Some((key, _)) = cursor.next().transpose()? {
                 let id = key.node.item;
                 let lvl = key.node.layer as usize;
-
-                if seen.contains(id){
+                if seen.contains(id) {
                     continue;
                 }
 
-                let (new_neighbours, path) = self.explore_layer(query, &vec![id], lvl, opt.ef, rtxn)?;
-                seen |= path;
+                let more_nns =
+                    self.explore_layer(query, &vec![id], lvl, ef, &mut seen, opt.candidates, rtxn)?;
 
-                neighbours.extend(new_neighbours.into_iter());
-                if neighbours.len() >= opt.count{
+                neighbours.extend(more_nns.into_iter());
+                if neighbours.len() >= opt.count {
                     break;
                 }
             }
         }
 
+        let mut nns = Vec::with_capacity(opt.count);
         while let Some((OrderedFloat(f), id)) = neighbours.pop_min() {
             if opt.candidates.is_none_or(|candidates| candidates.contains(id)) {
                 nns.push((id, f));
