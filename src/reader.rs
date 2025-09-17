@@ -361,6 +361,7 @@ impl<D: Distance> Reader<D> {
 
     /// Get a generic read node from the database using the version of the database found while creating the reader.
     /// Must be used every time we retrieve a node in this file.
+    #[allow(clippy::too_many_arguments)]
     fn walk_layer(
         &self,
         query: &Item<D>,
@@ -442,7 +443,7 @@ impl<D: Distance> Reader<D> {
             return Ok(nns);
         }
 
-        return self.hnsw_search(query, rtxn, opt);
+        self.hnsw_search(query, rtxn, opt)
     }
 
     /// Directly retrieves items in the candidate list and ranks them by distance to the query.
@@ -508,7 +509,7 @@ impl<D: Distance> Reader<D> {
 
                 let more_nns = self.walk_layer(
                     query,
-                    &vec![id],
+                    &[id],
                     0,
                     opt.count - neighbours.len(),
                     &mut seen,
