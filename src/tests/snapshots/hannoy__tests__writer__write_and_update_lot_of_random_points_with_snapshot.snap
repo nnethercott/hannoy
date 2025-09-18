@@ -5,7 +5,7 @@ expression: handle
 ==================
 Dumping index 0
 Root: Metadata { dimensions: 30, items: RoaringBitmap<100 values between 0 and 99>, distance: "euclidean", entry_points: [65], max_level: 6 }
-Version: Version { major: 0, minor: 0, patch: 7 }
+Version: Version { major: 0, minor: 0, patch: 8 }
 Links 0: Links(Links { links: RoaringBitmap<[7]> })
 Links 1: Links(Links { links: RoaringBitmap<[45, 62, 75]> })
 Links 2: Links(Links { links: RoaringBitmap<[7, 62, 98]> })
