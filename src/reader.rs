@@ -383,7 +383,7 @@ impl<D: Distance> Reader<D> {
             search_queue.push((Reverse(OrderedFloat(dist)), ep));
             path.insert(ep);
 
-            if candidates.map_or(true, |c| c.contains(ep)) {
+            if candidates.is_none_or(|c| c.contains(ep)) {
                 res.push((OrderedFloat(dist), ep));
             }
         }
