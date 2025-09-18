@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.8](https://github.com/nnethercott/hannoy/compare/v0.0.7...v0.0.8) - 2025-09-18
+
+### Other
+
+- Fix unreachable items ([#98](https://github.com/nnethercott/hannoy/pull/98))
+- Fix a bug when converting between distances ([#95](https://github.com/nnethercott/hannoy/pull/95))
+
 ## [0.0.7](https://github.com/nnethercott/hannoy/compare/v0.0.6...v0.0.7) - 2025-09-16
 
 ### Fixed
