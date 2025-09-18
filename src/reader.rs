@@ -6,7 +6,7 @@ use std::num::NonZeroUsize;
 use heed::types::DecodeIgnore;
 use heed::RoTxn;
 use min_max_heap::MinMaxHeap;
-use roaring::RoaringBitmap;
+use roaring::{MultiOps, RoaringBitmap};
 
 use crate::distance::Distance;
 use crate::hnsw::ScoredLink;
@@ -359,8 +359,8 @@ impl<D: Distance> Reader<D> {
         QueryBuilder { reader: self, candidates: None, count, ef: DEFAULT_EF_SEARCH }
     }
 
-    /// Get a generic read node from the database using the version of the database found while creating the reader.
-    /// Must be used every time we retrieve a node in this file.
+    /// Iteratively traverse a given level of the HNSW graph, updating the search path history.
+    /// Returns a Min-Max heap of size ef nearest neighbours to the query in that layer.
     #[allow(clippy::too_many_arguments)]
     fn walk_layer(
         &self,
@@ -368,8 +368,8 @@ impl<D: Distance> Reader<D> {
         eps: &[ItemId],
         level: usize,
         ef: usize,
-        visited: &mut RoaringBitmap,
         candidates: Option<&RoaringBitmap>,
+        path: &mut RoaringBitmap,
         rtxn: &RoTxn,
     ) -> Result<MinMaxHeap<ScoredLink>> {
         let mut search_queue = BinaryHeap::new();
@@ -381,33 +381,27 @@ impl<D: Distance> Reader<D> {
             let dist = D::distance(query, &ve);
 
             search_queue.push((Reverse(OrderedFloat(dist)), ep));
-            res.push((OrderedFloat(dist), ep));
-            visited.insert(ep);
-        }
+            path.insert(ep);
 
-        let initial_max = if candidates.is_some() {
-            let tmp = res.pop_max().unwrap();
-            res.clear();
-            tmp
-        } else {
-            (OrderedFloat(f32::MAX), 0)
-        };
+            if candidates.map_or(true, |c| c.contains(ep)) {
+                res.push((OrderedFloat(dist), ep));
+            }
+        }
 
         // Stop occurs either once we've done at least ef searches and notice no improvements, or
         // when we've exhausted the search queue.
         while let Some(&(Reverse(OrderedFloat(f)), _)) = search_queue.peek() {
-            let &(OrderedFloat(f_max), _) = res.peek_max().unwrap_or(&initial_max);
+            let f_max = res.peek_max().map(|&(OrderedFloat(d), _)| d).unwrap_or(f32::MAX);
             if f > f_max {
                 break;
             }
             let (_, c) = search_queue.pop().unwrap();
 
-            let proximity = match get_links(rtxn, self.database, self.index, c, level)? {
-                Some(Links { links }) => links.iter().collect::<Vec<ItemId>>(),
-                None => unreachable!("Links must exist"),
-            };
-            for point in proximity {
-                if !visited.insert(point) {
+            let Links { links } =
+                get_links(rtxn, self.database, self.index, c, level)?.expect("Links must exist");
+
+            for point in links.iter() {
+                if !path.insert(point) {
                     continue;
                 }
                 let dist =
@@ -490,18 +484,18 @@ impl<D: Distance> Reader<D> {
         let mut seen = RoaringBitmap::new();
 
         for lvl in (1..=self.max_level).rev() {
-            let neighbours = self.walk_layer(query, &eps, lvl, 1, &mut seen, None, rtxn)?;
+            let neighbours = self.walk_layer(query, &eps, lvl, 1, None, &mut seen, rtxn)?;
             let closest = neighbours.peek_min().map(|(_, n)| n).expect("No neighbor was found");
             eps = vec![*closest];
         }
-        let ef = opt.ef.max(opt.count);
-
-        // clear `seen` since we only care about items on level 0
+        // clear visited set as we only care about level 0
         seen.clear();
+        let ef = opt.ef.max(opt.count);
         let mut neighbours =
-            self.walk_layer(query, &eps, 0, ef, &mut seen, opt.candidates, rtxn)?;
+            self.walk_layer(query, &eps, 0, ef, opt.candidates, &mut seen, rtxn)?;
 
-        // If we still don't have enough nns then do exhaustive search over unseen items
+        // If we still don't have enough nns (e.g. search encountered cyclic subgraphs) then do exhaustive
+        // search over remaining unseen items.
         if neighbours.len() < opt.count {
             let mut cursor = self
                 .database
@@ -520,8 +514,8 @@ impl<D: Distance> Reader<D> {
                     &[id],
                     0,
                     opt.count - neighbours.len(),
-                    &mut seen,
                     opt.candidates,
+                    &mut seen,
                     rtxn,
                 )?;
                 neighbours.extend(more_nns.into_iter());

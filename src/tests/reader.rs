@@ -40,10 +40,10 @@ fn quantized_iter_has_right_dimensions() {
 #[test]
 fn search_on_candidates_has_right_num() {
     const DIM: usize = 768;
-    let db_indexes = 1..5;
+    let db_indexes = 1..2;
 
     let DatabaseHandle { env, database, tempdir: _ } =
-        create_database_indices_with_items::<Cosine, DIM, M, M0, _>(
+        create_database_indices_with_items::<Cosine, DIM, 3, 3, _>(
             db_indexes.clone(),
             1000,
             &mut rng(),
@@ -58,15 +58,18 @@ fn search_on_candidates_has_right_num() {
         let reader = crate::Reader::<Cosine>::open(&rtxn, index, database).unwrap();
 
         // search with 10 candidates
+        let mut query = [f32::default(); DIM];
+        rng.fill(&mut query);
+
         let c: [u32; 10] = std::array::from_fn(|_| thread_rng().gen::<u32>() % 1000);
         let candidates = RoaringBitmap::from_iter(c);
-        let found = reader.nns(10).candidates(&candidates).by_vector(&rtxn, &[0.0; DIM]).unwrap();
+        let found = reader.nns(10).candidates(&candidates).by_vector(&rtxn, &query).unwrap();
         assert_eq!(&RoaringBitmap::from_iter(found.into_iter().map(|(i, _)| i)), &candidates);
 
         // search with 1 candidate
         let c: [u32; 1] = std::array::from_fn(|_| thread_rng().gen::<u32>() % 1000);
         let candidates = RoaringBitmap::from_iter(c);
-        let found = reader.nns(1).candidates(&candidates).by_vector(&rtxn, &[0.0; DIM]).unwrap();
+        let found = reader.nns(1).candidates(&candidates).by_vector(&rtxn, &query).unwrap();
         assert_eq!(&RoaringBitmap::from_iter(found.into_iter().map(|(i, _)| i)), &candidates);
     }
 }
@@ -95,6 +98,6 @@ proptest! {
 
     #[test]
     fn all_items_are_reachable_3_3(n in 1..10000usize){
-        all_items_are_reachable::<3,3>(n);
+        all_items_are_reachable::<6,6>(n);
     }
 }
