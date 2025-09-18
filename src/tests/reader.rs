@@ -26,7 +26,7 @@ fn quantized_iter_has_right_dimensions() {
     let mut vec = [0f32; DIM];
     rng.fill(&mut vec);
     writer.add_item(&mut wtxn, 0, &vec).unwrap();
-    writer.builder(&mut rng).build::<16, 32>(&mut wtxn).unwrap();
+    writer.builder(&mut rng).build::<M, M0>(&mut wtxn).unwrap();
     wtxn.commit().unwrap();
 
     let rtxn = env.read_txn().unwrap();
@@ -40,10 +40,10 @@ fn quantized_iter_has_right_dimensions() {
 #[test]
 fn search_on_candidates_has_right_num() {
     const DIM: usize = 768;
-    let db_indexes = 1..2;
+    let db_indexes = 1..5;
 
     let DatabaseHandle { env, database, tempdir: _ } =
-        create_database_indices_with_items::<Cosine, DIM, 3, 3, _>(
+        create_database_indices_with_items::<Cosine, DIM, M, M0, _>(
             db_indexes.clone(),
             1000,
             &mut rng(),

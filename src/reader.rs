@@ -6,7 +6,7 @@ use std::num::NonZeroUsize;
 use heed::types::DecodeIgnore;
 use heed::RoTxn;
 use min_max_heap::MinMaxHeap;
-use roaring::{MultiOps, RoaringBitmap};
+use roaring::RoaringBitmap;
 
 use crate::distance::Distance;
 use crate::hnsw::ScoredLink;
