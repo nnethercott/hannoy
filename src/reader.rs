@@ -54,10 +54,7 @@ impl<'a, D: Distance> QueryBuilder<'a, D> {
     /// reader.nns(20).by_item(&rtxn, 5);
     /// ```
     pub fn by_item(&self, rtxn: &RoTxn, item: ItemId) -> Result<Option<Vec<(ItemId, f32)>>> {
-        match self.reader.item_vector(rtxn, item)? {
-            Some(vector) => self.by_vector(rtxn, &vector).map(Some),
-            None => Ok(None),
-        }
+        self.reader.nns_by_item(rtxn, item, self)
     }
 
     /// Returns the closest items from the provided `vector`.
@@ -527,6 +524,79 @@ impl<D: Distance> Reader<D> {
 
         Ok(neighbours.drain_asc().map(|(OrderedFloat(f), i)| (i, f)).take(opt.count).collect())
     }
+
+    /// Returns the nearest points to the item id, not including the point itself.
+    ///
+    /// Nearly identical behaviour to `Reader.nns_by_vec` except we only search layer 0 and use the
+    /// `&[item]` instead of the hnsw entrypoints. Since search starts in the true neighbourhood of
+    /// the item fewer comparisons are needed to retrieve the nearest neighbours, making it more
+    /// efficient than simply calling `Reader.nns_by_vec` with the associated vector.
+    fn nns_by_item(
+        &self,
+        rtxn: &RoTxn,
+        item: ItemId,
+        opt: &QueryBuilder<D>,
+    ) -> Result<Option<Vec<(ItemId, f32)>>> {
+        // If we will never find any candidates, return none
+        if opt.candidates.is_some_and(|c| self.item_ids().is_disjoint(c)) {
+            return Ok(None);
+        }
+
+        let Some(vector) = self.item_vector(rtxn, item)? else { return Ok(None) };
+        let vector = UnalignedVector::from_vec(vector);
+        let query = Item { header: D::new_header(&vector), vector };
+
+        // If the number of candidates is less than a given threshold, perform linear search
+        if let Some(candidates) = opt.candidates.filter(|c| c.len() < LINEAR_SEARCH_THRESHOLD) {
+            let mut nns = self.brute_force_search(&query, rtxn, candidates)?;
+            nns.truncate(opt.count);
+            return Ok(Some(nns));
+        }
+
+        // Search over all items except `item`
+        let ef = opt.ef.max(opt.count);
+        let mut seen = RoaringBitmap::new();
+        let candidates = opt.candidates.unwrap_or_else(|| self.item_ids())
+            - &RoaringBitmap::from_iter(std::iter::once(item));
+
+        let mut neighbours =
+            self.walk_layer(&query, &[item], 0, ef, Some(&candidates), &mut seen, rtxn)?;
+
+        // If we still don't have enough nns (e.g. search encountered cyclic subgraphs) then do exhaustive
+        // search over remaining unseen items.
+        if neighbours.len() < opt.count {
+            let mut cursor = self
+                .database
+                .remap_types::<PrefixCodec, DecodeIgnore>()
+                .prefix_iter(rtxn, &Prefix::item(self.index))?
+                .remap_key_type::<KeyCodec>();
+
+            while let Some((key, _)) = cursor.next().transpose()? {
+                let id = key.node.item;
+                if seen.contains(id) {
+                    continue;
+                }
+
+                let more_nns = self.walk_layer(
+                    &query,
+                    &[id],
+                    0,
+                    opt.count - neighbours.len(),
+                    opt.candidates,
+                    &mut seen,
+                    rtxn,
+                )?;
+                neighbours.extend(more_nns.into_iter());
+                if neighbours.len() >= opt.count {
+                    break;
+                }
+            }
+        }
+
+        let found = neighbours.drain_asc().map(|(OrderedFloat(f), i)| (i, f)).take(opt.count).collect();
+        Ok(Some(found))
+    }
+
 
     /// NOTE: a [`crate::Reader`] can't be opened unless updates are commited through a build !
     /// Verify that the whole reader is correctly formed:
