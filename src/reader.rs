@@ -593,10 +593,10 @@ impl<D: Distance> Reader<D> {
             }
         }
 
-        let found = neighbours.drain_asc().map(|(OrderedFloat(f), i)| (i, f)).take(opt.count).collect();
+        let found =
+            neighbours.drain_asc().map(|(OrderedFloat(f), i)| (i, f)).take(opt.count).collect();
         Ok(Some(found))
     }
-
 
     /// NOTE: a [`crate::Reader`] can't be opened unless updates are commited through a build !
     /// Verify that the whole reader is correctly formed:
