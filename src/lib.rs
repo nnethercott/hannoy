@@ -80,7 +80,6 @@ mod node_id;
 mod parallel;
 mod progress;
 mod reader;
-mod roaring;
 mod spaces;
 mod stats;
 mod version;

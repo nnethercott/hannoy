@@ -15,7 +15,7 @@ const PACKED_WORD_BYTES: usize = std::mem::size_of::<BitPackedWord>();
 pub enum Binary {}
 
 impl UnalignedVectorCodec for Binary {
-    fn from_bytes(bytes: &[u8]) -> Result<Cow<UnalignedVector<Self>>, SizeMismatch> {
+    fn from_bytes(bytes: &[u8]) -> Result<Cow<'_, UnalignedVector<Self>>, SizeMismatch> {
         let rem = bytes.len() % PACKED_WORD_BYTES;
         if rem == 0 {
             // safety: `UnalignedVector` is transparent
