@@ -189,11 +189,15 @@ impl fmt::Display for InvalidNodeDecoding {
 
 #[cfg(test)]
 mod tests {
-    use super::{Item, Links, Node, NodeCodec};
-    use crate::{distance::Cosine, internals::UnalignedVector, Distance};
+    use std::borrow::Cow;
+
     use heed::{BytesDecode, BytesEncode};
     use roaring::RoaringBitmap;
-    use std::borrow::Cow;
+
+    use super::{Item, Links, Node, NodeCodec};
+    use crate::distance::Cosine;
+    use crate::internals::UnalignedVector;
+    use crate::Distance;
 
     #[test]
     fn check_bytes_encode_decode() {
