@@ -169,7 +169,8 @@ impl<'a, D: Distance, const M: usize, const M0: usize> HnswBuilder<'a, D, M, M0>
 
         level_groups.into_iter().try_for_each(|grp| {
             grp.into_par_iter().try_for_each(|&(item_id, lvl)| {
-                if cancel_index.fetch_add(1, Relaxed) % CANCELLATION_PROBING == 0 && (self.cancel)()
+                if cancel_index.fetch_add(1, Relaxed).is_multiple_of(CANCELLATION_PROBING)
+                    && (self.cancel)()
                 {
                     Err(Error::BuildCancelled)
                 } else {
@@ -362,7 +363,7 @@ impl<'a, D: Distance, const M: usize, const M0: usize> HnswBuilder<'a, D, M, M0>
         let cancel_index = AtomicUsize::new(0);
 
         links_in_db.into_par_iter().try_for_each(|result| {
-            if cancel_index.fetch_add(1, Ordering::Relaxed) % CANCELLATION_PROBING == 0
+            if cancel_index.fetch_add(1, Ordering::Relaxed).is_multiple_of(CANCELLATION_PROBING)
                 && (self.cancel)()
             {
                 return Err(Error::BuildCancelled);

@@ -1,9 +1,10 @@
 use std::fmt;
 
+use bytemuck::{Pod, Zeroable};
+
 use crate::distance::Distance;
 use crate::node::Item;
 use crate::unaligned_vector::{Binary, UnalignedVector};
-use bytemuck::{Pod, Zeroable};
 
 /// The Hamming distance between two vectors is the number of positions at
 /// which the corresponding symbols are different.
@@ -70,7 +71,7 @@ pub fn hamming_bitwise_fast(u: &[u8], v: &[u8]) -> f32 {
         })
         .sum::<u32>();
 
-    if u.len() % CHUNK_SIZE != 0 {
+    if !u.len().is_multiple_of(CHUNK_SIZE) {
         distance += u
             .chunks_exact(CHUNK_SIZE)
             .remainder()

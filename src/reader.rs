@@ -80,6 +80,7 @@ impl<'a, D: Distance> QueryBuilder<'a, D> {
     /// let (nns, did_cancel) = reader.nns(20).by_item_with_cancellation(&rtxn, 5, cancel_fn)?.unwrap();
     /// # Ok::<(), hannoy::Error>(())
     /// ```
+    #[allow(clippy::type_complexity)]
     pub fn by_item_with_cancellation(
         &self,
         rtxn: &RoTxn,
@@ -382,13 +383,14 @@ impl<D: Distance> Reader<D> {
         index: u16,
         metadata: &Metadata,
     ) -> Result<()> {
-        use crate::unaligned_vector::UnalignedVectorCodec;
+        use std::collections::VecDeque;
+        use std::sync::atomic::{AtomicUsize, Ordering};
 
         use heed::types::Bytes;
         use madvise::AccessPattern;
-        use std::collections::VecDeque;
-        use std::sync::atomic::{AtomicUsize, Ordering};
         use tracing::warn;
+
+        use crate::unaligned_vector::UnalignedVectorCodec;
 
         let page_size = page_size::get();
         let mut available_memory: usize = std::env::var(READER_AVAILABLE_MEMORY)
@@ -619,7 +621,7 @@ impl<D: Distance> Reader<D> {
 
         let mut path = RoaringBitmap::new();
         for _ in (1..=self.max_level).rev() {
-            let neighbours = visitor.visit(query, &self, rtxn, &mut path, &|| false)?.into_inner();
+            let neighbours = visitor.visit(query, self, rtxn, &mut path, &|| false)?.into_inner();
             let closest = neighbours.peek_min().map(|(_, n)| n).expect("No neighbor was found");
 
             visitor.eps = vec![*closest];
@@ -650,7 +652,7 @@ impl<D: Distance> Reader<D> {
         }
 
         let mut neighbours =
-            return_if_cancelled!(visitor.visit(query, &self, rtxn, &mut path, cancel_fn)?);
+            return_if_cancelled!(visitor.visit(query, self, rtxn, &mut path, cancel_fn)?);
 
         // If we still don't have enough nns (e.g. search encountered cyclic subgraphs) then do exhaustive
         // search over remaining unseen items.
@@ -671,7 +673,7 @@ impl<D: Distance> Reader<D> {
                 visitor.ef = opt.count - neighbours.len();
 
                 let more_nns =
-                    return_if_cancelled!(visitor.visit(query, &self, rtxn, &mut path, cancel_fn)?);
+                    return_if_cancelled!(visitor.visit(query, self, rtxn, &mut path, cancel_fn)?);
 
                 neighbours.extend(more_nns.into_iter());
                 if neighbours.len() >= opt.count {
@@ -691,6 +693,7 @@ impl<D: Distance> Reader<D> {
     /// `&[item]` instead of the hnsw entrypoints. Since search starts in the true neighbourhood of
     /// the item fewer comparisons are needed to retrieve the nearest neighbours, making it more
     /// efficient than simply calling `Reader.nns_by_vec` with the associated vector.
+    #[allow(clippy::type_complexity)]
     fn nns_by_item(
         &self,
         rtxn: &RoTxn,
@@ -741,7 +744,7 @@ impl<D: Distance> Reader<D> {
             };
         }
         let mut neighbours =
-            return_if_cancelled!(visitor.visit(&query, &self, rtxn, &mut path, cancel_fn)?);
+            return_if_cancelled!(visitor.visit(&query, self, rtxn, &mut path, cancel_fn)?);
 
         // If we still don't have enough nns (e.g. search encountered cyclic subgraphs) then do exhaustive
         // search over remaining unseen items.
@@ -763,7 +766,7 @@ impl<D: Distance> Reader<D> {
                 visitor.ef = opt.count - neighbours.len();
 
                 let more_nns =
-                    return_if_cancelled!(visitor.visit(&query, &self, rtxn, &mut path, cancel_fn)?);
+                    return_if_cancelled!(visitor.visit(&query, self, rtxn, &mut path, cancel_fn)?);
                 neighbours.extend(more_nns.into_iter());
                 if neighbours.len() >= opt.count {
                     break;

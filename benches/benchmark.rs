@@ -1,6 +1,8 @@
-use hannoy::{distances::Cosine, Database, Writer};
+use hannoy::distances::Cosine;
+use hannoy::{Database, Writer};
 use heed::{Env, EnvOpenOptions, RwTxn};
-use rand::{rngs::StdRng, Rng, SeedableRng};
+use rand::rngs::StdRng;
+use rand::{Rng, SeedableRng};
 use tempfile::tempdir;
 
 static M: usize = 16;
@@ -31,7 +33,7 @@ mod hnsw {
     fn create_db_and_fill_with_vecs<const DIM: usize>(
         env: &Env,
         size: usize,
-    ) -> hannoy::Result<(Writer<Cosine>, RwTxn, Database<Cosine>)> {
+    ) -> hannoy::Result<(Writer<Cosine>, RwTxn<'_>, Database<Cosine>)> {
         let mut wtxn = env.write_txn().unwrap();
 
         let db: Database<Cosine> = env.create_database(&mut wtxn, None)?;
