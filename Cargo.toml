@@ -1,7 +1,7 @@
 [package]
 name = "hannoy"
 description = "HNSW Approximate Nearest Neighbors in Rust, based on LMDB and optimized for memory usage"
-version = "0.0.8"
+version = "0.0.9-nested-rtxns"
 repository = "https://github.com/nnethercott/hannoy"
 keywords = [
     "HNSW",
@@ -27,7 +27,7 @@ crate-type = ["cdylib", "rlib"]
 bytemuck = { version = "1.21.0", features = ["derive", "extern_crate_alloc"] }
 byteorder = "1.5.0"
 hashbrown = "0.15.4"
-heed = { version = "0.22.0", default-features = false }
+heed = { version = "0.22.1-nested-rtxns", default-features = false }
 min-max-heap = "1.3.0"
 page_size = "0.6.0"
 papaya = "0.2.3"
@@ -52,7 +52,7 @@ madvise = "0.1.0"
 anyhow = "1.0.95"
 approx = "0.5.1"
 arbitrary = { version = "1.4.1", features = ["derive"] }
-arroy = "0.6.1"
+arroy = { version = "0.6.4-nested-rtxns", git = "https://github.com/meilisearch/arroy", "tag" = "v0.6.4-nested-rtxns", default-features = false }
 clap = { version = "4.5.24", features = ["derive"] }
 divan = { version = "3.0.5", package = "codspeed-divan-compat" }
 env_logger = "0.11.6"
