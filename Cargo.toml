@@ -56,6 +56,7 @@ arroy = "0.6.1"
 clap = { version = "4.5.24", features = ["derive"] }
 divan = { version = "3.0.5", package = "codspeed-divan-compat" }
 env_logger = "0.11.6"
+hnsw_rs = "0.3.2"
 insta = "1.42.0"
 instant-distance = "0.6.1"
 proptest = "1.6.0"
@@ -86,4 +87,8 @@ required-features = ["python"]
 
 [[bench]]
 name = "benchmark"
+harness = false
+
+[[bench]]
+name = "speed"
 harness = false
