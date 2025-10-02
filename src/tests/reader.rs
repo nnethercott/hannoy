@@ -101,3 +101,35 @@ proptest! {
         all_items_are_reachable::<6,6>(n);
     }
 }
+
+#[test]
+fn search_by_item_does_not_contain_item() {
+    const DIM: usize = 768;
+    let mut rng = rng();
+
+    let DatabaseHandle { env, database, tempdir: _ } =
+        create_database_indices_with_items::<Cosine, DIM, M, M0, _>(0..1, 100, &mut rng);
+    let rtxn = env.read_txn().unwrap();
+
+    let reader = crate::Reader::<Cosine>::open(&rtxn, 0, database).unwrap();
+
+    let found = reader.nns(10).by_item(&rtxn, 0).unwrap().unwrap();
+    assert!(found.len() == 10);
+    assert!(!found.contains(&(0, 0.0)))
+}
+
+#[test]
+fn search_by_item_returns_none_if_not_exists() {
+    const DIM: usize = 768;
+    let mut rng = rng();
+
+    let DatabaseHandle { env, database, tempdir: _ } =
+        create_database_indices_with_items::<Cosine, DIM, M, M0, _>(0..1, 100, &mut rng);
+    let rtxn = env.read_txn().unwrap();
+
+    let reader = crate::Reader::<Cosine>::open(&rtxn, 0, database).unwrap();
+
+    // use an item id that does not exist
+    let found = reader.nns(10).by_item(&rtxn, 101).unwrap();
+    assert!(found.is_none());
+}
