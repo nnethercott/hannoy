@@ -556,8 +556,8 @@ impl<D: Distance> Reader<D> {
         // Search over all items except `item`
         let ef = opt.ef.max(opt.count);
         let mut seen = RoaringBitmap::new();
-        let candidates = opt.candidates.unwrap_or_else(|| self.item_ids())
-            - &RoaringBitmap::from_iter(std::iter::once(item));
+        let mut candidates = opt.candidates.unwrap_or_else(|| self.item_ids()).clone();
+        candidates.remove(item);
 
         let mut neighbours =
             self.walk_layer(&query, &[item], 0, ef, Some(&candidates), &mut seen, rtxn)?;
