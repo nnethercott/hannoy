@@ -54,7 +54,13 @@ impl<'a, D: Distance> QueryBuilder<'a, D> {
     /// reader.nns(20).by_item(&rtxn, 5);
     /// ```
     pub fn by_item(&self, rtxn: &RoTxn, item: ItemId) -> Result<Option<Vec<(ItemId, f32)>>> {
-        self.reader.nns_by_item(rtxn, item, self)
+        self.reader.nns_by_item(rtxn, item, self).map(|res| match res {
+            Some(SearchResult::Done(items)) => Some(items),
+            Some(SearchResult::Cancelled(_)) => {
+                unreachable!("cancellation only possible using by_item_with_cancellation")
+            }
+            None => None,
+        })
     }
 
     /// Returns the closest items from the provided `vector`.
@@ -78,7 +84,13 @@ impl<'a, D: Distance> QueryBuilder<'a, D> {
 
         let vector = UnalignedVector::from_slice(vector);
         let item = Item { header: D::new_header(&vector), vector };
-        self.reader.nns_by_vec(rtxn, &item, self)
+
+        match self.reader.nns_by_vec(rtxn, &item, self)? {
+            SearchResult::Done(items) => Ok(items),
+            SearchResult::Cancelled(_) => {
+                unreachable!("cancellation only possible using by_vec_with_cancellation")
+            }
+        }
     }
 
     /// Specify a subset of candidates to inspect. Filters out everything else.
@@ -114,11 +126,100 @@ impl<'a, D: Distance> QueryBuilder<'a, D> {
     }
 }
 
+enum SearchResult {
+    Done(Vec<(ItemId, f32)>),
+    Cancelled(Vec<(ItemId, f32)>),
+}
+
+struct Visitor<'a> {
+    pub eps: Vec<ItemId>,
+    pub level: usize,
+    pub ef: usize,
+    pub candidates: Option<&'a RoaringBitmap>,
+}
+impl<'a> Visitor<'a> {
+    pub fn new(
+        eps: Vec<ItemId>,
+        level: usize,
+        ef: usize,
+        candidates: Option<&'a RoaringBitmap>,
+    ) -> Self {
+        Self { eps, level, ef, candidates }
+    }
+
+    /// Iteratively traverse a given level of the HNSW graph, updating the search path history.
+    /// Returns a Min-Max heap of size ef nearest neighbours to the query in that layer.
+    #[allow(clippy::too_many_arguments)]
+    pub fn visit<D: Distance>(
+        &self,
+        query: &Item<D>,
+        reader: &Reader<D>,
+        rtxn: &RoTxn,
+        path: &mut RoaringBitmap,
+    ) -> Result<MinMaxHeap<ScoredLink>> {
+        let mut search_queue = BinaryHeap::new();
+        let mut res = MinMaxHeap::with_capacity(self.ef);
+
+        // Register all entry points as visited and populate candidates
+        for &ep in &self.eps[..] {
+            let ve = get_item(reader.database, reader.index, rtxn, ep)?.unwrap();
+            let dist = D::distance(query, &ve);
+
+            search_queue.push((Reverse(OrderedFloat(dist)), ep));
+            path.insert(ep);
+
+            if self.candidates.is_none_or(|c| c.contains(ep)) {
+                res.push((OrderedFloat(dist), ep));
+            }
+        }
+
+        // Stop occurs either once we've done at least ef searches and notice no improvements, or
+        // when we've exhausted the search queue.
+        while let Some(&(Reverse(OrderedFloat(f)), _)) = search_queue.peek() {
+            let f_max = res.peek_max().map(|&(OrderedFloat(d), _)| d).unwrap_or(f32::MAX);
+            if f > f_max {
+                break;
+            }
+            let (_, c) = search_queue.pop().unwrap();
+
+            let Links { links } = get_links(rtxn, reader.database, reader.index, c, self.level)?
+                .expect("Links must exist");
+
+            for point in links.iter() {
+                if !path.insert(point) {
+                    continue;
+                }
+                let dist = D::distance(
+                    query,
+                    &get_item(reader.database, reader.index, rtxn, point)?.unwrap(),
+                );
+
+                // The search queue can take points that aren't included in the (optional)
+                // candidates bitmap, but the final result must *not* include them.
+                if res.len() < self.ef || dist < f_max {
+                    search_queue.push((Reverse(OrderedFloat(dist)), point));
+                    if let Some(c) = self.candidates {
+                        if !c.contains(point) {
+                            continue;
+                        }
+                    }
+                    if res.len() == self.ef {
+                        let _ = res.push_pop_max((OrderedFloat(dist), point));
+                    } else {
+                        res.push((OrderedFloat(dist), point));
+                    }
+                }
+            }
+        }
+        Ok(res)
+    }
+}
+
 /// A reader over the hannoy hnsw graph
 #[derive(Debug)]
 pub struct Reader<D: Distance> {
-    database: Database<D>,
-    index: u16,
+    pub database: Database<D>,
+    pub index: u16,
     entry_points: Vec<ItemId>,
     max_level: usize,
     dimensions: usize,
@@ -356,93 +457,27 @@ impl<D: Distance> Reader<D> {
         QueryBuilder { reader: self, candidates: None, count, ef: DEFAULT_EF_SEARCH }
     }
 
-    /// Iteratively traverse a given level of the HNSW graph, updating the search path history.
-    /// Returns a Min-Max heap of size ef nearest neighbours to the query in that layer.
-    #[allow(clippy::too_many_arguments)]
-    fn walk_layer(
-        &self,
-        query: &Item<D>,
-        eps: &[ItemId],
-        level: usize,
-        ef: usize,
-        candidates: Option<&RoaringBitmap>,
-        path: &mut RoaringBitmap,
-        rtxn: &RoTxn,
-    ) -> Result<MinMaxHeap<ScoredLink>> {
-        let mut search_queue = BinaryHeap::new();
-        let mut res = MinMaxHeap::with_capacity(ef);
-
-        // Register all entry points as visited and populate candidates
-        for &ep in eps {
-            let ve = get_item(self.database, self.index, rtxn, ep)?.unwrap();
-            let dist = D::distance(query, &ve);
-
-            search_queue.push((Reverse(OrderedFloat(dist)), ep));
-            path.insert(ep);
-
-            if candidates.is_none_or(|c| c.contains(ep)) {
-                res.push((OrderedFloat(dist), ep));
-            }
-        }
-
-        // Stop occurs either once we've done at least ef searches and notice no improvements, or
-        // when we've exhausted the search queue.
-        while let Some(&(Reverse(OrderedFloat(f)), _)) = search_queue.peek() {
-            let f_max = res.peek_max().map(|&(OrderedFloat(d), _)| d).unwrap_or(f32::MAX);
-            if f > f_max {
-                break;
-            }
-            let (_, c) = search_queue.pop().unwrap();
-
-            let Links { links } =
-                get_links(rtxn, self.database, self.index, c, level)?.expect("Links must exist");
-
-            for point in links.iter() {
-                if !path.insert(point) {
-                    continue;
-                }
-                let dist =
-                    D::distance(query, &get_item(self.database, self.index, rtxn, point)?.unwrap());
-
-                // The search queue can take points that aren't included in the (optional)
-                // candidates bitmap, but the final result must *not* include them.
-                if res.len() < ef || dist < f_max {
-                    search_queue.push((Reverse(OrderedFloat(dist)), point));
-                    if let Some(c) = candidates {
-                        if !c.contains(point) {
-                            continue;
-                        }
-                    }
-                    if res.len() == ef {
-                        let _ = res.push_pop_max((OrderedFloat(dist), point));
-                    } else {
-                        res.push((OrderedFloat(dist), point));
-                    }
-                }
-            }
-        }
-        Ok(res)
-    }
-
     fn nns_by_vec(
         &self,
         rtxn: &RoTxn,
         query: &Item<D>,
         opt: &QueryBuilder<D>,
-    ) -> Result<Vec<(ItemId, f32)>> {
+    ) -> Result<SearchResult> {
+        use SearchResult::*;
+
         // If we will never find any candidates, return an empty vector
         if opt.candidates.is_some_and(|c| self.item_ids().is_disjoint(c)) {
-            return Ok(Vec::new());
+            return Ok(Done(Vec::new()));
         }
 
         // If the number of candidates is less than a given threshold, perform linear search
         if let Some(candidates) = opt.candidates.filter(|c| c.len() < LINEAR_SEARCH_THRESHOLD) {
-            let mut nns = self.brute_force_search(query, rtxn, candidates)?;
-            nns.truncate(opt.count);
-            return Ok(nns);
+            return self.brute_force_search(query, rtxn, candidates, opt.count);
         }
 
-        self.hnsw_search(query, rtxn, opt)
+        // exhaustive search
+        let cancel_fn = || false;
+        self.hnsw_search(query, rtxn, opt, cancel_fn)
     }
 
     /// Directly retrieves items in the candidate list and ranks them by distance to the query.
@@ -451,7 +486,10 @@ impl<D: Distance> Reader<D> {
         query: &Item<D>,
         rtxn: &RoTxn,
         candidates: &RoaringBitmap,
-    ) -> Result<Vec<(ItemId, f32)>> {
+        count: usize,
+    ) -> Result<SearchResult> {
+        use SearchResult::*;
+
         let mut item_distances = Vec::with_capacity(candidates.len() as usize);
 
         for item_id in candidates {
@@ -462,7 +500,9 @@ impl<D: Distance> Reader<D> {
             item_distances.push((item_id, distance));
         }
         item_distances.sort_by_key(|(_, dist)| OrderedFloat(*dist));
-        Ok(item_distances)
+        item_distances.truncate(count);
+
+        Ok(Done(item_distances))
     }
 
     /// Hnsw search according to arXiv:1603.09320.
@@ -471,25 +511,35 @@ impl<D: Distance> Reader<D> {
     /// is controlled by `opt.ef`. Since the graph is not necessarily acyclic, search may become
     /// "trapped" in a local sub-graph with fewer elements than `opt.count` - to account for this
     /// we run an expensive exhaustive search at the end if fewer nns were returned.
+    ///
+    /// To break out of search early, users may wish to provide a `cancel_fn` which terminates the
+    /// execution of the hnsw search and returns partial results so far.
     fn hnsw_search(
         &self,
         query: &Item<D>,
         rtxn: &RoTxn,
         opt: &QueryBuilder<D>,
-    ) -> Result<Vec<(ItemId, f32)>> {
-        let mut eps = self.entry_points.clone();
-        let mut seen = RoaringBitmap::new();
+        cancel_fn: impl Fn() -> bool,
+    ) -> Result<SearchResult> {
+        use SearchResult::*;
 
-        for lvl in (1..=self.max_level).rev() {
-            let neighbours = self.walk_layer(query, &eps, lvl, 1, None, &mut seen, rtxn)?;
+        let mut visitor = Visitor::new(self.entry_points.clone(), self.max_level, 1, None);
+
+        let mut path = RoaringBitmap::new();
+        for _ in (1..=self.max_level).rev() {
+            let neighbours = visitor.visit(query, &self, rtxn, &mut path)?;
             let closest = neighbours.peek_min().map(|(_, n)| n).expect("No neighbor was found");
-            eps = vec![*closest];
+
+            visitor.eps = vec![*closest];
+            visitor.level -= 1;
         }
         // clear visited set as we only care about level 0
-        seen.clear();
-        let ef = opt.ef.max(opt.count);
-        let mut neighbours =
-            self.walk_layer(query, &eps, 0, ef, opt.candidates, &mut seen, rtxn)?;
+        path.clear();
+        debug_assert!(visitor.level == 0);
+
+        visitor.ef = opt.ef.max(opt.count);
+        visitor.candidates = opt.candidates;
+        let mut neighbours = visitor.visit(query, &self, rtxn, &mut path)?;
 
         // If we still don't have enough nns (e.g. search encountered cyclic subgraphs) then do exhaustive
         // search over remaining unseen items.
@@ -502,19 +552,15 @@ impl<D: Distance> Reader<D> {
 
             while let Some((key, _)) = cursor.next().transpose()? {
                 let id = key.node.item;
-                if seen.contains(id) {
+                if path.contains(id) {
                     continue;
                 }
 
-                let more_nns = self.walk_layer(
-                    query,
-                    &[id],
-                    0,
-                    opt.count - neighbours.len(),
-                    opt.candidates,
-                    &mut seen,
-                    rtxn,
-                )?;
+                visitor.eps = vec![id];
+                visitor.ef = opt.count - neighbours.len();
+
+                let more_nns = visitor.visit(query, &self, rtxn, &mut path)?;
+
                 neighbours.extend(more_nns.into_iter());
                 if neighbours.len() >= opt.count {
                     break;
@@ -522,7 +568,9 @@ impl<D: Distance> Reader<D> {
             }
         }
 
-        Ok(neighbours.drain_asc().map(|(OrderedFloat(f), i)| (i, f)).take(opt.count).collect())
+        let found =
+            neighbours.drain_asc().map(|(OrderedFloat(f), i)| (i, f)).take(opt.count).collect();
+        Ok(Done(found))
     }
 
     /// Returns the nearest points to the item id, not including the point itself.
@@ -536,7 +584,9 @@ impl<D: Distance> Reader<D> {
         rtxn: &RoTxn,
         item: ItemId,
         opt: &QueryBuilder<D>,
-    ) -> Result<Option<Vec<(ItemId, f32)>>> {
+    ) -> Result<Option<SearchResult>> {
+        use SearchResult::*;
+
         // If we will never find any candidates, return none
         if opt.candidates.is_some_and(|c| self.item_ids().is_disjoint(c)) {
             return Ok(None);
@@ -548,19 +598,19 @@ impl<D: Distance> Reader<D> {
 
         // If the number of candidates is less than a given threshold, perform linear search
         if let Some(candidates) = opt.candidates.filter(|c| c.len() < LINEAR_SEARCH_THRESHOLD) {
-            let mut nns = self.brute_force_search(&query, rtxn, candidates)?;
-            nns.truncate(opt.count);
+            let nns = self.brute_force_search(&query, rtxn, candidates, opt.count)?;
             return Ok(Some(nns));
         }
 
         // Search over all items except `item`
         let ef = opt.ef.max(opt.count);
-        let mut seen = RoaringBitmap::new();
+        let mut path = RoaringBitmap::new();
         let mut candidates = opt.candidates.unwrap_or_else(|| self.item_ids()).clone();
         candidates.remove(item);
 
-        let mut neighbours =
-            self.walk_layer(&query, &[item], 0, ef, Some(&candidates), &mut seen, rtxn)?;
+        let mut walker = Visitor::new(vec![item], 0, ef, Some(&candidates));
+
+        let mut neighbours = walker.visit(&query, &self, rtxn, &mut path)?;
 
         // If we still don't have enough nns (e.g. search encountered cyclic subgraphs) then do exhaustive
         // search over remaining unseen items.
@@ -573,19 +623,15 @@ impl<D: Distance> Reader<D> {
 
             while let Some((key, _)) = cursor.next().transpose()? {
                 let id = key.node.item;
-                if seen.contains(id) {
+                if path.contains(id) {
                     continue;
                 }
 
-                let more_nns = self.walk_layer(
-                    &query,
-                    &[id],
-                    0,
-                    opt.count - neighbours.len(),
-                    opt.candidates,
-                    &mut seen,
-                    rtxn,
-                )?;
+                // update walker
+                walker.eps = vec![id];
+                walker.ef = opt.count - neighbours.len();
+
+                let more_nns = walker.visit(&query, &self, rtxn, &mut path)?;
                 neighbours.extend(more_nns.into_iter());
                 if neighbours.len() >= opt.count {
                     break;
@@ -593,9 +639,9 @@ impl<D: Distance> Reader<D> {
             }
         }
 
-        let found =
+        let found: Vec<_> =
             neighbours.drain_asc().map(|(OrderedFloat(f), i)| (i, f)).take(opt.count).collect();
-        Ok(Some(found))
+        Ok(Some(Done(found)))
     }
 
     /// NOTE: a [`crate::Reader`] can't be opened unless updates are commited through a build !
