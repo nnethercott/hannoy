@@ -687,9 +687,26 @@ impl<D: Distance> Reader<D> {
         let mut candidates = opt.candidates.unwrap_or_else(|| self.item_ids()).clone();
         candidates.remove(item);
 
-        let mut walker = Visitor::new(vec![item], 0, ef, Some(&candidates));
+        let mut visitor = Visitor::new(vec![item], 0, ef, Some(&candidates));
 
-        let mut neighbours = walker.visit(&query, &self, rtxn, &mut path, cancel_fn)?.into_inner();
+        macro_rules! return_if_cancelled {
+            ($completion: expr) => {
+                match $completion {
+                    Completion::Done(done) => done,
+                    cancelled => {
+                        return Ok(Some(cancelled.map(|mut found| {
+                            found
+                                .drain_asc()
+                                .map(|(OrderedFloat(f), i)| (i, f))
+                                .take(opt.count)
+                                .collect()
+                        })))
+                    }
+                }
+            };
+        }
+        let mut neighbours =
+            return_if_cancelled!(visitor.visit(&query, &self, rtxn, &mut path, cancel_fn)?);
 
         // If we still don't have enough nns (e.g. search encountered cyclic subgraphs) then do exhaustive
         // search over remaining unseen items.
@@ -707,11 +724,11 @@ impl<D: Distance> Reader<D> {
                 }
 
                 // update walker
-                walker.eps = vec![id];
-                walker.ef = opt.count - neighbours.len();
+                visitor.eps = vec![id];
+                visitor.ef = opt.count - neighbours.len();
 
                 let more_nns =
-                    walker.visit(&query, &self, rtxn, &mut path, cancel_fn)?.into_inner();
+                    return_if_cancelled!(visitor.visit(&query, &self, rtxn, &mut path, cancel_fn)?);
                 neighbours.extend(more_nns.into_iter());
                 if neighbours.len() >= opt.count {
                     break;

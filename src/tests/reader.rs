@@ -150,9 +150,19 @@ fn search_cancellation_works() {
     // use an item id that does not exist
     let query: [f32; DIM] = std::array::from_fn(|_| rng.gen());
 
-    let cancel_fn = || true;
+    // by vector
+    let (_, did_not_cancel) =
+        reader.nns(10).by_vector_with_cancellation(&rtxn, &query, || false).unwrap();
+    assert!(!did_not_cancel);
     let (_, did_cancel) =
-        reader.nns(10).by_vector_with_cancellation(&rtxn, &query, cancel_fn).unwrap();
+        reader.nns(10).by_vector_with_cancellation(&rtxn, &query, || true).unwrap();
+    assert!(did_cancel);
 
+    // by item
+    let (_, did_not_cancel) =
+        reader.nns(10).by_item_with_cancellation(&rtxn, 0, || false).unwrap().unwrap();
+    assert!(!did_not_cancel);
+    let (_, did_cancel) =
+        reader.nns(10).by_item_with_cancellation(&rtxn, 0, || true).unwrap().unwrap();
     assert!(did_cancel);
 }
