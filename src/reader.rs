@@ -54,11 +54,25 @@ impl<'a, D: Distance> QueryBuilder<'a, D> {
     /// reader.nns(20).by_item(&rtxn, 5);
     /// ```
     pub fn by_item(&self, rtxn: &RoTxn, item: ItemId) -> Result<Option<Vec<(ItemId, f32)>>> {
-        self.reader.nns_by_item(rtxn, item, self).map(|res| match res {
-            Some(SearchResult::Done(items)) => Some(items),
-            Some(SearchResult::Cancelled(_)) => {
+        self.reader.nns_by_item(rtxn, item, self, || false).map(|res| match res {
+            Some(Completion::Done(items)) => Some(items),
+            Some(Completion::Cancelled(_)) => {
                 unreachable!("cancellation only possible using by_item_with_cancellation")
             }
+            None => None,
+        })
+    }
+
+    /// FIXME: add docs later
+    pub fn by_item_with_cancellation(
+        &self,
+        rtxn: &RoTxn,
+        item: ItemId,
+        cancel_fn: impl Fn() -> bool,
+    ) -> Result<Option<(Vec<(ItemId, f32)>, bool)>> {
+        self.reader.nns_by_item(rtxn, item, self, cancel_fn).map(|res| match res {
+            Some(Completion::Done(done)) => Some((done, false)),
+            Some(Completion::Cancelled(cancelled)) => Some((cancelled, true)),
             None => None,
         })
     }
@@ -85,11 +99,31 @@ impl<'a, D: Distance> QueryBuilder<'a, D> {
         let vector = UnalignedVector::from_slice(vector);
         let item = Item { header: D::new_header(&vector), vector };
 
-        match self.reader.nns_by_vec(rtxn, &item, self)? {
-            SearchResult::Done(items) => Ok(items),
-            SearchResult::Cancelled(_) => {
-                unreachable!("cancellation only possible using by_vec_with_cancellation")
-            }
+        let cancel_fn = || false;
+        self.reader.nns_by_vec(rtxn, &item, self, cancel_fn).map(|res| res.into_inner())
+    }
+
+    /// FIXME: clean up this doc later
+    pub fn by_vector_with_cancellation(
+        &self,
+        rtxn: &RoTxn,
+        vector: &'a [f32],
+        cancel_fn: impl Fn() -> bool,
+    ) -> Result<(Vec<(ItemId, f32)>, bool)> {
+        if vector.len() != self.reader.dimensions() {
+            return Err(Error::InvalidVecDimension {
+                expected: self.reader.dimensions(),
+                received: vector.len(),
+            });
+        }
+
+        let vector = UnalignedVector::from_slice(vector);
+        let item = Item { header: D::new_header(&vector), vector };
+
+        let nns = self.reader.nns_by_vec(rtxn, &item, self, cancel_fn)?;
+        match nns {
+            Completion::Done(done) => Ok((done, false)),
+            Completion::Cancelled(cancelled) => Ok((cancelled, true)),
         }
     }
 
@@ -126,9 +160,23 @@ impl<'a, D: Distance> QueryBuilder<'a, D> {
     }
 }
 
-enum SearchResult {
-    Done(Vec<(ItemId, f32)>),
-    Cancelled(Vec<(ItemId, f32)>),
+enum Completion<T> {
+    Done(T),
+    Cancelled(T),
+}
+impl<T> Completion<T> {
+    pub fn into_inner(self) -> T {
+        match self {
+            Completion::Done(inner) => inner,
+            Completion::Cancelled(inner) => inner,
+        }
+    }
+    pub fn map<U>(self, op: impl FnOnce(T) -> U) -> Completion<U> {
+        match self {
+            Self::Done(inner) => Completion::Done(op(inner)),
+            Self::Cancelled(inner) => Completion::Cancelled(op(inner)),
+        }
+    }
 }
 
 struct Visitor<'a> {
@@ -156,7 +204,10 @@ impl<'a> Visitor<'a> {
         reader: &Reader<D>,
         rtxn: &RoTxn,
         path: &mut RoaringBitmap,
-    ) -> Result<MinMaxHeap<ScoredLink>> {
+        cancel_fn: &impl Fn() -> bool,
+    ) -> Result<Completion<MinMaxHeap<ScoredLink>>> {
+        use Completion::*;
+
         let mut search_queue = BinaryHeap::new();
         let mut res = MinMaxHeap::with_capacity(self.ef);
 
@@ -210,16 +261,20 @@ impl<'a> Visitor<'a> {
                     }
                 }
             }
+
+            if cancel_fn() {
+                return Ok(Cancelled(res));
+            }
         }
-        Ok(res)
+        Ok(Done(res))
     }
 }
 
 /// A reader over the hannoy hnsw graph
 #[derive(Debug)]
 pub struct Reader<D: Distance> {
-    pub database: Database<D>,
-    pub index: u16,
+    pub(crate) database: Database<D>,
+    pub(crate) index: u16,
     entry_points: Vec<ItemId>,
     max_level: usize,
     dimensions: usize,
@@ -462,8 +517,9 @@ impl<D: Distance> Reader<D> {
         rtxn: &RoTxn,
         query: &Item<D>,
         opt: &QueryBuilder<D>,
-    ) -> Result<SearchResult> {
-        use SearchResult::*;
+        cancel_fn: impl Fn() -> bool,
+    ) -> Result<Completion<Vec<(ItemId, f32)>>> {
+        use Completion::*;
 
         // If we will never find any candidates, return an empty vector
         if opt.candidates.is_some_and(|c| self.item_ids().is_disjoint(c)) {
@@ -476,19 +532,19 @@ impl<D: Distance> Reader<D> {
         }
 
         // exhaustive search
-        let cancel_fn = || false;
         self.hnsw_search(query, rtxn, opt, cancel_fn)
     }
 
     /// Directly retrieves items in the candidate list and ranks them by distance to the query.
+    //FIXME: need to add cancellation here!
     fn brute_force_search(
         &self,
         query: &Item<D>,
         rtxn: &RoTxn,
         candidates: &RoaringBitmap,
         count: usize,
-    ) -> Result<SearchResult> {
-        use SearchResult::*;
+    ) -> Result<Completion<Vec<(ItemId, f32)>>> {
+        use Completion::*;
 
         let mut item_distances = Vec::with_capacity(candidates.len() as usize);
 
@@ -520,14 +576,15 @@ impl<D: Distance> Reader<D> {
         rtxn: &RoTxn,
         opt: &QueryBuilder<D>,
         cancel_fn: impl Fn() -> bool,
-    ) -> Result<SearchResult> {
-        use SearchResult::*;
+    ) -> Result<Completion<Vec<(ItemId, f32)>>> {
+        use Completion::*;
 
+        let cancel_fn = &cancel_fn;
         let mut visitor = Visitor::new(self.entry_points.clone(), self.max_level, 1, None);
 
         let mut path = RoaringBitmap::new();
         for _ in (1..=self.max_level).rev() {
-            let neighbours = visitor.visit(query, &self, rtxn, &mut path)?;
+            let neighbours = visitor.visit(query, &self, rtxn, &mut path, &|| false)?.into_inner();
             let closest = neighbours.peek_min().map(|(_, n)| n).expect("No neighbor was found");
 
             visitor.eps = vec![*closest];
@@ -539,7 +596,26 @@ impl<D: Distance> Reader<D> {
 
         visitor.ef = opt.ef.max(opt.count);
         visitor.candidates = opt.candidates;
-        let mut neighbours = visitor.visit(query, &self, rtxn, &mut path)?;
+
+        macro_rules! return_if_cancelled {
+            ($completion: expr) => {
+                match $completion {
+                    Completion::Done(done) => done,
+                    cancelled => {
+                        return Ok(cancelled.map(|mut found| {
+                            found
+                                .drain_asc()
+                                .map(|(OrderedFloat(f), i)| (i, f))
+                                .take(opt.count)
+                                .collect()
+                        }))
+                    }
+                }
+            };
+        }
+
+        let mut neighbours =
+            return_if_cancelled!(visitor.visit(query, &self, rtxn, &mut path, cancel_fn)?);
 
         // If we still don't have enough nns (e.g. search encountered cyclic subgraphs) then do exhaustive
         // search over remaining unseen items.
@@ -559,7 +635,8 @@ impl<D: Distance> Reader<D> {
                 visitor.eps = vec![id];
                 visitor.ef = opt.count - neighbours.len();
 
-                let more_nns = visitor.visit(query, &self, rtxn, &mut path)?;
+                let more_nns =
+                    return_if_cancelled!(visitor.visit(query, &self, rtxn, &mut path, cancel_fn)?);
 
                 neighbours.extend(more_nns.into_iter());
                 if neighbours.len() >= opt.count {
@@ -584,8 +661,10 @@ impl<D: Distance> Reader<D> {
         rtxn: &RoTxn,
         item: ItemId,
         opt: &QueryBuilder<D>,
-    ) -> Result<Option<SearchResult>> {
-        use SearchResult::*;
+        cancel_fn: impl Fn() -> bool,
+    ) -> Result<Option<Completion<Vec<(ItemId, f32)>>>> {
+        use Completion::*;
+        let cancel_fn = &cancel_fn;
 
         // If we will never find any candidates, return none
         if opt.candidates.is_some_and(|c| self.item_ids().is_disjoint(c)) {
@@ -610,7 +689,7 @@ impl<D: Distance> Reader<D> {
 
         let mut walker = Visitor::new(vec![item], 0, ef, Some(&candidates));
 
-        let mut neighbours = walker.visit(&query, &self, rtxn, &mut path)?;
+        let mut neighbours = walker.visit(&query, &self, rtxn, &mut path, cancel_fn)?.into_inner();
 
         // If we still don't have enough nns (e.g. search encountered cyclic subgraphs) then do exhaustive
         // search over remaining unseen items.
@@ -631,7 +710,8 @@ impl<D: Distance> Reader<D> {
                 walker.eps = vec![id];
                 walker.ef = opt.count - neighbours.len();
 
-                let more_nns = walker.visit(&query, &self, rtxn, &mut path)?;
+                let more_nns =
+                    walker.visit(&query, &self, rtxn, &mut path, cancel_fn)?.into_inner();
                 neighbours.extend(more_nns.into_iter());
                 if neighbours.len() >= opt.count {
                     break;
