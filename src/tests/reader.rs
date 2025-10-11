@@ -1,5 +1,3 @@
-use std::time::Instant;
-
 use proptest::prelude::*;
 use rand::{rngs::StdRng, seq::SliceRandom, thread_rng, Rng, SeedableRng};
 use roaring::RoaringBitmap;

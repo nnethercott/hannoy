@@ -63,7 +63,23 @@ impl<'a, D: Distance> QueryBuilder<'a, D> {
         })
     }
 
-    /// FIXME: add docs later
+    /// Returns as many nearest neighbours to the query as possible before `cancel_fn` evaluates to
+    /// true, and indicates whether or not search terminated early.
+    ///
+    /// See also [`Self::by_vector_with_cancellation`].
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use hannoy::{Reader, distances::Euclidean};
+    /// # let (reader, rtxn): (Reader<Euclidean>, heed::RoTxn) = todo!();
+    /// use std::time::{Instant, Duration};
+    ///
+    /// let later = Instant::now().checked_add(Duration::from_secs(1)).unwrap();
+    /// let cancel_fn = || Instant::now() > later;
+    /// let (nns, did_cancel) = reader.nns(20).by_item_with_cancellation(&rtxn, 5, cancel_fn)?.unwrap();
+    /// # Ok::<(), hannoy::Error>(())
+    /// ```
     pub fn by_item_with_cancellation(
         &self,
         rtxn: &RoTxn,
@@ -103,7 +119,23 @@ impl<'a, D: Distance> QueryBuilder<'a, D> {
         self.reader.nns_by_vec(rtxn, &item, self, cancel_fn).map(|res| res.into_inner())
     }
 
-    /// FIXME: clean up this doc later
+    /// Returns as many nearest neighbours to the query as possible before `cancel_fn` evaluates to
+    /// true, and indicates whether or not search terminated early.
+    ///
+    /// See also [`Self::by_item_with_cancellation`].
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use hannoy::{Reader, distances::Euclidean};
+    /// # let (reader, rtxn): (Reader<Euclidean>, heed::RoTxn) = todo!();
+    /// use std::time::{Instant, Duration};
+    ///
+    /// let later = Instant::now().checked_add(Duration::from_secs(1)).unwrap();
+    /// let cancel_fn = || Instant::now() > later;
+    /// let (nns, did_cancel) = reader.nns(20).by_vector_with_cancellation(&rtxn, &[1.25854, -0.75598, 0.58524], cancel_fn)?;
+    /// # Ok::<(), hannoy::Error>(())
+    /// ```
     pub fn by_vector_with_cancellation(
         &self,
         rtxn: &RoTxn,
@@ -227,6 +259,9 @@ impl<'a> Visitor<'a> {
         // Stop occurs either once we've done at least ef searches and notice no improvements, or
         // when we've exhausted the search queue.
         while let Some(&(Reverse(OrderedFloat(f)), _)) = search_queue.peek() {
+            if cancel_fn() {
+                return Ok(Cancelled(res));
+            }
             let f_max = res.peek_max().map(|&(OrderedFloat(d), _)| d).unwrap_or(f32::MAX);
             if f > f_max {
                 break;
@@ -260,10 +295,6 @@ impl<'a> Visitor<'a> {
                         res.push((OrderedFloat(dist), point));
                     }
                 }
-            }
-
-            if cancel_fn() {
-                return Ok(Cancelled(res));
             }
         }
         Ok(Done(res))
@@ -528,7 +559,7 @@ impl<D: Distance> Reader<D> {
 
         // If the number of candidates is less than a given threshold, perform linear search
         if let Some(candidates) = opt.candidates.filter(|c| c.len() < LINEAR_SEARCH_THRESHOLD) {
-            return self.brute_force_search(query, rtxn, candidates, opt.count);
+            return self.brute_force_search(query, rtxn, candidates, opt.count, cancel_fn);
         }
 
         // exhaustive search
@@ -536,19 +567,23 @@ impl<D: Distance> Reader<D> {
     }
 
     /// Directly retrieves items in the candidate list and ranks them by distance to the query.
-    //FIXME: need to add cancellation here!
     fn brute_force_search(
         &self,
         query: &Item<D>,
         rtxn: &RoTxn,
         candidates: &RoaringBitmap,
         count: usize,
+        cancel_fn: impl Fn() -> bool,
     ) -> Result<Completion<Vec<(ItemId, f32)>>> {
         use Completion::*;
 
         let mut item_distances = Vec::with_capacity(candidates.len() as usize);
 
         for item_id in candidates {
+            if cancel_fn() {
+                return Ok(Cancelled(item_distances));
+            }
+
             let Some(vector) = self.item_vector(rtxn, item_id)? else { continue };
             let vector = UnalignedVector::from_vec(vector);
             let item = Item { header: D::new_header(&vector), vector };
@@ -677,7 +712,7 @@ impl<D: Distance> Reader<D> {
 
         // If the number of candidates is less than a given threshold, perform linear search
         if let Some(candidates) = opt.candidates.filter(|c| c.len() < LINEAR_SEARCH_THRESHOLD) {
-            let nns = self.brute_force_search(&query, rtxn, candidates, opt.count)?;
+            let nns = self.brute_force_search(&query, rtxn, candidates, opt.count, cancel_fn)?;
             return Ok(Some(nns));
         }
 
