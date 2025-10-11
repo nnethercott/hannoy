@@ -11,7 +11,6 @@ use roaring::RoaringBitmap;
 /// # Safety
 /// Decoding trusts the bytes. Only use with data written by this codec or
 /// switch to [`RoaringBitmap::deserialize_from`] if you need validation.
-
 pub struct RoaringBitmapCodec;
 
 impl heed::BytesDecode<'_> for RoaringBitmapCodec {
