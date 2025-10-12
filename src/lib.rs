@@ -102,8 +102,8 @@ use metadata::{Metadata, MetadataCodec};
 use node::{Node, NodeCodec};
 use node_id::{NodeId, NodeMode};
 pub use reader::{QueryBuilder, Reader};
+pub use roaring::RoaringBitmapCodec;
 pub use writer::{HannoyBuilder, Writer};
-pub use crate::roaring::RoaringBitmapCodec;
 
 /// The set of types used by the [`Distance`] trait.
 pub mod internals {
