@@ -91,6 +91,8 @@ fn all_items_are_reachable<const M: usize, const M0: usize>(n: usize) {
     assert_eq!(&RoaringBitmap::from_iter(found.into_iter().map(|(id, _)| id)), reader.item_ids())
 }
 
+// ci takes too long on windows
+#[cfg(not(windows))]
 proptest! {
     #![proptest_config(ProptestConfig {
             cases: 10,.. ProptestConfig::default()
