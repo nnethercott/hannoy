@@ -1,12 +1,12 @@
 use proptest::prelude::*;
-use rand::{rngs::StdRng, seq::SliceRandom, thread_rng, Rng, SeedableRng};
+use rand::rngs::StdRng;
+use rand::seq::SliceRandom;
+use rand::{thread_rng, Rng, SeedableRng};
 use roaring::RoaringBitmap;
 
-use crate::{
-    distance::{BinaryQuantizedCosine, Cosine},
-    tests::{create_database, create_database_indices_with_items, rng, DatabaseHandle},
-    Reader, Writer,
-};
+use crate::distance::{BinaryQuantizedCosine, Cosine};
+use crate::tests::{create_database, create_database_indices_with_items, rng, DatabaseHandle};
+use crate::{Reader, Writer};
 
 const M: usize = 16;
 const M0: usize = 32;
@@ -132,4 +132,35 @@ fn search_by_item_returns_none_if_not_exists() {
     // use an item id that does not exist
     let found = reader.nns(10).by_item(&rtxn, 101).unwrap();
     assert!(found.is_none());
+}
+
+#[test]
+fn search_cancellation_works() {
+    const DIM: usize = 768;
+    let mut rng = rng();
+
+    let DatabaseHandle { env, database, tempdir: _ } =
+        create_database_indices_with_items::<Cosine, DIM, M, M0, _>(0..1, 100, &mut rng);
+    let rtxn = env.read_txn().unwrap();
+
+    let reader = crate::Reader::<Cosine>::open(&rtxn, 0, database).unwrap();
+
+    // use an item id that does not exist
+    let query: [f32; DIM] = std::array::from_fn(|_| rng.gen());
+
+    // by vector
+    let (_, did_not_cancel) =
+        reader.nns(10).by_vector_with_cancellation(&rtxn, &query, || false).unwrap();
+    assert!(!did_not_cancel);
+    let (_, did_cancel) =
+        reader.nns(10).by_vector_with_cancellation(&rtxn, &query, || true).unwrap();
+    assert!(did_cancel);
+
+    // by item
+    let (_, did_not_cancel) =
+        reader.nns(10).by_item_with_cancellation(&rtxn, 0, || false).unwrap().unwrap();
+    assert!(!did_not_cancel);
+    let (_, did_cancel) =
+        reader.nns(10).by_item_with_cancellation(&rtxn, 0, || true).unwrap().unwrap();
+    assert!(did_cancel);
 }

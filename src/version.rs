@@ -1,5 +1,6 @@
+use std::borrow::Cow;
+use std::fmt;
 use std::mem::size_of;
-use std::{borrow::Cow, fmt};
 
 use byteorder::{BigEndian, ByteOrder};
 use heed::BoxedError;
