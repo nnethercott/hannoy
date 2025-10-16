@@ -163,5 +163,5 @@ fn search_cancellation_works() {
     assert!(!searched.did_cancel());
     let searched = 
         reader.nns(10).by_item_with_cancellation(&rtxn, 0, || true).unwrap().unwrap();
-    assert!(!searched.did_cancel());
+    assert!(searched.did_cancel());
 }

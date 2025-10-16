@@ -516,7 +516,12 @@ fn delete_document_in_an_empty_index_74() {
 
     let reader = Reader::open(&wtxn, 1, handle.database).unwrap();
     let ret = reader.nns(10).by_vector(&wtxn, &[0., 0.]).unwrap();
-    insta::assert_debug_snapshot!(ret, @"[]");
+    insta::assert_debug_snapshot!(ret, @r"
+    Searched {
+        nns: [],
+        did_cancel: false,
+    }
+    ");
 
     wtxn.commit().unwrap();
 
@@ -534,7 +539,12 @@ fn delete_document_in_an_empty_index_74() {
     let rtxn = handle.env.read_txn().unwrap();
     let reader = Reader::open(&rtxn, 1, handle.database).unwrap();
     let ret = reader.nns(10).by_vector(&rtxn, &[0., 0.]).unwrap();
-    insta::assert_debug_snapshot!(ret, @"[]");
+    insta::assert_debug_snapshot!(ret, @r"
+    Searched {
+        nns: [],
+        did_cancel: false,
+    }
+    ");
 }
 
 #[test]
