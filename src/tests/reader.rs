@@ -3,7 +3,9 @@ use rand::{rngs::StdRng, seq::SliceRandom, thread_rng, Rng, SeedableRng};
 use roaring::RoaringBitmap;
 
 use crate::{
-    distance::{BinaryQuantizedCosine, Cosine}, tests::{create_database, create_database_indices_with_items, rng, DatabaseHandle}, Reader, Writer
+    distance::{BinaryQuantizedCosine, Cosine},
+    tests::{create_database, create_database_indices_with_items, rng, DatabaseHandle},
+    Reader, Writer,
 };
 
 const M: usize = 16;
@@ -150,18 +152,14 @@ fn search_cancellation_works() {
     let query: [f32; DIM] = std::array::from_fn(|_| rng.gen());
 
     // by vector
-    let searched = 
-        reader.nns(10).by_vector_with_cancellation(&rtxn, &query, || false).unwrap();
+    let searched = reader.nns(10).by_vector_with_cancellation(&rtxn, &query, || false).unwrap();
     assert!(!searched.did_cancel());
-    let searched = 
-        reader.nns(10).by_vector_with_cancellation(&rtxn, &query, || true).unwrap();
+    let searched = reader.nns(10).by_vector_with_cancellation(&rtxn, &query, || true).unwrap();
     assert!(searched.did_cancel());
 
     // by item
-    let searched = 
-        reader.nns(10).by_item_with_cancellation(&rtxn, 0, || false).unwrap().unwrap();
+    let searched = reader.nns(10).by_item_with_cancellation(&rtxn, 0, || false).unwrap().unwrap();
     assert!(!searched.did_cancel());
-    let searched = 
-        reader.nns(10).by_item_with_cancellation(&rtxn, 0, || true).unwrap().unwrap();
+    let searched = reader.nns(10).by_item_with_cancellation(&rtxn, 0, || true).unwrap().unwrap();
     assert!(searched.did_cancel());
 }
