@@ -101,7 +101,7 @@ use key::{Key, Prefix, PrefixCodec};
 use metadata::{Metadata, MetadataCodec};
 use node::{Node, NodeCodec};
 use node_id::{NodeId, NodeMode};
-pub use reader::{QueryBuilder, Reader};
+pub use reader::{QueryBuilder, Reader, Searched};
 pub use writer::{HannoyBuilder, Writer};
 
 /// The set of types used by the [`Distance`] trait.

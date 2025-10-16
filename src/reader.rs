@@ -33,6 +33,31 @@ const LINEAR_SEARCH_THRESHOLD: u64 = 1000;
 /// to zero to make sure we test the HNSW algorithm.
 const LINEAR_SEARCH_THRESHOLD: u64 = 0;
 
+/// Container storing nearest neighbour search result
+#[derive(Debug)]
+pub struct Searched {
+    /// The nearest neighbours for the performed query
+    pub nns: Vec<(ItemId, f32)>,
+    /// A bool indicating whether or not the search terminated early
+    pub did_cancel: bool,
+}
+
+impl Searched {
+    pub(crate) fn new(nns: Vec<(ItemId, f32)>, did_cancel: bool) -> Self {
+        Searched { nns, did_cancel }
+    }
+
+    /// Indicates if the search terminated early
+    pub fn did_cancel(&self) -> bool {
+        self.did_cancel
+    }
+
+    /// Consumes `self` and returns vector of nearest neighbours
+    pub fn into_nns(self) -> Vec<(ItemId, f32)> {
+        self.nns
+    }
+}
+
 /// Options used to make a query against an hannoy [`Reader`].
 pub struct QueryBuilder<'a, D: Distance> {
     reader: &'a Reader<D>,
@@ -53,9 +78,9 @@ impl<'a, D: Distance> QueryBuilder<'a, D> {
     /// # let (reader, rtxn): (Reader<Euclidean>, heed::RoTxn) = todo!();
     /// reader.nns(20).by_item(&rtxn, 5);
     /// ```
-    pub fn by_item(&self, rtxn: &RoTxn, item: ItemId) -> Result<Option<Vec<(ItemId, f32)>>> {
+    pub fn by_item(&self, rtxn: &RoTxn, item: ItemId) -> Result<Option<Searched>> {
         self.reader.nns_by_item(rtxn, item, self, || false).map(|res| match res {
-            Some(Completion::Done(items)) => Some(items),
+            Some(Completion::Done(items)) => Some(Searched::new(items, false)),
             Some(Completion::Cancelled(_)) => {
                 unreachable!("cancellation only possible using by_item_with_cancellation")
             }
@@ -71,13 +96,13 @@ impl<'a, D: Distance> QueryBuilder<'a, D> {
     /// # Examples
     ///
     /// ```no_run
-    /// # use hannoy::{Reader, distances::Euclidean};
+    /// # use hannoy::{Reader, distances::Euclidean, Searched};
     /// # let (reader, rtxn): (Reader<Euclidean>, heed::RoTxn) = todo!();
     /// use std::time::{Instant, Duration};
     ///
     /// let later = Instant::now().checked_add(Duration::from_secs(1)).unwrap();
     /// let cancel_fn = || Instant::now() > later;
-    /// let (nns, did_cancel) = reader.nns(20).by_item_with_cancellation(&rtxn, 5, cancel_fn)?.unwrap();
+    /// let Searched{ nns, did_cancel } = reader.nns(20).by_item_with_cancellation(&rtxn, 5, cancel_fn)?.unwrap();
     /// # Ok::<(), hannoy::Error>(())
     /// ```
     pub fn by_item_with_cancellation(
@@ -85,10 +110,10 @@ impl<'a, D: Distance> QueryBuilder<'a, D> {
         rtxn: &RoTxn,
         item: ItemId,
         cancel_fn: impl Fn() -> bool,
-    ) -> Result<Option<(Vec<(ItemId, f32)>, bool)>> {
+    ) -> Result<Option<Searched>> {
         self.reader.nns_by_item(rtxn, item, self, cancel_fn).map(|res| match res {
-            Some(Completion::Done(done)) => Some((done, false)),
-            Some(Completion::Cancelled(cancelled)) => Some((cancelled, true)),
+            Some(Completion::Done(done)) => Some(Searched::new(done, false)),
+            Some(Completion::Cancelled(cancelled)) => Some(Searched::new(cancelled, true)),
             None => None,
         })
     }
@@ -104,7 +129,7 @@ impl<'a, D: Distance> QueryBuilder<'a, D> {
     /// # let (reader, rtxn): (Reader<Euclidean>, heed::RoTxn) = todo!();
     /// reader.nns(20).by_vector(&rtxn, &[1.25854, -0.75598, 0.58524]);
     /// ```
-    pub fn by_vector(&self, rtxn: &RoTxn, vector: &'a [f32]) -> Result<Vec<(ItemId, f32)>> {
+    pub fn by_vector(&self, rtxn: &RoTxn, vector: &'a [f32]) -> Result<Searched> {
         if vector.len() != self.reader.dimensions() {
             return Err(Error::InvalidVecDimension {
                 expected: self.reader.dimensions(),
@@ -116,7 +141,10 @@ impl<'a, D: Distance> QueryBuilder<'a, D> {
         let item = Item { header: D::new_header(&vector), vector };
 
         let cancel_fn = || false;
-        self.reader.nns_by_vec(rtxn, &item, self, cancel_fn).map(|res| res.into_inner())
+        let neighbours =
+            self.reader.nns_by_vec(rtxn, &item, self, cancel_fn).map(|res| res.into_inner())?;
+
+        Ok(Searched::new(neighbours, false))
     }
 
     /// Returns as many nearest neighbours to the query as possible before `cancel_fn` evaluates to
@@ -127,13 +155,13 @@ impl<'a, D: Distance> QueryBuilder<'a, D> {
     /// # Examples
     ///
     /// ```no_run
-    /// # use hannoy::{Reader, distances::Euclidean};
+    /// # use hannoy::{Reader, distances::Euclidean, Searched};
     /// # let (reader, rtxn): (Reader<Euclidean>, heed::RoTxn) = todo!();
     /// use std::time::{Instant, Duration};
     ///
     /// let later = Instant::now().checked_add(Duration::from_secs(1)).unwrap();
     /// let cancel_fn = || Instant::now() > later;
-    /// let (nns, did_cancel) = reader.nns(20).by_vector_with_cancellation(&rtxn, &[1.25854, -0.75598, 0.58524], cancel_fn)?;
+    /// let Searched{ nns, did_cancel } = reader.nns(20).by_vector_with_cancellation(&rtxn, &[1.25854, -0.75598, 0.58524], cancel_fn)?;
     /// # Ok::<(), hannoy::Error>(())
     /// ```
     pub fn by_vector_with_cancellation(
@@ -141,7 +169,7 @@ impl<'a, D: Distance> QueryBuilder<'a, D> {
         rtxn: &RoTxn,
         vector: &'a [f32],
         cancel_fn: impl Fn() -> bool,
-    ) -> Result<(Vec<(ItemId, f32)>, bool)> {
+    ) -> Result<Searched> {
         if vector.len() != self.reader.dimensions() {
             return Err(Error::InvalidVecDimension {
                 expected: self.reader.dimensions(),
@@ -154,8 +182,8 @@ impl<'a, D: Distance> QueryBuilder<'a, D> {
 
         let nns = self.reader.nns_by_vec(rtxn, &item, self, cancel_fn)?;
         match nns {
-            Completion::Done(done) => Ok((done, false)),
-            Completion::Cancelled(cancelled) => Ok((cancelled, true)),
+            Completion::Done(done) => Ok(Searched::new(done, false)),
+            Completion::Cancelled(cancelled) => Ok(Searched::new(cancelled, true)),
         }
     }
 
@@ -619,7 +647,7 @@ impl<D: Distance> Reader<D> {
 
         let mut path = RoaringBitmap::new();
         for _ in (1..=self.max_level).rev() {
-            let neighbours = visitor.visit(query, &self, rtxn, &mut path, &|| false)?.into_inner();
+            let neighbours = visitor.visit(query, self, rtxn, &mut path, &|| false)?.into_inner();
             let closest = neighbours.peek_min().map(|(_, n)| n).expect("No neighbor was found");
 
             visitor.eps = vec![*closest];
@@ -650,7 +678,7 @@ impl<D: Distance> Reader<D> {
         }
 
         let mut neighbours =
-            return_if_cancelled!(visitor.visit(query, &self, rtxn, &mut path, cancel_fn)?);
+            return_if_cancelled!(visitor.visit(query, self, rtxn, &mut path, cancel_fn)?);
 
         // If we still don't have enough nns (e.g. search encountered cyclic subgraphs) then do exhaustive
         // search over remaining unseen items.
@@ -671,7 +699,7 @@ impl<D: Distance> Reader<D> {
                 visitor.ef = opt.count - neighbours.len();
 
                 let more_nns =
-                    return_if_cancelled!(visitor.visit(query, &self, rtxn, &mut path, cancel_fn)?);
+                    return_if_cancelled!(visitor.visit(query, self, rtxn, &mut path, cancel_fn)?);
 
                 neighbours.extend(more_nns.into_iter());
                 if neighbours.len() >= opt.count {
@@ -691,6 +719,7 @@ impl<D: Distance> Reader<D> {
     /// `&[item]` instead of the hnsw entrypoints. Since search starts in the true neighbourhood of
     /// the item fewer comparisons are needed to retrieve the nearest neighbours, making it more
     /// efficient than simply calling `Reader.nns_by_vec` with the associated vector.
+    #[allow(clippy::type_complexity)]
     fn nns_by_item(
         &self,
         rtxn: &RoTxn,
@@ -741,7 +770,7 @@ impl<D: Distance> Reader<D> {
             };
         }
         let mut neighbours =
-            return_if_cancelled!(visitor.visit(&query, &self, rtxn, &mut path, cancel_fn)?);
+            return_if_cancelled!(visitor.visit(&query, self, rtxn, &mut path, cancel_fn)?);
 
         // If we still don't have enough nns (e.g. search encountered cyclic subgraphs) then do exhaustive
         // search over remaining unseen items.
@@ -763,7 +792,7 @@ impl<D: Distance> Reader<D> {
                 visitor.ef = opt.count - neighbours.len();
 
                 let more_nns =
-                    return_if_cancelled!(visitor.visit(&query, &self, rtxn, &mut path, cancel_fn)?);
+                    return_if_cancelled!(visitor.visit(&query, self, rtxn, &mut path, cancel_fn)?);
                 neighbours.extend(more_nns.into_iter());
                 if neighbours.len() >= opt.count {
                     break;

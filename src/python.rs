@@ -385,7 +385,7 @@ impl PyReader {
             };
         }
 
-        let neighbours = match &self.dyn_reader {
+        let found = match &self.dyn_reader {
             DynReader::Cosine(reader) => hnsw_search!(reader, &query)?,
             DynReader::Euclidean(reader) => hnsw_search!(reader, &query)?,
             DynReader::Manhattan(reader) => hnsw_search!(reader, &query)?,
@@ -394,7 +394,7 @@ impl PyReader {
             DynReader::BqManhattan(reader) => hnsw_search!(reader, &query)?,
             DynReader::Hamming(reader) => hnsw_search!(reader, &query)?,
         };
-        Ok(neighbours)
+        Ok(found.into_nns())
     }
 }
 

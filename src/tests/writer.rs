@@ -287,7 +287,7 @@ fn convert_from_arroy_to_hannoy() {
             let reader = Reader::open(&wtxn, index, database).unwrap();
             let vec = reader.item_vector(&wtxn, item_id).unwrap();
             assert_eq!(vec.as_deref(), Some(&vector[..]));
-            let mut found = reader.nns(1).by_vector(&wtxn, &vector).unwrap();
+            let mut found = reader.nns(1).by_vector(&wtxn, &vector).unwrap().into_nns();
             dbg!(&found);
             let (found_item_id, found_distance) = found.pop().unwrap();
             assert_eq!(found_item_id, item_id);
@@ -363,7 +363,7 @@ fn convert_from_arroy_to_hannoy_binary_quantized() {
             let reader = Reader::open(&wtxn, index, database).unwrap();
             let vec = reader.item_vector(&wtxn, item_id).unwrap();
             assert_eq!(vec.as_deref(), Some(&vector[..]));
-            let mut found = reader.nns(1).by_vector(&wtxn, &vector).unwrap();
+            let mut found = reader.nns(1).by_vector(&wtxn, &vector).unwrap().into_nns();
             dbg!(&found);
             let (found_item_id, found_distance) = found.pop().unwrap();
             assert_eq!(found_item_id, item_id);
