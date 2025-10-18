@@ -63,13 +63,15 @@ fn search_on_candidates_has_right_num() {
 
         let c: [u32; 10] = std::array::from_fn(|_| thread_rng().gen::<u32>() % 1000);
         let candidates = RoaringBitmap::from_iter(c);
-        let found = reader.nns(10).candidates(&candidates).by_vector(&rtxn, &query).unwrap();
+        let _found = reader.nns(10).candidates(&candidates).by_vector(&rtxn, &query).unwrap();
+        let found = _found.into_nns();
         assert_eq!(&RoaringBitmap::from_iter(found.into_iter().map(|(i, _)| i)), &candidates);
 
         // search with 1 candidate
         let c: [u32; 1] = std::array::from_fn(|_| thread_rng().gen::<u32>() % 1000);
         let candidates = RoaringBitmap::from_iter(c);
-        let found = reader.nns(1).candidates(&candidates).by_vector(&rtxn, &query).unwrap();
+        let _found = reader.nns(1).candidates(&candidates).by_vector(&rtxn, &query).unwrap();
+        let found = _found.into_nns();
         assert_eq!(&RoaringBitmap::from_iter(found.into_iter().map(|(i, _)| i)), &candidates);
     }
 }
@@ -87,7 +89,8 @@ fn all_items_are_reachable<const M: usize, const M0: usize>(n: usize) {
     assert_eq!(reader.item_ids().len(), n as u64);
     assert!((0..n as u32).all(|i| reader.contains_item(&rtxn, i).unwrap()));
 
-    let found = reader.nns(n).ef_search(n).by_vector(&rtxn, &[0.0; DIM]).unwrap();
+    let _found = reader.nns(n).ef_search(n).by_vector(&rtxn, &[0.0; DIM]).unwrap();
+    let found = _found.into_nns();
     assert_eq!(&RoaringBitmap::from_iter(found.into_iter().map(|(id, _)| id)), reader.item_ids())
 }
 
@@ -113,7 +116,7 @@ fn search_by_item_does_not_contain_item() {
 
     let reader = crate::Reader::<Cosine>::open(&rtxn, 0, database).unwrap();
 
-    let found = reader.nns(10).by_item(&rtxn, 0).unwrap().unwrap();
+    let found = reader.nns(10).by_item(&rtxn, 0).unwrap().unwrap().into_nns();
     assert!(found.len() == 10);
     assert!(!found.contains(&(0, 0.0)))
 }
@@ -132,4 +135,31 @@ fn search_by_item_returns_none_if_not_exists() {
     // use an item id that does not exist
     let found = reader.nns(10).by_item(&rtxn, 101).unwrap();
     assert!(found.is_none());
+}
+
+#[test]
+fn search_cancellation_works() {
+    const DIM: usize = 768;
+    let mut rng = rng();
+
+    let DatabaseHandle { env, database, tempdir: _ } =
+        create_database_indices_with_items::<Cosine, DIM, M, M0, _>(0..1, 100, &mut rng);
+    let rtxn = env.read_txn().unwrap();
+
+    let reader = crate::Reader::<Cosine>::open(&rtxn, 0, database).unwrap();
+
+    // use an item id that does not exist
+    let query: [f32; DIM] = std::array::from_fn(|_| rng.gen());
+
+    // by vector
+    let searched = reader.nns(10).by_vector_with_cancellation(&rtxn, &query, || false).unwrap();
+    assert!(!searched.did_cancel());
+    let searched = reader.nns(10).by_vector_with_cancellation(&rtxn, &query, || true).unwrap();
+    assert!(searched.did_cancel());
+
+    // by item
+    let searched = reader.nns(10).by_item_with_cancellation(&rtxn, 0, || false).unwrap().unwrap();
+    assert!(!searched.did_cancel());
+    let searched = reader.nns(10).by_item_with_cancellation(&rtxn, 0, || true).unwrap().unwrap();
+    assert!(searched.did_cancel());
 }

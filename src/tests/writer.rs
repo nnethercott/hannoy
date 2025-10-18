@@ -287,7 +287,7 @@ fn convert_from_arroy_to_hannoy() {
             let reader = Reader::open(&wtxn, index, database).unwrap();
             let vec = reader.item_vector(&wtxn, item_id).unwrap();
             assert_eq!(vec.as_deref(), Some(&vector[..]));
-            let mut found = reader.nns(1).by_vector(&wtxn, &vector).unwrap();
+            let mut found = reader.nns(1).by_vector(&wtxn, &vector).unwrap().into_nns();
             dbg!(&found);
             let (found_item_id, found_distance) = found.pop().unwrap();
             assert_eq!(found_item_id, item_id);
@@ -363,7 +363,7 @@ fn convert_from_arroy_to_hannoy_binary_quantized() {
             let reader = Reader::open(&wtxn, index, database).unwrap();
             let vec = reader.item_vector(&wtxn, item_id).unwrap();
             assert_eq!(vec.as_deref(), Some(&vector[..]));
-            let mut found = reader.nns(1).by_vector(&wtxn, &vector).unwrap();
+            let mut found = reader.nns(1).by_vector(&wtxn, &vector).unwrap().into_nns();
             dbg!(&found);
             let (found_item_id, found_distance) = found.pop().unwrap();
             assert_eq!(found_item_id, item_id);
@@ -516,7 +516,12 @@ fn delete_document_in_an_empty_index_74() {
 
     let reader = Reader::open(&wtxn, 1, handle.database).unwrap();
     let ret = reader.nns(10).by_vector(&wtxn, &[0., 0.]).unwrap();
-    insta::assert_debug_snapshot!(ret, @"[]");
+    insta::assert_debug_snapshot!(ret, @r"
+    Searched {
+        nns: [],
+        did_cancel: false,
+    }
+    ");
 
     wtxn.commit().unwrap();
 
@@ -534,7 +539,12 @@ fn delete_document_in_an_empty_index_74() {
     let rtxn = handle.env.read_txn().unwrap();
     let reader = Reader::open(&rtxn, 1, handle.database).unwrap();
     let ret = reader.nns(10).by_vector(&rtxn, &[0., 0.]).unwrap();
-    insta::assert_debug_snapshot!(ret, @"[]");
+    insta::assert_debug_snapshot!(ret, @r"
+    Searched {
+        nns: [],
+        did_cancel: false,
+    }
+    ");
 }
 
 #[test]
