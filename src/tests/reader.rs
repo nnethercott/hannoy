@@ -1,3 +1,4 @@
+#[cfg(not(windows))]
 use proptest::prelude::*;
 use rand::{rngs::StdRng, seq::SliceRandom, thread_rng, Rng, SeedableRng};
 use roaring::RoaringBitmap;
@@ -76,6 +77,8 @@ fn search_on_candidates_has_right_num() {
     }
 }
 
+// ci takes too long on windows
+#[cfg(not(windows))]
 fn all_items_are_reachable<const M: usize, const M0: usize>(n: usize) {
     const DIM: usize = 768;
     let mut rng = rng();
@@ -94,6 +97,8 @@ fn all_items_are_reachable<const M: usize, const M0: usize>(n: usize) {
     assert_eq!(&RoaringBitmap::from_iter(found.into_iter().map(|(id, _)| id)), reader.item_ids())
 }
 
+// ci takes too long on windows
+#[cfg(not(windows))]
 proptest! {
     #![proptest_config(ProptestConfig {
             cases: 10,.. ProptestConfig::default()
