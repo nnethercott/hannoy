@@ -36,5 +36,5 @@ jobs:
         env:
           HANNOY_READER_PREFETCH_MEMORY: 1048576 # 1MiB
         with:
-          run: cargo codspeed run benchmark
+          run: cargo codspeed run --bench benchmark
           token: ${{ secrets.CODSPEED_TOKEN }}
