@@ -7,12 +7,19 @@ use rand::distributions::Uniform;
 use rand::rngs::StdRng;
 use rand::{thread_rng, Rng, SeedableRng};
 use tempfile::TempDir;
+use tracing_subscriber::{fmt::layer, prelude::*, EnvFilter};
 
 use crate::version::VersionCodec;
 use crate::{Database, Distance, MetadataCodec, NodeCodec, NodeMode, Reader, Writer};
 
 mod reader;
 mod writer;
+mod fuzz;
+
+fn env_logger_init() {
+    let _ =
+        tracing_subscriber::registry().with(layer()).with(EnvFilter::from_default_env()).try_init();
+}
 
 pub struct DatabaseHandle<D> {
     pub env: Env<WithTls>,
@@ -91,11 +98,13 @@ impl<D: Distance> fmt::Display for DatabaseHandle<D> {
 }
 
 fn create_database<D: Distance>() -> DatabaseHandle<D> {
+    env_logger_init();
+
     let _ = rayon::ThreadPoolBuilder::new().num_threads(1).build_global();
 
     let dir = tempfile::tempdir().unwrap();
-    let env =
-        unsafe { EnvOpenOptions::new().map_size(200 * 1024 * 1024).open(dir.path()) }.unwrap();
+    let env = unsafe { EnvOpenOptions::new().map_size(10 * 1024 * 1024 * 1024).open(dir.path()) }
+        .unwrap();
     let mut wtxn = env.write_txn().unwrap();
     let database: Database<D> = env.create_database(&mut wtxn, None).unwrap();
     wtxn.commit().unwrap();

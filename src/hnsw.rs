@@ -16,7 +16,7 @@ use rand::Rng;
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use roaring::RoaringBitmap;
 use tinyvec::{array_vec, ArrayVec};
-use tracing::debug;
+use tracing::{debug, info};
 
 use crate::key::Key;
 use crate::node::{Item, Links, Node};
@@ -138,6 +138,8 @@ impl<'a, D: Distance, const M: usize, const M0: usize> HnswBuilder<'a, D, M, M0>
         let items = ImmutableItems::new(wtxn, database, index, options)?;
         let links = ImmutableLinks::new(wtxn, database, index, database.len(wtxn)?, options)?;
         let lmdb = FrozenReader { index, items: &items, links: &links };
+
+        info!("{}", &to_insert.len());
 
         // Generate a random level for each point
         let mut cur_max_level = usize::MIN;

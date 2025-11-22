@@ -731,7 +731,7 @@ fn delete_one_item_no_snapshots() {
 
 proptest! {
     #[test]
-    fn fuzz_writer(n in 1..=1000u32, dim in 1..=100usize) {
+    fn fuzz_writer(n in 1..=10_000u32, dim in 128..=1024usize) {
         let handle = create_database::<Euclidean>();
         let mut rng = StdRng::from_seed(thread_rng().gen());
         let mut wtxn = handle.env.write_txn().unwrap();
