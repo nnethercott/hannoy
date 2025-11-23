@@ -75,7 +75,7 @@ impl<D: Distance> Item<'_, D> {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct Links<'a> {
     pub links: Cow<'a, RoaringBitmap>,
 }

@@ -1,3 +1,4 @@
+use core::panic;
 use std::borrow::Cow;
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
@@ -16,7 +17,8 @@ use rand::Rng;
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use roaring::RoaringBitmap;
 use tinyvec::{array_vec, ArrayVec};
-use tracing::{debug, info};
+use tracing::field::debug;
+use tracing::{debug, error, info, instrument};
 
 use crate::key::Key;
 use crate::node::{Item, Links, Node};
@@ -139,8 +141,6 @@ impl<'a, D: Distance, const M: usize, const M0: usize> HnswBuilder<'a, D, M, M0>
         let links = ImmutableLinks::new(wtxn, database, index, database.len(wtxn)?, options)?;
         let lmdb = FrozenReader { index, items: &items, links: &links };
 
-        info!("{}", &to_insert.len());
-
         // Generate a random level for each point
         let mut cur_max_level = usize::MIN;
         let mut levels: Vec<_> = to_insert
@@ -169,6 +169,10 @@ impl<'a, D: Distance, const M: usize, const M0: usize> HnswBuilder<'a, D, M, M0>
         options.progress.update(insert_step);
         let cancel_index = AtomicUsize::new(0);
 
+        level_groups.iter().for_each(|grp| {
+            build_stats.layer_dist.insert(grp[0].1, grp.len());
+        });
+
         level_groups.into_iter().try_for_each(|grp| {
             grp.into_par_iter().try_for_each(|&(item_id, lvl)| {
                 if cancel_index.fetch_add(1, Relaxed) % CANCELLATION_PROBING == 0 && (self.cancel)()
@@ -180,9 +184,6 @@ impl<'a, D: Distance, const M: usize, const M0: usize> HnswBuilder<'a, D, M, M0>
                     Ok(())
                 }
             })?;
-
-            build_stats.layer_dist.insert(grp[0].1, grp.len());
-
             Ok(()) as Result<(), Error>
         })?;
 
@@ -220,6 +221,7 @@ impl<'a, D: Distance, const M: usize, const M0: usize> HnswBuilder<'a, D, M, M0>
     /// This function resolves several nasty edge cases that can occur, namely : deleted
     /// or partially deleted entrypoints, new indexed points assigned to higher layers, ensuring
     /// entry points are present on all layers before build
+    #[instrument(skip(self, options, lmdb, levels))]
     fn prepare_levels_and_entry_points<P>(
         &mut self,
         levels: &mut Vec<(u32, usize)>,
@@ -235,60 +237,58 @@ impl<'a, D: Distance, const M: usize, const M0: usize> HnswBuilder<'a, D, M, M0>
         options.progress.update(HannoyBuild::ResolveGraphEntryPoints);
 
         let old_eps = RoaringBitmap::from_iter(self.entry_points.iter());
-        let mut ok_eps = &old_eps - to_delete;
+        let mut new_eps = &old_eps - to_delete;
+        let del_eps = &old_eps & to_delete;
 
-        // If any old entry points were deleted we need to replace them
-        for _ in (old_eps & to_delete).iter() {
-            let mut l = self.max_level;
+        // If any old entry points were deleted we need to replace them with points from the
+        // previous graph
+        let mut l = self.max_level;
+        for _ in del_eps.iter() {
             loop {
                 for result in lmdb.links.iter_layer(l as u8) {
                     let ((item_id, _), _) = result?;
 
-                    if !to_delete.contains(item_id) && ok_eps.insert(item_id) {
+                    if !to_delete.contains(item_id) && new_eps.insert(item_id) {
                         break;
                     }
                 }
-
-                // no points found in layer, continue to next one
                 l = match l.checked_sub(1) {
                     Some(new_level) => new_level,
                     None => break,
                 };
             }
         }
-        // If the loop above added no points, we must have deleted the entire prev graph!
-        if ok_eps.is_empty() {
+
+        // Case 1: if we delted some entrypoints but were unable to replace them this must
+        // mean we've deleted the entire previous graph, so we reset the height.
+        if !del_eps.is_empty() & (new_eps.len() != old_eps.len()) {
             self.max_level = 0;
         }
 
         // Schedule old entry point ids for re-indexing, otherwise we end up building a completely
         // isolated sub-graph.
-        levels.extend(ok_eps.iter().map(|id| (id, self.max_level)));
+        levels.extend(new_eps.iter().map(|id| (id, self.max_level)));
+        levels.sort_unstable_by(|(_, a), (_, b)| b.cmp(a));
 
+        // Case 2: if the new build puts points on higher levels than before, then we have new hnsw
+        // entrypoints.
         if cur_max_level > self.max_level {
+            new_eps.clear();
             self.entry_points.clear();
+            self.max_level = cur_max_level;
         }
 
-        self.max_level = self.max_level.max(cur_max_level);
+        let upper_layer: Vec<_> = levels.iter().take_while(|(_, l)| *l == self.max_level).collect();
         for _ in 0..=self.max_level {
             self.layers.push(HashMap::new());
         }
-
-        levels.sort_unstable_by(|(_, a), (_, b)| b.cmp(a));
-
-        let upper_layer: Vec<_> = levels
-            .iter()
-            .take_while(|(_, l)| *l == self.max_level)
-            .filter(|&(item_id, _)| !self.entry_points.contains(item_id))
-            .collect();
-
         for &(item_id, _) in upper_layer {
-            ok_eps.insert(item_id);
+            new_eps.insert(item_id);
             self.add_in_layers_below(item_id, self.max_level);
         }
 
-        self.entry_points = ok_eps.iter().collect();
-        Ok(ok_eps)
+        self.entry_points = new_eps.iter().collect();
+        Ok(new_eps)
     }
 
     fn insert(
@@ -369,7 +369,7 @@ impl<'a, D: Distance, const M: usize, const M0: usize> HnswBuilder<'a, D, M, M0>
             {
                 return Err(Error::BuildCancelled);
             }
-            let ((id, lvl), links) = result?;
+            let ((id, lvl), links) = result.unwrap();
 
             // Since we delete links AFTER a build (we need to do this to apply diskann-approach
             // for patching), links belonging to deleted items may still be present. We don't
@@ -391,16 +391,21 @@ impl<'a, D: Distance, const M: usize, const M0: usize> HnswBuilder<'a, D, M, M0>
             // Iter through each of the deleted, and explore his neighbours
             let mut bitmap = RoaringBitmap::new();
             for item_id in del_subset.iter() {
-                bitmap.extend(lmdb.get_links(item_id, lvl)?.iter());
+                bitmap.extend(lmdb.get_links(item_id, lvl).unwrap_or_default().iter());
             }
             bitmap |= links;
             bitmap -= to_delete;
 
-            // TODO: abstract this layer search and pruning bit as its duplicated a lot in
-            // this file
             for other in bitmap {
-                let dist = D::distance(&lmdb.get_item(id)?, &lmdb.get_item(other)?);
-                new_links.push((OrderedFloat(dist), other));
+                let u = &lmdb.get_item(id)?;
+
+                // FIXME: normally `other` SHOULD be in the db. The only way this doesn't happen is
+                // if some links still point to deleted items, which itself should not be possible
+                // by virtue of this function.
+                if let Ok(v) = lmdb.get_item(other) {
+                    let dist = D::distance(&u, &v);
+                    new_links.push((OrderedFloat(dist), other));
+                }
             }
             let pruned = self.robust_prune(new_links, lvl, self.alpha, lmdb)?;
             let _ = map_guard.insert(id, NodeState { links: ArrayVec::from_iter(pruned) });
@@ -414,12 +419,13 @@ impl<'a, D: Distance, const M: usize, const M0: usize> HnswBuilder<'a, D, M, M0>
     /// overwriting it's links in mem. This is useful in cases like Vanama build.
     fn add_in_layers_below(&self, item_id: ItemId, level: usize) {
         for level in 0..=level {
-            let Some(map) = self.layers.get(level) else { break };
+            let map = self.layers.get(level).unwrap();
             map.pin().get_or_insert(item_id, NodeState { links: array_vec![] });
         }
     }
 
     /// Returns only the Id's of our neighbours. Always check lmdb first.
+    #[instrument(level = "trace", skip(self, lmdb))]
     fn get_neighbours(
         &self,
         lmdb: &FrozenReader<'_, D>,
@@ -440,13 +446,8 @@ impl<'a, D: Distance, const M: usize, const M0: usize> HnswBuilder<'a, D, M, M0>
         match map.pin().get(&item_id) {
             Some(node_state) => res.extend(node_state.links.iter().map(|(_, i)| *i)),
             None => {
-                if res.is_empty() {
-                    debug!(
-                        "Race condition found: tried linking `item_id` before exists in either self.layers or lmdb.
-                         Consult `BuildStats.link_misses` to see how frequently this occurs."
-                    );
-                    build_stats.incr_link_misses();
-                }
+                // lazily add this entry
+                self.add_in_layers_below(item_id, level);
             }
         }
 
@@ -454,6 +455,7 @@ impl<'a, D: Distance, const M: usize, const M0: usize> HnswBuilder<'a, D, M, M0>
     }
 
     #[allow(clippy::too_many_arguments)]
+    #[instrument(name = "walk_layer", skip(self, lmdb, query))]
     fn walk_layer(
         &self,
         query: &Item<D>,

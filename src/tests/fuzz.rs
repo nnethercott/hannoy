@@ -7,6 +7,7 @@ use arbitrary::{Arbitrary, Unstructured};
 use heed::RoTxn;
 use rand::{self, rngs::StdRng, Rng, SeedableRng};
 use roaring::RoaringBitmap;
+use tracing::info;
 
 #[derive(Debug)]
 struct Item<const M: usize> {
@@ -30,6 +31,7 @@ enum WriteOp<const M: usize> {
 }
 
 fn assert_all_readable<const DIM: usize>(rtxn: &RoTxn, database: Database<Cosine>) {
+    info!("READING");
     let reader = Reader::<Cosine>::open(&rtxn, 0, database).unwrap();
     let n = reader.item_ids().len() as usize;
     let found = reader.nns(n).ef_search(n).by_vector(&rtxn, &[0.0; DIM]).unwrap().into_nns();
@@ -55,6 +57,7 @@ fn random_read_writes() {
         assert_all_readable::<DIM>(&rtxn, database);
 
         // get batch of write operations and apply them
+        info!("WRITING");
         let mut data = [0_u8; 1024 * 1024 * 1];
         rng.fill(&mut data);
         let mut u = Unstructured::new(&data);
