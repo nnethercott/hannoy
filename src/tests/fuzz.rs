@@ -46,8 +46,8 @@ fn random_read_writes() {
 
     const DIM: usize = 768;
     const NUMEL: usize = 1000;
-    const M: usize = 3;
-    const M0: usize = 3;
+    const M: usize = 16;
+    const M0: usize = 32;
 
     let DatabaseHandle { env, database, tempdir: _ } =
         create_database_indices_with_items::<Cosine, DIM, M, M0, _>(0..1, NUMEL, &mut rng);

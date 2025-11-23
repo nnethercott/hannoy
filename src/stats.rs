@@ -19,8 +19,6 @@ pub(crate) struct BuildStats<D> {
     pub mean_degree: f32,
     /// number of elements per layer
     pub layer_dist: HashMap<usize, usize>,
-    /// track some race condition violations
-    pub link_misses: AtomicUsize,
 
     _phantom: PhantomData<D>,
 }
@@ -32,7 +30,6 @@ impl<D: Distance> BuildStats<D> {
             lmdb_hits: AtomicUsize::new(0),
             mean_degree: 0.0,
             layer_dist: HashMap::default(),
-            link_misses: AtomicUsize::new(0),
             _phantom: PhantomData,
         }
     }
@@ -43,10 +40,6 @@ impl<D: Distance> BuildStats<D> {
 
     pub fn incr_lmdb_hits(&self) {
         self.lmdb_hits.fetch_add(1, Ordering::Relaxed);
-    }
-
-    pub fn incr_link_misses(&self) {
-        self.link_misses.fetch_add(1, Ordering::Relaxed);
     }
 
     /// iterate over all links in db and average out node rank
