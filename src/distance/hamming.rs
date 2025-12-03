@@ -70,7 +70,7 @@ pub fn hamming_bitwise_fast(u: &[u8], v: &[u8]) -> f32 {
         })
         .sum::<u32>();
 
-    if !u.len().is_multiple_of(CHUNK_SIZE) {
+    if u.len() % CHUNK_SIZE != 0 {
         distance += u
             .chunks_exact(CHUNK_SIZE)
             .remainder()
