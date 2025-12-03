@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.9](https://github.com/nnethercott/hannoy/compare/v0.0.8...v0.0.9) - 2025-12-03
+
+### Fixed
+
+- links must exist condition  ([#110](https://github.com/nnethercott/hannoy/pull/110))
+
+### Other
+
+- enable only profiling for codspeed ([#109](https://github.com/nnethercott/hannoy/pull/109))
+- disable reader proptests on windows ([#108](https://github.com/nnethercott/hannoy/pull/108))
+- Add degraded search ([#107](https://github.com/nnethercott/hannoy/pull/107))
+- lifetime and roaring doc ([#106](https://github.com/nnethercott/hannoy/pull/106))
+
 ## [0.0.8](https://github.com/nnethercott/hannoy/compare/v0.0.7...v0.0.8) - 2025-09-18
 
 ### Other
