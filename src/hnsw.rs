@@ -1,4 +1,3 @@
-use core::panic;
 use std::borrow::Cow;
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
@@ -17,8 +16,7 @@ use rand::Rng;
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use roaring::RoaringBitmap;
 use tinyvec::{array_vec, ArrayVec};
-use tracing::field::debug;
-use tracing::{debug, error, info, instrument};
+use tracing::{debug, instrument};
 
 use crate::key::Key;
 use crate::node::{Item, Links, Node};
@@ -175,7 +173,7 @@ impl<'a, D: Distance, const M: usize, const M0: usize> HnswBuilder<'a, D, M, M0>
 
         level_groups.into_iter().try_for_each(|grp| {
             grp.into_par_iter().try_for_each(|&(item_id, lvl)| {
-                if cancel_index.fetch_add(1, Relaxed) % CANCELLATION_PROBING == 0 && (self.cancel)()
+                if cancel_index.fetch_add(1, Relaxed).is_multiple_of(CANCELLATION_PROBING) && (self.cancel)()
                 {
                     Err(Error::BuildCancelled)
                 } else {
@@ -364,12 +362,12 @@ impl<'a, D: Distance, const M: usize, const M0: usize> HnswBuilder<'a, D, M, M0>
         let cancel_index = AtomicUsize::new(0);
 
         links_in_db.into_par_iter().try_for_each(|result| {
-            if cancel_index.fetch_add(1, Ordering::Relaxed) % CANCELLATION_PROBING == 0
+            if cancel_index.fetch_add(1, Ordering::Relaxed).is_multiple_of(CANCELLATION_PROBING)
                 && (self.cancel)()
             {
                 return Err(Error::BuildCancelled);
             }
-            let ((id, lvl), links) = result.unwrap();
+            let ((id, lvl), links) = result?;
 
             // Since we delete links AFTER a build (we need to do this to apply diskann-approach
             // for patching), links belonging to deleted items may still be present. We don't
@@ -401,9 +399,9 @@ impl<'a, D: Distance, const M: usize, const M0: usize> HnswBuilder<'a, D, M, M0>
 
                 // FIXME: normally `other` SHOULD be in the db. The only way this doesn't happen is
                 // if some links still point to deleted items, which itself should not be possible
-                // by virtue of this function.
+                // by virtue of this function...
                 if let Ok(v) = lmdb.get_item(other) {
-                    let dist = D::distance(&u, &v);
+                    let dist = D::distance(u, &v);
                     new_links.push((OrderedFloat(dist), other));
                 }
             }
@@ -419,7 +417,7 @@ impl<'a, D: Distance, const M: usize, const M0: usize> HnswBuilder<'a, D, M, M0>
     /// overwriting it's links in mem. This is useful in cases like Vanama build.
     fn add_in_layers_below(&self, item_id: ItemId, level: usize) {
         for level in 0..=level {
-            let map = self.layers.get(level).unwrap();
+            let Some(map) = self.layers.get(level) else { break };
             map.pin().get_or_insert(item_id, NodeState { links: array_vec![] });
         }
     }
