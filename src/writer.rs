@@ -6,7 +6,7 @@ use heed::{PutFlags, RoTxn, RwTxn};
 use rand::{Rng, SeedableRng};
 use roaring::RoaringBitmap;
 use steppe::NoProgress;
-use tracing::{debug, info, error};
+use tracing::{debug, error, info};
 
 use crate::distance::Distance;
 use crate::hnsw::HnswBuilder;
@@ -548,7 +548,7 @@ impl<D: Distance> Writer<D> {
 
             // SAFETY: Safe because we don't hold any reference to the database currently
             let did_delete = unsafe { updated_iter.del_current()? };
-            if !did_delete{
+            if !did_delete {
                 error!(item = key.node.item, "failed to remove item")
             }
 

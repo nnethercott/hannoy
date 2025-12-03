@@ -39,7 +39,7 @@ fn assert_all_readable<const DIM: usize>(rtxn: &RoTxn, database: Database<Cosine
 }
 
 #[test]
-#[ignore="if working properly this should run infinitely"]
+#[ignore = "if working properly this should run infinitely"]
 fn random_read_writes() {
     let seed: u64 = rand::random();
     let mut rng = StdRng::seed_from_u64(seed);

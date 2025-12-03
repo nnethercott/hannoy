@@ -12,9 +12,9 @@ use tracing_subscriber::{fmt::layer, prelude::*, EnvFilter};
 use crate::version::VersionCodec;
 use crate::{Database, Distance, MetadataCodec, NodeCodec, NodeMode, Reader, Writer};
 
+mod fuzz;
 mod reader;
 mod writer;
-mod fuzz;
 
 fn env_logger_init() {
     let _ =
