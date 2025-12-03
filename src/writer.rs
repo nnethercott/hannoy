@@ -6,7 +6,7 @@ use heed::{PutFlags, RoTxn, RwTxn};
 use rand::{Rng, SeedableRng};
 use roaring::RoaringBitmap;
 use steppe::NoProgress;
-use tracing::{debug, info};
+use tracing::{debug, error, info};
 
 use crate::distance::Distance;
 use crate::hnsw::HnswBuilder;
@@ -545,8 +545,12 @@ impl<D: Distance> Writer<D> {
 
             let inserted = updated_items.insert(key.node.item);
             debug_assert!(inserted, "The keys should be sorted by LMDB");
+
             // SAFETY: Safe because we don't hold any reference to the database currently
-            unsafe { updated_iter.del_current()? };
+            let did_delete = unsafe { updated_iter.del_current()? };
+            if !did_delete {
+                error!(item = key.node.item, "failed to remove item")
+            }
 
             index += 1;
         }
