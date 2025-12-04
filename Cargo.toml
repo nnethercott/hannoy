@@ -1,7 +1,7 @@
 [package]
 name = "hannoy"
 description = "HNSW Approximate Nearest Neighbors in Rust, based on LMDB and optimized for memory usage"
-version = "0.1.0"
+version = "0.1.0-nested-rtxns"
 repository = "https://github.com/nnethercott/hannoy"
 keywords = [
     "HNSW",
