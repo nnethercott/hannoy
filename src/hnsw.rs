@@ -173,7 +173,8 @@ impl<'a, D: Distance, const M: usize, const M0: usize> HnswBuilder<'a, D, M, M0>
 
         level_groups.into_iter().try_for_each(|grp| {
             grp.into_par_iter().try_for_each(|&(item_id, lvl)| {
-                if cancel_index.fetch_add(1, Relaxed).is_multiple_of(CANCELLATION_PROBING) && (self.cancel)()
+                if cancel_index.fetch_add(1, Relaxed).is_multiple_of(CANCELLATION_PROBING)
+                    && (self.cancel)()
                 {
                     Err(Error::BuildCancelled)
                 } else {
