@@ -1,6 +1,9 @@
 use std::io;
 
-use crate::{key::Key, node_id::NodeMode, version::Version, ItemId, LayerId};
+use crate::key::Key;
+use crate::node_id::NodeMode;
+use crate::version::Version;
+use crate::{ItemId, LayerId};
 
 /// The different set of errors that hannoy can encounter.
 #[derive(Debug, thiserror::Error)]

@@ -410,13 +410,14 @@ impl<D: Distance> Reader<D> {
         index: u16,
         metadata: &Metadata,
     ) -> Result<()> {
-        use crate::unaligned_vector::UnalignedVectorCodec;
+        use std::collections::VecDeque;
+        use std::sync::atomic::{AtomicUsize, Ordering};
 
         use heed::types::Bytes;
         use madvise::AccessPattern;
-        use std::collections::VecDeque;
-        use std::sync::atomic::{AtomicUsize, Ordering};
         use tracing::warn;
+
+        use crate::unaligned_vector::UnalignedVectorCodec;
 
         let page_size = page_size::get();
         let mut available_memory: usize = std::env::var(READER_AVAILABLE_MEMORY)
