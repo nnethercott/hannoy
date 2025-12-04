@@ -33,7 +33,7 @@ mod hnsw {
     fn create_db_and_fill_with_vecs<const DIM: usize>(
         env: &Env,
         size: usize,
-    ) -> hannoy::Result<(Writer<Cosine>, RwTxn, Database<Cosine>)> {
+    ) -> hannoy::Result<(Writer<Cosine>, RwTxn<'_>, Database<Cosine>)> {
         let mut wtxn = env.write_txn().unwrap();
 
         let db: Database<Cosine> = env.create_database(&mut wtxn, None)?;
