@@ -7,7 +7,9 @@ use rand::distributions::Uniform;
 use rand::rngs::StdRng;
 use rand::{thread_rng, Rng, SeedableRng};
 use tempfile::TempDir;
-use tracing_subscriber::{fmt::layer, prelude::*, EnvFilter};
+use tracing_subscriber::fmt::layer;
+use tracing_subscriber::prelude::*;
+use tracing_subscriber::EnvFilter;
 
 use crate::version::VersionCodec;
 use crate::{Database, Distance, MetadataCodec, NodeCodec, NodeMode, Reader, Writer};
