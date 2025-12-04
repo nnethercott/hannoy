@@ -1,13 +1,13 @@
-use crate::{
-    distance::Cosine,
-    tests::{create_database_indices_with_items, DatabaseHandle},
-    Database, Reader, Writer,
-};
 use arbitrary::{Arbitrary, Unstructured};
 use heed::RoTxn;
-use rand::{self, rngs::StdRng, Rng, SeedableRng};
+use rand::rngs::StdRng;
+use rand::{self, Rng, SeedableRng};
 use roaring::RoaringBitmap;
 use tracing::info;
+
+use crate::distance::Cosine;
+use crate::tests::{create_database_indices_with_items, DatabaseHandle};
+use crate::{Database, Reader, Writer};
 
 #[derive(Debug)]
 struct Item<const M: usize> {

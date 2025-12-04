@@ -3,14 +3,14 @@ use std::fs::OpenOptions;
 use std::hint::black_box;
 use std::io::Write;
 
-use hannoy::Reader;
-use hannoy::{distances::Cosine, Database, Writer};
+use hannoy::distances::Cosine;
+use hannoy::{Database, Reader, Writer};
 use heed::{Env, EnvOpenOptions, RwTxn};
 use hnsw_rs;
 use hnsw_rs::hnsw::Hnsw;
 use hnsw_rs::prelude::DistCosine;
-use rand::thread_rng;
-use rand::{rngs::StdRng, Rng, SeedableRng};
+use rand::rngs::StdRng;
+use rand::{thread_rng, Rng, SeedableRng};
 use tempfile::tempdir;
 
 static M: usize = 16;
