@@ -1,17 +1,15 @@
 //! Python bindings for hannoy.
+use std::path::PathBuf;
+use std::sync::LazyLock;
+
 use heed::{RoTxn, RwTxn, WithoutTls};
 use once_cell::sync::OnceCell;
 use parking_lot::{MappedMutexGuard, Mutex, MutexGuard};
-use pyo3::{
-    exceptions::{PyIOError, PyRuntimeError},
-    prelude::*,
-    types::PyType,
-};
-use pyo3_stub_gen::{
-    define_stub_info_gatherer,
-    derive::{gen_stub_pyclass, gen_stub_pyclass_enum, gen_stub_pymethods},
-};
-use std::{path::PathBuf, sync::LazyLock};
+use pyo3::exceptions::{PyIOError, PyRuntimeError};
+use pyo3::prelude::*;
+use pyo3::types::PyType;
+use pyo3_stub_gen::define_stub_info_gatherer;
+use pyo3_stub_gen::derive::{gen_stub_pyclass, gen_stub_pyclass_enum, gen_stub_pymethods};
 
 use crate::{distance, Database, ItemId, Reader, Writer};
 static DEFAULT_ENV_SIZE: usize = 1024 * 1024 * 1024; // 1GiB
@@ -257,7 +255,8 @@ pub(super) struct PyWriter {
 
 impl PyWriter {
     fn build(&self) -> PyResult<()> {
-        use rand::{rngs::StdRng, SeedableRng};
+        use rand::rngs::StdRng;
+        use rand::SeedableRng;
 
         let mut rng = StdRng::seed_from_u64(42);
         let mut wtxn = get_rw_txn()?;

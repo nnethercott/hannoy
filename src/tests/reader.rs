@@ -1,13 +1,13 @@
 #[cfg(not(windows))]
 use proptest::prelude::*;
-use rand::{rngs::StdRng, seq::SliceRandom, thread_rng, Rng, SeedableRng};
+use rand::rngs::StdRng;
+use rand::seq::SliceRandom;
+use rand::{thread_rng, Rng, SeedableRng};
 use roaring::RoaringBitmap;
 
-use crate::{
-    distance::{BinaryQuantizedCosine, Cosine},
-    tests::{create_database, create_database_indices_with_items, rng, DatabaseHandle},
-    Reader, Writer,
-};
+use crate::distance::{BinaryQuantizedCosine, Cosine};
+use crate::tests::{create_database, create_database_indices_with_items, rng, DatabaseHandle};
+use crate::{Reader, Writer};
 
 const M: usize = 16;
 const M0: usize = 32;
