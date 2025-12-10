@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.1](https://github.com/nnethercott/hannoy/compare/v0.1.0...v0.1.1) - 2025-12-10
+
+### Other
+
+- *(hnsw)* change logic for link patching ([#111](https://github.com/nnethercott/hannoy/pull/111))
+
 ## [0.0.9](https://github.com/nnethercott/hannoy/compare/v0.0.8...v0.0.9) - 2025-12-03
 
 ### Fixed
