@@ -381,12 +381,6 @@ impl<'a, D: Distance, const M: usize, const M0: usize> HnswBuilder<'a, D, M, M0>
             let map_guard = self.layers[lvl].pin();
             let mut new_links = map_guard.get(&id).map(|s| s.links.to_vec()).unwrap_or_default();
 
-            // No work to be done, continue
-            if del_subset.is_empty() && new_links.is_empty() {
-                return Ok(());
-            }
-
-            // Iter through each of the deleted, and explore his neighbours
             let mut bitmap = RoaringBitmap::new();
             for item_id in del_subset.iter() {
                 bitmap.extend(lmdb.get_links(item_id, lvl).unwrap_or_default().iter());
@@ -394,14 +388,24 @@ impl<'a, D: Distance, const M: usize, const M0: usize> HnswBuilder<'a, D, M, M0>
             bitmap |= links;
             bitmap -= to_delete;
 
-            for other in bitmap {
-                let u = &lmdb.get_item(id)?;
+            //  Case 1: Union of [on_disk, current_build, deleted_extension] is small enough
+            let thresh = if lvl == 0 { M0 } else { M };
+            if (bitmap.len() as usize) + new_links.len() <= thresh {
+                // NOTE: pairwise distance is no longer relevant
+                let mut entries: Vec<_> =
+                    bitmap.iter().map(|node_id| (OrderedFloat(0.0f32), node_id)).collect();
+                entries.extend(new_links);
 
-                // FIXME: normally `other` SHOULD be in the db. The only way this doesn't happen is
-                // if some links still point to deleted items, which itself should not be possible
-                // by virtue of this function...
+                let _ = map_guard.insert(id, NodeState { links: ArrayVec::from_iter(entries) });
+                return Ok(());
+            }
+
+            // Case 2: Some old links may be popped to fill gaps from deleted nodes
+            let curr = &lmdb.get_item(id)?;
+
+            for other in bitmap {
                 if let Ok(v) = lmdb.get_item(other) {
-                    let dist = D::distance(u, &v);
+                    let dist = D::distance(curr, &v);
                     new_links.push((OrderedFloat(dist), other));
                 }
             }
@@ -441,11 +445,13 @@ impl<'a, D: Distance, const M: usize, const M0: usize> HnswBuilder<'a, D, M, M0>
 
         // O(1) from self.layers
         let Some(map) = self.layers.get(level) else { return Ok(res) };
-        match map.pin().get(&item_id) {
+
+        let pinned = map.pin();
+        match pinned.get(&item_id) {
             Some(node_state) => res.extend(node_state.links.iter().map(|(_, i)| *i)),
             None => {
-                // lazily add this entry
-                self.add_in_layers_below(item_id, level);
+                // lazily add this entry so he can get updated later
+                // pinned.insert(item_id, NodeState { links: array_vec![] });
             }
         }
 
