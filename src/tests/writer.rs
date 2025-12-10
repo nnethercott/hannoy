@@ -419,14 +419,14 @@ fn overwrite_one_item_incremental() {
     Dumping index 0
     Root: Metadata { dimensions: 2, items: RoaringBitmap<[0, 1, 2, 3, 4, 5]>, distance: "euclidean", entry_points: [0, 2, 3], max_level: 1 }
     Version: Version { major: 0, minor: 1, patch: 0 }
-    Links 0: Links(Links { links: RoaringBitmap<[1]> })
+    Links 0: Links(Links { links: RoaringBitmap<[1, 2]> })
     Links 0: Links(Links { links: RoaringBitmap<[2]> })
     Links 1: Links(Links { links: RoaringBitmap<[0, 2]> })
     Links 2: Links(Links { links: RoaringBitmap<[1, 4]> })
     Links 2: Links(Links { links: RoaringBitmap<[0, 3]> })
     Links 3: Links(Links { links: RoaringBitmap<[5]> })
     Links 3: Links(Links { links: RoaringBitmap<[2]> })
-    Links 4: Links(Links { links: RoaringBitmap<[2, 5]> })
+    Links 4: Links(Links { links: RoaringBitmap<[2, 3, 5]> })
     Links 5: Links(Links { links: RoaringBitmap<[3, 4]> })
     Item 0: Item(Item { header: NodeHeaderEuclidean { bias: "0.0000" }, vector: [0.0000, 0.0000] })
     Item 1: Item(Item { header: NodeHeaderEuclidean { bias: "0.0000" }, vector: [1.0000, 0.0000] })
@@ -635,7 +635,7 @@ fn delete_one_item() {
     Root: Metadata { dimensions: 2, items: RoaringBitmap<[0, 1, 2, 4, 5]>, distance: "euclidean", entry_points: [0, 1, 2], max_level: 1 }
     Version: Version { major: 0, minor: 1, patch: 0 }
     Links 0: Links(Links { links: RoaringBitmap<[1]> })
-    Links 0: Links(Links { links: RoaringBitmap<[1]> })
+    Links 0: Links(Links { links: RoaringBitmap<[1, 2]> })
     Links 1: Links(Links { links: RoaringBitmap<[0, 2]> })
     Links 1: Links(Links { links: RoaringBitmap<[0, 2]> })
     Links 2: Links(Links { links: RoaringBitmap<[1, 2, 4]> })
