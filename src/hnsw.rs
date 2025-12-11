@@ -185,14 +185,13 @@ impl<'a, D: Distance, const M: usize, const M0: usize> HnswBuilder<'a, D, M, M0>
             Ok(()) as Result<(), Error>
         })?;
 
-        self.maybe_patch_old_links(&lmdb, to_delete, options)?;
+        self.fill_gaps_from_deleted(&lmdb, to_delete, options)?;
 
         // Single-threaded write to lmdb
         options.progress.update(HannoyBuild::WritingTheItems);
         let mut cancellation_index = 0;
 
-        for lvl in 0..=self.max_level {
-            let Some(map) = self.layers.get(lvl) else { break };
+        for (lvl, map) in self.layers.iter().enumerate() {
             let map_guard = map.pin();
 
             for (item_id, node_state) in &map_guard {
@@ -332,7 +331,7 @@ impl<'a, D: Distance, const M: usize, const M0: usize> HnswBuilder<'a, D, M, M0>
     /// the end of indexing we need to merge the old and new links and prune ones pointing to
     /// deleted items.
     /// Algorithm 4 from FreshDiskANN paper.
-    fn maybe_patch_old_links<P>(
+    fn fill_gaps_from_deleted<P>(
         &mut self,
         lmdb: &FrozenReader<D>,
         to_delete: &RoaringBitmap,
@@ -387,6 +386,7 @@ impl<'a, D: Distance, const M: usize, const M0: usize> HnswBuilder<'a, D, M, M0>
             }
             bitmap |= links;
             bitmap -= to_delete;
+            debug_assert!(bitmap.is_disjoint(to_delete));
 
             //  Case 1: Union of [on_disk, current_build, deleted_extension] is small enough
             let thresh = if lvl == 0 { M0 } else { M };
@@ -404,10 +404,8 @@ impl<'a, D: Distance, const M: usize, const M0: usize> HnswBuilder<'a, D, M, M0>
             let curr = &lmdb.get_item(id)?;
 
             for other in bitmap {
-                if let Ok(v) = lmdb.get_item(other) {
-                    let dist = D::distance(curr, &v);
-                    new_links.push((OrderedFloat(dist), other));
-                }
+                let dist = D::distance(curr, &lmdb.get_item(other)?);
+                new_links.push((OrderedFloat(dist), other));
             }
             let pruned = self.robust_prune(new_links, lvl, self.alpha, lmdb)?;
             let _ = map_guard.insert(id, NodeState { links: ArrayVec::from_iter(pruned) });
@@ -451,7 +449,7 @@ impl<'a, D: Distance, const M: usize, const M0: usize> HnswBuilder<'a, D, M, M0>
             Some(node_state) => res.extend(node_state.links.iter().map(|(_, i)| *i)),
             None => {
                 // lazily add this entry so he can get updated later
-                // pinned.insert(item_id, NodeState { links: array_vec![] });
+                pinned.insert(item_id, NodeState { links: array_vec![] });
             }
         }
 
