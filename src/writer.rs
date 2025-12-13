@@ -199,6 +199,37 @@ impl<'a, D: Distance, R: Rng + SeedableRng, P> HannoyBuilder<'a, D, R, P> {
         self.writer.build::<R, P, M, M0>(wtxn, self.rng, &self.inner)
     }
 
+    /// Rebuilds an HNSW graph from scratch.
+    ///
+    /// Assumes you've previously built one or more times. This function will drop all graph edges
+    /// from previous builds and reconstruct the hnsw with the vectors found in the db.
+    ///
+    /// Standard builds work by first adding or deleting some nodes, here we're marking all
+    /// vectors found on disk as updated to force a rebuild. When in doubt prefer [`Self::build<M,M0>`] over
+    /// this method.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// # use hannoy::{Writer, distances::Euclidean};
+    /// # let (writer, wtxn): (Writer<Euclidean>, heed::RwTxn) = todo!();
+    /// use rayon;
+    /// use rand::rngs::StdRng;
+    /// use rand::SeedableRng;
+    ///
+    /// // configure global threadpool if you want!
+    /// rayon::ThreadPoolBuilder::new().num_threads(4).build_global().unwrap();
+    ///
+    /// let mut rng = StdRng::seed_from_u64(4729);
+    /// writer.builder(&mut rng).force_rebuild::<16,32>(&mut wtxn);
+    /// ```
+    pub fn force_rebuild<const M: usize, const M0: usize>(&mut self, wtxn: &mut RwTxn) -> Result<()>
+    where
+        P: steppe::Progress,
+    {
+        self.writer.force_rebuild::<R, P, M, M0>(wtxn, self.rng, &self.inner)
+    }
+
     /// Converts an arroy db into a hannoy one.
     #[cfg(any(test, feature = "arroy"))]
     #[cfg_attr(docsrs, doc(cfg(feature = "arroy")))]
@@ -493,7 +524,7 @@ impl<D: Distance> Writer<D> {
         // Remove deleted links from lmdb AFTER build; in DiskANN we use a deleted item's
         // neighbours when filling in the "gaps" left in the graph from deletions. See
         // [`HnswBuilder::maybe_patch_old_links`] for more details.
-        self.delete_links_from_db(to_delete, wtxn)?;
+        self.delete_links_from_db(&to_delete, wtxn)?;
 
         debug!("write the metadata...");
         options.progress.update(HannoyBuild::WriteTheMetadata);
@@ -517,6 +548,40 @@ impl<D: Distance> Writer<D> {
         )?;
 
         Ok(())
+    }
+
+    /// Kinda like clear, but only for links
+    fn force_rebuild<R, P, const M: usize, const M0: usize>(
+        &self,
+        wtxn: &mut RwTxn,
+        rng: &mut R,
+        options: &BuildOption<P>,
+    ) -> Result<()>
+    where
+        R: Rng + SeedableRng,
+        P: steppe::Progress,
+    {
+        // 1. delete metadata
+        self.database.delete(wtxn, &Key::metadata(self.index))?;
+
+        // 2. delete version
+        self.database.delete(wtxn, &Key::version(self.index))?;
+
+        // 3. delete all links
+        let item_ids = self.item_indices(wtxn, options)?;
+        self.delete_links_from_db(&item_ids, wtxn)?;
+
+        // 4. mark all nodes as updated
+        for item_id in item_ids {
+            self.database.remap_data_type::<Unit>().put(
+                wtxn,
+                &Key::updated(self.index, item_id),
+                &(),
+            )?;
+        }
+
+        // 5. trigger build
+        self.build::<R, P, M, M0>(wtxn, rng, options)
     }
 
     fn reset_and_retrieve_updated_items<P>(
@@ -586,7 +651,7 @@ impl<D: Distance> Writer<D> {
 
     // Iterates over links in lmdb and deletes those in `to_delete`. There can be several links
     // with the same NodeId.item, each differing by their layer
-    fn delete_links_from_db(&self, to_delete: RoaringBitmap, wtxn: &mut RwTxn) -> Result<()> {
+    fn delete_links_from_db(&self, to_delete: &RoaringBitmap, wtxn: &mut RwTxn) -> Result<()> {
         let mut cursor = self
             .database
             .remap_key_type::<PrefixCodec>()
