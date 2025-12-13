@@ -75,7 +75,7 @@ fn random_read_writes() {
     const DIM: usize = 32;
     const NUMEL: usize = 1000;
     const M: usize = 16;
-    const M0: usize = 32;
+    const M0: usize = 768;
 
     // util for generating new vectors on the fly
     fn gen_vec() -> [f32; DIM] {
