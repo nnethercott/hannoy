@@ -67,7 +67,6 @@ fn assert_deleted_items_are_gone(
 }
 
 #[test]
-#[ignore = "if working properly this should run infinitely"]
 fn random_read_writes() {
     let seed: u64 = rand::random();
     let mut rng = StdRng::seed_from_u64(seed);
@@ -88,7 +87,7 @@ fn random_read_writes() {
 
     let mut deleted = RoaringBitmap::new();
 
-    for _ in 0.. {
+    for _ in 0..100 {
         let rtxn = env.read_txn().unwrap();
         assert_all_readable::<DIM>(&rtxn, database);
         assert_deleted_items_are_gone(&rtxn, database, &deleted);
