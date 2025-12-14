@@ -550,7 +550,7 @@ impl<D: Distance> Writer<D> {
         Ok(())
     }
 
-    /// Kinda like clear, but only for links
+    /// Kinda like clear and create, but only for links
     fn force_rebuild<R, P, const M: usize, const M0: usize>(
         &self,
         wtxn: &mut RwTxn,
