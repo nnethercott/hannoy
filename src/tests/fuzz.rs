@@ -1,3 +1,8 @@
+use std::{
+    env::VarError,
+    time::{Duration, Instant},
+};
+
 use crate::{
     distance::Cosine,
     key::{KeyCodec, Prefix, PrefixCodec},
@@ -8,7 +13,12 @@ use crate::{
 };
 use arbitrary::{Arbitrary, Unstructured};
 use heed::RoTxn;
-use rand::{self, distributions::Uniform, rngs::StdRng, thread_rng, Rng, SeedableRng};
+use rand::{
+    self,
+    distributions::Uniform,
+    rngs::{StdRng, ThreadRng},
+    Rng, SeedableRng,
+};
 use roaring::RoaringBitmap;
 use tracing::info;
 
@@ -76,18 +86,26 @@ fn random_read_writes() {
     const M: usize = 16;
     const M0: usize = 768;
 
-    // util for generating new vectors on the fly
-    fn gen_vec() -> [f32; DIM] {
-        let unif = Uniform::new(-1.0, 1.0);
-        std::array::from_fn(|_| thread_rng().sample(unif))
-    }
-
     let DatabaseHandle { env, database, tempdir: _ } =
         create_database_indices_with_items::<Cosine, DIM, M, M0, _>(0..1, NUMEL, &mut rng);
 
     let mut deleted = RoaringBitmap::new();
+    let mut vec_rng = rand::thread_rng();
 
-    for _ in 0..100 {
+    // util for generating new vectors on the fly
+    fn gen_vec(rng: &mut ThreadRng) -> [f32; DIM] {
+        let unif = Uniform::new(-1.0, 1.0);
+        std::array::from_fn(|_| rng.sample(unif))
+    }
+
+    let duration = match std::env::var("HANNOY_FUZZ_DURATION_SEC") {
+        Ok(value) => Duration::from_secs(value.parse().expect("valid number of seconds")),
+        Err(VarError::NotPresent) => Duration::from_secs(20),
+        Err(VarError::NotUnicode(e)) => panic!("Invalid duration: {e:?}"),
+    };
+
+    let before = Instant::now();
+    while before.elapsed() < duration {
         let rtxn = env.read_txn().unwrap();
         assert_all_readable::<DIM>(&rtxn, database);
         assert_deleted_items_are_gone(&rtxn, database, &deleted);
@@ -107,7 +125,7 @@ fn random_read_writes() {
             match op {
                 WriteOp::Add(id) => {
                     let id = id % (NUMEL as u32);
-                    let vector = gen_vec();
+                    let vector = gen_vec(&mut vec_rng);
                     assert!(vector != [0.0f32; DIM]);
                     writer.add_item(&mut wtxn, id, &vector).unwrap();
 
