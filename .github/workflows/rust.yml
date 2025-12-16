@@ -56,3 +56,13 @@ jobs:
         if: always()
         with:
           command: doc
+
+  fuzzer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v1
+      - uses: dtolnay/rust-toolchain@1.85
+      - name: Run fuzzer
+        env:
+          HANNOY_FUZZ_DURATION_SEC: 1800
+        run: cargo test -- random_read_writes
