@@ -10,7 +10,7 @@ use super::{create_database, rng};
 use crate::distance::{BinaryQuantizedCosine, Cosine, Euclidean};
 use crate::key::{KeyCodec, Prefix, PrefixCodec};
 use crate::reader::get_item;
-use crate::tests::DatabaseHandle;
+use crate::tests::{create_database_indices_with_items, DatabaseHandle};
 use crate::{Reader, Writer};
 
 const M: usize = 3;
@@ -744,4 +744,28 @@ proptest! {
         }
         writer.builder(&mut rng).build::<M, M0>(&mut wtxn).unwrap();
     }
+}
+
+#[test]
+fn test_force_rebuild_and_search() {
+    const DIM: usize = 768;
+    let mut rng = rng();
+
+    // build the db
+    let DatabaseHandle { env, database, tempdir: _ } =
+        create_database_indices_with_items::<Cosine, DIM, M, M0, _>(0..1, 100, &mut rng);
+
+    // force rebuild the db
+    let mut wtxn = env.write_txn().unwrap();
+    let writer = Writer::new(database, 0, DIM);
+    writer.builder(&mut rng).force_rebuild::<M, M0>(&mut wtxn).unwrap();
+    wtxn.commit().unwrap();
+
+    // check we can still read over it
+    let rtxn = env.read_txn().unwrap();
+    let reader = crate::Reader::<Cosine>::open(&rtxn, 0, database).unwrap();
+
+    let found = reader.nns(10).by_item(&rtxn, 0).unwrap().unwrap().into_nns();
+    assert!(found.len() == 10);
+    assert!(!found.contains(&(0, 0.0)))
 }
