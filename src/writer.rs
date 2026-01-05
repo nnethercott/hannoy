@@ -37,6 +37,11 @@ pub(crate) struct BuildOption<'a, P> {
     pub(crate) available_memory: Option<usize>,
     pub(crate) cancel: Box<dyn Fn() -> bool + 'a + Sync + Send>,
     pub(crate) progress: P,
+    /// An optimization that allows for faster relinking of all items.
+    ///
+    /// Avoids marking all the items as "updated" and
+    /// let the rebuild function take them all.
+    pub(crate) relink_all_items: bool,
 }
 
 impl Default for BuildOption<'_, NoProgress> {
@@ -47,6 +52,7 @@ impl Default for BuildOption<'_, NoProgress> {
             available_memory: None,
             cancel: Box::new(|| false),
             progress: NoProgress,
+            relink_all_items: false,
         }
     }
 }
@@ -112,13 +118,27 @@ impl<'a, D: Distance, R: Rng + SeedableRng, P> HannoyBuilder<'a, D, R, P> {
         let HannoyBuilder {
             writer,
             rng,
-            inner: BuildOption { ef_construction, available_memory, cancel, progress: _, alpha },
+            inner:
+                BuildOption {
+                    ef_construction,
+                    available_memory,
+                    cancel,
+                    progress: _,
+                    alpha,
+                    relink_all_items,
+                },
         } = self;
-
         HannoyBuilder {
             writer,
             rng,
-            inner: BuildOption { ef_construction, available_memory, cancel, progress, alpha },
+            inner: BuildOption {
+                ef_construction,
+                available_memory,
+                cancel,
+                progress,
+                alpha,
+                relink_all_items,
+            },
         }
     }
 
@@ -227,7 +247,15 @@ impl<'a, D: Distance, R: Rng + SeedableRng, P> HannoyBuilder<'a, D, R, P> {
     where
         P: steppe::Progress,
     {
-        self.writer.force_rebuild::<R, P, M, M0>(wtxn, self.rng, &self.inner)
+        // Use this option to mark all nodes as updated
+        self.inner.relink_all_items = true;
+
+        self.writer.force_rebuild::<R, P, M, M0>(wtxn, self.rng, &self.inner)?;
+
+        // As this builder can be reused, we need to reset this parameter
+        self.inner.relink_all_items = false;
+
+        Ok(())
     }
 
     /// Converts an arroy db into a hannoy one.
@@ -494,11 +522,17 @@ impl<D: Distance> Writer<D> {
         P: steppe::Progress,
     {
         let item_indices = self.item_indices(wtxn, options)?;
-        // updated items can be an update, an addition or a removed item
-        let updated_items = self.reset_and_retrieve_updated_items(wtxn, options)?;
 
-        let to_delete = updated_items.clone() - &item_indices;
-        let to_insert = &item_indices & &updated_items;
+        // In case we have to rebuild all links we can skip the deletion step.
+        let (to_delete, to_insert) = if options.relink_all_items {
+            (RoaringBitmap::new(), item_indices.clone())
+        } else {
+            // updated items can be an update, an addition or a removed item
+            let updated_items = self.reset_and_retrieve_updated_items(wtxn, options)?;
+            let to_delete = updated_items.clone() - &item_indices;
+            let to_insert = &item_indices & &updated_items;
+            (to_delete, to_insert)
+        };
 
         let metadata = self
             .database
@@ -561,24 +595,21 @@ impl<D: Distance> Writer<D> {
         R: Rng + SeedableRng,
         P: steppe::Progress,
     {
-        // 1. delete metadata
+        // 1. Ensure we have the right settings
+        assert!(
+            options.relink_all_items,
+            "forcing relinking of all items requires the relink_all_items option to be set to true"
+        );
+
+        // 2. delete metadata
         self.database.delete(wtxn, &Key::metadata(self.index))?;
 
-        // 2. delete version
+        // 3. delete version
         self.database.delete(wtxn, &Key::version(self.index))?;
 
-        // 3. delete all links
+        // 4. delete all links
         let item_ids = self.item_indices(wtxn, options)?;
         self.delete_links_from_db(&item_ids, wtxn)?;
-
-        // 4. mark all nodes as updated
-        for item_id in item_ids {
-            self.database.remap_data_type::<Unit>().put(
-                wtxn,
-                &Key::updated(self.index, item_id),
-                &(),
-            )?;
-        }
 
         // 5. trigger build
         self.build::<R, P, M, M0>(wtxn, rng, options)
