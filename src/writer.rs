@@ -558,7 +558,7 @@ impl<D: Distance> Writer<D> {
         // Remove deleted links from lmdb AFTER build; in DiskANN we use a deleted item's
         // neighbours when filling in the "gaps" left in the graph from deletions. See
         // [`HnswBuilder::maybe_patch_old_links`] for more details.
-        self.delete_links_from_db(&to_delete, wtxn)?;
+        self.delete_links_from_db(&to_delete, wtxn, options)?;
 
         debug!("write the metadata...");
         options.progress.update(HannoyBuild::WriteTheMetadata);
@@ -688,7 +688,18 @@ impl<D: Distance> Writer<D> {
 
     // Iterates over links in lmdb and deletes those in `to_delete`. There can be several links
     // with the same NodeId.item, each differing by their layer
-    fn delete_links_from_db(&self, to_delete: &RoaringBitmap, wtxn: &mut RwTxn) -> Result<()> {
+    fn delete_links_from_db<P>(
+        &self,
+        to_delete: &RoaringBitmap,
+        wtxn: &mut RwTxn,
+        options: &BuildOption<P>,
+    ) -> Result<()>
+    where
+        P: steppe::Progress,
+    {
+        debug!("started deleting the links...");
+        options.progress.update(HannoyBuild::DeletingTheLinks);
+
         let mut cursor = self
             .database
             .remap_key_type::<PrefixCodec>()
