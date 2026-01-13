@@ -601,15 +601,21 @@ impl<D: Distance> Writer<D> {
             "forcing relinking of all items requires the relink_all_items option to be set to true"
         );
 
-        // 2. delete metadata
+        // 2. Fetch the list of items from the metadata
+        let Metadata { items: item_ids, .. } = self
+            .database
+            .remap_data_type::<MetadataCodec>()
+            .get(wtxn, &Key::metadata(self.index))?
+            .expect("The metadata must be there");
+
+        // 3. delete metadata
         self.database.delete(wtxn, &Key::metadata(self.index))?;
 
-        // 3. delete version
+        // 4. delete version
         self.database.delete(wtxn, &Key::version(self.index))?;
 
-        // 4. delete all links
-        let item_ids = self.item_indices(wtxn, options)?;
-        self.delete_links_from_db(&item_ids, wtxn)?;
+        // 5. delete all links
+        self.delete_links_from_db(&item_ids, wtxn, options)?;
 
         // 5. trigger build
         self.build::<R, P, M, M0>(wtxn, rng, options)
