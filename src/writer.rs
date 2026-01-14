@@ -558,7 +558,7 @@ impl<D: Distance> Writer<D> {
         // Remove deleted links from lmdb AFTER build; in DiskANN we use a deleted item's
         // neighbours when filling in the "gaps" left in the graph from deletions. See
         // [`HnswBuilder::maybe_patch_old_links`] for more details.
-        self.delete_links_from_db(&to_delete, wtxn)?;
+        self.delete_links_from_db(&to_delete, wtxn, options)?;
 
         debug!("write the metadata...");
         options.progress.update(HannoyBuild::WriteTheMetadata);
@@ -585,6 +585,10 @@ impl<D: Distance> Writer<D> {
     }
 
     /// Kinda like clear and create, but only for links
+    ///
+    /// You must ensure that no items were inserted that are not
+    /// part of the metadata. Which means that a build must have
+    /// been performed or you'll see item leaking.
     fn force_rebuild<R, P, const M: usize, const M0: usize>(
         &self,
         wtxn: &mut RwTxn,
@@ -601,15 +605,21 @@ impl<D: Distance> Writer<D> {
             "forcing relinking of all items requires the relink_all_items option to be set to true"
         );
 
-        // 2. delete metadata
+        // 2. Fetch the list of items from the metadata
+        let Metadata { items: item_ids, .. } = self
+            .database
+            .remap_data_type::<MetadataCodec>()
+            .get(wtxn, &Key::metadata(self.index))?
+            .expect("The metadata must be there");
+
+        // 3. delete metadata
         self.database.delete(wtxn, &Key::metadata(self.index))?;
 
-        // 3. delete version
+        // 4. delete version
         self.database.delete(wtxn, &Key::version(self.index))?;
 
-        // 4. delete all links
-        let item_ids = self.item_indices(wtxn, options)?;
-        self.delete_links_from_db(&item_ids, wtxn)?;
+        // 5. delete all links
+        self.delete_links_from_db(&item_ids, wtxn, options)?;
 
         // 5. trigger build
         self.build::<R, P, M, M0>(wtxn, rng, options)
@@ -682,7 +692,18 @@ impl<D: Distance> Writer<D> {
 
     // Iterates over links in lmdb and deletes those in `to_delete`. There can be several links
     // with the same NodeId.item, each differing by their layer
-    fn delete_links_from_db(&self, to_delete: &RoaringBitmap, wtxn: &mut RwTxn) -> Result<()> {
+    fn delete_links_from_db<P>(
+        &self,
+        to_delete: &RoaringBitmap,
+        wtxn: &mut RwTxn,
+        options: &BuildOption<P>,
+    ) -> Result<()>
+    where
+        P: steppe::Progress,
+    {
+        debug!("started deleting the links...");
+        options.progress.update(HannoyBuild::DeletingTheLinks);
+
         let mut cursor = self
             .database
             .remap_key_type::<PrefixCodec>()
