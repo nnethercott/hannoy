@@ -585,6 +585,10 @@ impl<D: Distance> Writer<D> {
     }
 
     /// Kinda like clear and create, but only for links
+    ///
+    /// You must ensure that no items were inserted that are not
+    /// part of the metadata. Which means that a build must have
+    /// been performed or you'll see item leaking.
     fn force_rebuild<R, P, const M: usize, const M0: usize>(
         &self,
         wtxn: &mut RwTxn,
