@@ -697,7 +697,7 @@ impl<D: Distance> Reader<D> {
                 }
 
                 visitor.eps = vec![id];
-                visitor.ef = opt.ef - neighbours.len();
+                visitor.ef = opt.ef.saturating_sub(neighbours.len());
 
                 let more_nns =
                     return_if_cancelled!(visitor.visit(query, self, rtxn, &mut path, cancel_fn)?);
