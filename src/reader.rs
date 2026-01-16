@@ -704,23 +704,39 @@ impl<D: Distance> Reader<D> {
     ) -> Result<Completion<Vec<(ItemId, f32)>>> {
         use Completion::*;
 
-        let mut item_distances = Vec::with_capacity(candidates.len() as usize);
+        // We do not set the capacity as it can be quite large
+        // and we could stop early in case of cancellation.
+        let mut item_distances = BinaryHeap::<(OrderedFloat, _)>::with_capacity(count);
+        let mut cancelled = false;
 
         for item_id in candidates {
             if cancel_fn() {
-                return Ok(Cancelled(item_distances));
+                cancelled = true;
+                break;
             }
 
             let Some(vector) = self.item_vector(rtxn, item_id)? else { continue };
             let vector = UnalignedVector::from_vec(vector);
             let item = Item { header: D::new_header(&vector), vector };
             let distance = D::distance(&item, query);
-            item_distances.push((item_id, distance));
-        }
-        item_distances.sort_by_key(|(_, dist)| OrderedFloat(*dist));
-        item_distances.truncate(count);
 
-        Ok(Done(item_distances))
+            // We make sure we maintain the number of items
+            // in the heap at a maximum of count elements.
+            if item_distances.len() >= count {
+                if let Some(mut peek) = item_distances.peek_mut() {
+                    if peek.0 > OrderedFloat(distance) {
+                        *peek = (OrderedFloat(distance), item_id);
+                    }
+                }
+            } else {
+                item_distances.push((OrderedFloat(distance), item_id));
+            }
+        }
+
+        let item_distances = item_distances.into_sorted_vec();
+        let output = item_distances.into_iter().map(|(OrderedFloat(d), i)| (i, d)).collect();
+
+        Ok(if cancelled { Cancelled(output) } else { Done(output) })
     }
 
     /// Hnsw search according to arXiv:1603.09320.
