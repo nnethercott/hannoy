@@ -29,7 +29,7 @@ const READER_AVAILABLE_MEMORY: &str = "HANNOY_READER_PREFETCH_MEMORY";
 const DEFAULT_LINEAR_SCAN_THRESHOLD: usize = 1000;
 
 /// The default threshold ratio at which linear search is used instead of the HNSW algorithm.
-const DEFAULT_LINEAR_SCAN_THRESHOLD_RATIO: f32 = 0.00;
+const DEFAULT_LINEAR_SCAN_THRESHOLD_RATIO: f32 = 1.00;
 
 /// Container storing nearest neighbour search result
 #[derive(Debug)]
@@ -629,7 +629,7 @@ impl<D: Distance> Reader<D> {
         let is_below_threshold = candidates_len < opt.linear_below as u64;
         let is_below_ratio = candidates_len as f32 / all_ids.len() as f32 <= opt.linear_below_ratio;
 
-        is_below_threshold || is_below_ratio
+        is_below_threshold && is_below_ratio
     }
 
     fn nns_by_vec(
