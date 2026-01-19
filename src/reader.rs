@@ -25,14 +25,11 @@ const DEFAULT_EF_SEARCH: usize = 100;
 #[cfg(not(windows))]
 const READER_AVAILABLE_MEMORY: &str = "HANNOY_READER_PREFETCH_MEMORY";
 
-/// The default threshold at which *no* linear search is used.
-const DEFAULT_NO_LINEAR_SCAN_THRESHOLD: usize = 1000;
-
 /// The default threshold at which linear search is used instead of the HNSW algorithm.
 const DEFAULT_LINEAR_SCAN_THRESHOLD: usize = 1000;
 
 /// The default threshold ratio at which linear search is used instead of the HNSW algorithm.
-const DEFAULT_LINEAR_SCAN_THRESHOLD_RATIO: f32 = 0.01;
+const DEFAULT_LINEAR_SCAN_THRESHOLD_RATIO: f32 = 0.00;
 
 /// Container storing nearest neighbour search result
 #[derive(Debug)]
@@ -65,7 +62,6 @@ pub struct QueryBuilder<'a, D: Distance> {
     candidates: Option<&'a RoaringBitmap>,
     count: usize,
     ef: usize,
-    no_linear_above: usize,
     linear_below: usize,
     linear_below_ratio: f32,
 }
@@ -220,24 +216,6 @@ impl<'a, D: Distance> QueryBuilder<'a, D> {
     /// ```
     pub fn ef_search(&mut self, ef: usize) -> &mut Self {
         self.ef = ef.max(self.count);
-        self
-    }
-
-    /// Specify a threshold for the number of candidates above which a linear scan is
-    /// **not** used instead of the HNSW algorithm. This help make sure we do not run
-    /// linear scans on large sets as it can impact relevancy.
-    ///
-    /// The default value is 1000.
-    ///
-    /// # Examples
-    ///
-    /// ```no_run
-    /// # use hannoy::{Reader, distances::Euclidean};
-    /// # let (reader, rtxn): (Reader<Euclidean>, heed::RoTxn) = todo!();
-    /// reader.nns(20).linear_above(500).by_item(&rtxn, 6);
-    /// ```
-    pub fn no_linear_above(&mut self, threshold: usize) -> &mut Self {
-        self.no_linear_above = threshold;
         self
     }
 
@@ -636,36 +614,22 @@ impl<D: Distance> Reader<D> {
             candidates: None,
             count,
             ef: DEFAULT_EF_SEARCH,
-            no_linear_above: DEFAULT_NO_LINEAR_SCAN_THRESHOLD,
             linear_below: DEFAULT_LINEAR_SCAN_THRESHOLD,
             linear_below_ratio: DEFAULT_LINEAR_SCAN_THRESHOLD_RATIO,
         }
     }
 
     fn should_linear_scan(&self, opt: &QueryBuilder<D>) -> bool {
-        let candidates = match opt.candidates {
-            Some(candidates) => candidates,
-            None => return false,
-        };
+        let candidates = opt.candidates.unwrap_or_else(|| self.item_ids());
+        let all_ids = self.item_ids();
 
-        let item_ids = self.item_ids();
         // We retrieve the subset of candidates that are actually
         // part of the items in the database
-        let candidates_len = item_ids.intersection_len(candidates);
+        let candidates_len = all_ids.intersection_len(candidates);
+        let is_below_threshold = candidates_len < opt.linear_below as u64;
+        let is_below_ratio = candidates_len as f32 / all_ids.len() as f32 <= opt.linear_below_ratio;
 
-        let too_many = candidates_len > opt.no_linear_above as u64;
-        let really_not_many = candidates_len <= opt.linear_below as u64;
-
-        // The universe (item_ids) is never zero here, because we test that the
-        // candidates are non-disjoint from the universe and early exit if it is.
-        let proportionally_not_many =
-            candidates_len as f32 / item_ids.len() as f32 <= opt.linear_below_ratio;
-
-        if too_many {
-            return false;
-        }
-
-        really_not_many || proportionally_not_many
+        is_below_threshold || is_below_ratio
     }
 
     fn nns_by_vec(
