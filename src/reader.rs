@@ -675,8 +675,8 @@ impl<D: Distance> Reader<D> {
     ) -> Result<Completion<Vec<(ItemId, f32)>>> {
         use Completion::*;
 
-        // We do not set the capacity as it can be quite large
-        // and we could stop early in case of cancellation.
+        // We set the capacity to the maximum number of
+        // candidates we can return as it should be small enough.
         let mut item_distances = BinaryHeap::<(OrderedFloat, _)>::with_capacity(count);
         let mut cancelled = false;
 
