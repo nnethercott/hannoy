@@ -6,7 +6,7 @@ use heed::{PutFlags, RoTxn, RwTxn};
 use rand::{Rng, SeedableRng};
 use roaring::RoaringBitmap;
 use steppe::NoProgress;
-use tracing::{debug, error, info};
+use tracing::{debug, error};
 
 use crate::distance::Distance;
 use crate::hnsw::HnswBuilder;
@@ -553,7 +553,7 @@ impl<D: Distance> Writer<D> {
 
         let stats =
             hnsw.build(to_insert, &to_delete, self.database, self.index, wtxn, rng, options)?;
-        info!("{stats:?}");
+        debug!("{stats:?}");
 
         // Remove deleted links from lmdb AFTER build; in DiskANN we use a deleted item's
         // neighbours when filling in the "gaps" left in the graph from deletions. See
