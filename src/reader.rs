@@ -251,7 +251,7 @@ impl<'a, D: Distance> QueryBuilder<'a, D> {
     /// ```
     pub fn linear_below_ratio(&mut self, ratio: f32) -> &mut Self {
         assert!(
-            ratio >= 0.0 && ratio <= 1.0,
+            (0.0..=1.0).contains(&ratio),
             "linear scan threshold ratio must be between 0.0 and 1.0"
         );
 
