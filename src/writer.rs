@@ -12,8 +12,7 @@ use crate::distance::Distance;
 use crate::hnsw::HnswBuilder;
 use crate::internals::KeyCodec;
 use crate::item_iter::ItemIter;
-use crate::node::{Item, ItemIds, Links, NodeCodec};
-use crate::parallel::{ImmutableItems, ImmutableLinks};
+use crate::node::{Item, ItemIds, NodeCodec};
 use crate::progress::HannoyBuild;
 use crate::reader::get_item;
 use crate::unaligned_vector::UnalignedVector;
@@ -718,27 +717,6 @@ impl<D: Distance> Writer<D> {
         }
 
         Ok(())
-    }
-}
-
-#[derive(Clone)]
-pub(crate) struct FrozenReader<'a, D: Distance> {
-    pub index: u16,
-    pub items: &'a ImmutableItems<'a, D>,
-    pub links: &'a ImmutableLinks<'a, D>,
-}
-
-impl<'a, D: Distance> FrozenReader<'a, D> {
-    pub fn get_item(&self, item_id: ItemId) -> Result<Item<'a, D>> {
-        let key = Key::item(self.index, item_id);
-        // key is a `Key::item` so returned result must be a Node::Item
-        self.items.get(item_id)?.ok_or(Error::missing_key(key))
-    }
-
-    pub fn get_links(&self, item_id: ItemId, level: usize) -> Result<Links<'a>> {
-        let key = Key::links(self.index, item_id, level as u8);
-        // key is a `Key::item` so returned result must be a Node::Item
-        self.links.get(item_id, level as u8)?.ok_or(Error::missing_key(key))
     }
 }
 

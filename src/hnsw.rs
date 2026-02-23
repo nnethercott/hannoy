@@ -21,10 +21,9 @@ use tracing::{debug, instrument};
 use crate::key::Key;
 use crate::node::{Item, Links, Node};
 use crate::ordered_float::OrderedFloat;
-use crate::parallel::{ImmutableItems, ImmutableLinks};
 use crate::progress::{AtomicInsertItemsStep, HannoyBuild};
 use crate::stats::BuildStats;
-use crate::writer::{BuildOption, FrozenReader};
+use crate::writer::BuildOption;
 use crate::{Database, Distance, Error, ItemId, Result, CANCELLATION_PROBING};
 
 pub(crate) type ScoredLink = (OrderedFloat, ItemId);
