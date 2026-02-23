@@ -212,7 +212,6 @@ impl<'a, D: Distance, const M: usize, const M0: usize> HnswBuilder<'a, D, M, M0>
             }
         }
 
-        build_stats.compute_mean_degree(wtxn, &database, index)?;
         Ok(build_stats)
     }
 
