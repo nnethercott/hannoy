@@ -57,8 +57,16 @@ impl<'a> heed::BytesDecode<'a> for MetadataCodec {
         let bytes = &bytes[size_of::<u32>()..];
         let items = RoaringBitmap::deserialize_from(&bytes[..items_size])?;
         let bytes = &bytes[items_size..];
-        let entry_points = ItemIds::from_bytes(&bytes[..bytes.len() - 1]);
-        let max_level = bytes[bytes.len() - 1];
+
+        let entry_points;
+        let max_level;
+        if bytes.is_empty() {
+            entry_points = ItemIds::from_slice(&[]);
+            max_level = 0;
+        } else {
+            entry_points = ItemIds::from_bytes(&bytes[..bytes.len() - 1]);
+            max_level = bytes[bytes.len() - 1];
+        };
 
         Ok(Metadata { dimensions, items, distance, entry_points, max_level })
     }
