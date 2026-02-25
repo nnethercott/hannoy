@@ -5,8 +5,6 @@ make_enum_progress! {
         RetrievingTheItemsIds,
         DeletingTheLinks,
         RetrieveTheUpdatedItems,
-        FetchItemPointers,
-        FetchLinksPointers,
         ResolveGraphEntryPoints,
         BuildingTheGraph,
         PatchOldNewDeletedLinks,

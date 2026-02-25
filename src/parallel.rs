@@ -3,9 +3,9 @@ use std::borrow::Cow;
 use heed::{RoTxn, RwTxn, WithoutTls};
 use roaring::RoaringBitmap;
 
-use crate::key::Key;
+use crate::key::{Key, KeyCodec, Prefix, PrefixCodec};
 use crate::node::{Item, Links, Node};
-use crate::node_id::{NodeId, NodeMode};
+use crate::node_id::NodeId;
 use crate::{Database, Distance, Error, ItemId, Result};
 
 pub(crate) struct FrozenReader<'t, D> {
@@ -40,7 +40,7 @@ impl<'t, D: Distance> FrozenReader<'t, D> {
     pub fn links<'a>(&'a self, item_id: ItemId, level: usize) -> Result<Links<'a>> {
         let rtxn = self.rtxns.get_or(|| self.rtxns_pool.try_recv().unwrap());
         let key = Key::links(self.index, item_id, level as u8);
-        // key is a `Key::item` so returned result must be a Node::Item
+        // key is a `Key::links` so returned result must be a Node::Links
         self.database.get(rtxn, &key)?.and_then(|node| node.links()).ok_or(Error::missing_key(key))
     }
 
@@ -51,30 +51,34 @@ impl<'t, D: Distance> FrozenReader<'t, D> {
     ) -> heed::Result<impl Iterator<Item = heed::Result<((ItemId, u8), Cow<'_, RoaringBitmap>)>>>
     {
         let rtxn = self.rtxns.get_or(|| self.rtxns_pool.try_recv().unwrap());
-        Ok(self.database.lazily_decode_data().iter(rtxn)?.filter_map(move |result| {
-            let (key, value) = match result {
-                Ok(value) => value,
-                Err(e) => return Some(Err(e)),
-            };
+        let prefix_key = Prefix::links(self.index);
 
-            let Key { node: NodeId { item: item_id, layer: level, mode: NodeMode::Links }, .. } =
-                key
-            else {
-                return None;
-            };
+        Ok(self
+            .database
+            .remap_key_type::<PrefixCodec>()
+            .prefix_iter(rtxn, &prefix_key)?
+            .remap_key_type::<KeyCodec>()
+            .lazily_decode_data()
+            .filter_map(move |result| {
+                let (key, value) = match result {
+                    Ok(value) => value,
+                    Err(e) => return Some(Err(e)),
+                };
 
-            if level != layer {
-                return None;
-            }
+                let Key { node: NodeId { item: item_id, layer: level, .. }, .. } = key;
 
-            match value.decode() {
-                Ok(Node::Links(Links { links })) => Some(Ok(((item_id, level), links))),
-                Ok(Node::Item(_)) => {
-                    unreachable!("link at level {level} with item_id {item_id} not found")
+                if level != layer {
+                    return None;
                 }
-                Err(e) => Some(Err(heed::Error::Decoding(e))),
-            }
-        }))
+
+                match value.decode() {
+                    Ok(Node::Links(Links { links })) => Some(Ok(((item_id, level), links))),
+                    Ok(Node::Item(_)) => {
+                        unreachable!("link at level {level} with item_id {item_id} not found")
+                    }
+                    Err(e) => Some(Err(heed::Error::Decoding(e))),
+                }
+            }))
     }
 
     pub fn iter_links(
@@ -82,25 +86,27 @@ impl<'t, D: Distance> FrozenReader<'t, D> {
     ) -> heed::Result<impl Iterator<Item = heed::Result<((ItemId, u8), Cow<'_, RoaringBitmap>)>>>
     {
         let rtxn = self.rtxns.get_or(|| self.rtxns_pool.try_recv().unwrap());
-        Ok(self.database.lazily_decode_data().iter(rtxn)?.filter_map(move |result| {
-            let (key, value) = match result {
-                Ok(value) => value,
-                Err(e) => return Some(Err(e)),
-            };
+        let prefix_key = Prefix::links(self.index);
 
-            let Key { node: NodeId { item: item_id, layer: level, mode: NodeMode::Links }, .. } =
-                key
-            else {
-                return None;
-            };
+        Ok(self
+            .database
+            .remap_key_type::<PrefixCodec>()
+            .prefix_iter(rtxn, &prefix_key)?
+            .remap_key_type::<KeyCodec>()
+            .map(move |result| {
+                let (key, value) = match result {
+                    Ok(value) => value,
+                    Err(e) => return Err(e),
+                };
 
-            match value.decode() {
-                Ok(Node::Links(Links { links })) => Some(Ok(((item_id, level), links))),
-                Ok(Node::Item(_)) => {
-                    unreachable!("link at level {level} with item_id {item_id} not found")
+                let Key { node: NodeId { item: item_id, layer: level, .. }, .. } = key;
+
+                match value {
+                    Node::Links(Links { links }) => Ok(((item_id, level), links)),
+                    Node::Item(_) => {
+                        unreachable!("link at level {level} with item_id {item_id} not found")
+                    }
                 }
-                Err(e) => Some(Err(heed::Error::Decoding(e))),
-            }
-        }))
+            }))
     }
 }
