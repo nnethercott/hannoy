@@ -1,7 +1,7 @@
 use std::any::TypeId;
 use std::path::PathBuf;
 
-use heed::types::{DecodeIgnore, Unit};
+use heed::types::DecodeIgnore;
 use heed::{PutFlags, RoTxn, RwTxn};
 use rand::{Rng, SeedableRng};
 use roaring::RoaringBitmap;
@@ -16,6 +16,7 @@ use crate::node::{Item, ItemIds, NodeCodec};
 use crate::progress::HannoyBuild;
 use crate::reader::get_item;
 use crate::unaligned_vector::UnalignedVector;
+use crate::update_status::{UpdateStatus, UpdateStatusCodec};
 use crate::version::{Version, VersionCodec};
 use crate::{
     Database, Error, ItemId, Key, Metadata, MetadataCodec, Node, Prefix, PrefixCodec, Result,
@@ -342,10 +343,10 @@ impl<D: Distance> Writer<D> {
         // We mark all the items as updated so
         // the Writer::build method can handle them.
         for item in new_items {
-            self.database.remap_data_type::<Unit>().put(
+            self.database.remap_data_type::<UpdateStatusCodec>().put(
                 wtxn,
                 &Key::updated(self.index, item),
-                &(),
+                &UpdateStatus::Updated,
             )?;
         }
 
@@ -396,8 +397,11 @@ impl<D: Distance> Writer<D> {
             drop(cursor);
 
             for item in updated_items {
-                let key = Key::updated(self.index, item);
-                self.database.remap_types::<KeyCodec, Unit>().put(wtxn, &key, &())?;
+                self.database.remap_types::<KeyCodec, UpdateStatusCodec>().put(
+                    wtxn,
+                    &Key::updated(self.index, item),
+                    &UpdateStatus::Updated,
+                )?;
             }
         }
 
@@ -466,7 +470,11 @@ impl<D: Distance> Writer<D> {
         let vector = UnalignedVector::from_slice(vector);
         let db_item = Item { header: D::new_header(&vector), vector };
         self.database.put(wtxn, &Key::item(self.index, item), &Node::Item(db_item))?;
-        self.database.remap_data_type::<Unit>().put(wtxn, &Key::updated(self.index, item), &())?;
+        self.database.remap_data_type::<UpdateStatusCodec>().put(
+            wtxn,
+            &Key::updated(self.index, item),
+            &UpdateStatus::Updated,
+        )?;
 
         Ok(())
     }
@@ -474,10 +482,10 @@ impl<D: Distance> Writer<D> {
     /// Deletes an item stored in this database and returns `true` if it existed.
     pub fn del_item(&self, wtxn: &mut RwTxn, item: ItemId) -> Result<bool> {
         if self.database.delete(wtxn, &Key::item(self.index, item))? {
-            self.database.remap_data_type::<Unit>().put(
+            self.database.remap_data_type::<UpdateStatusCodec>().put(
                 wtxn,
                 &Key::updated(self.index, item),
-                &(),
+                &UpdateStatus::Removed,
             )?;
 
             Ok(true)
@@ -629,6 +637,11 @@ impl<D: Distance> Writer<D> {
         self.build::<R, P, M, M0>(wtxn, rng, options)
     }
 
+    /// Removes all the "updated" stones from the database
+    /// and returns the list of updated and deleted items.
+    ///
+    /// The updated items corresponds to all the items modified, inserted or deleted.
+    /// The deleted items corresponds to all the items deleted.
     fn reset_and_retrieve_updated_items<P>(
         &self,
         wtxn: &mut RwTxn,
@@ -644,18 +657,23 @@ impl<D: Distance> Writer<D> {
         let mut deleted_items = RoaringBitmap::new();
         let mut updated_iter = self
             .database
-            .remap_types::<PrefixCodec, DecodeIgnore>()
+            .remap_types::<PrefixCodec, UpdateStatusCodec>()
             .prefix_iter_mut(wtxn, &Prefix::updated(self.index))?
             .remap_key_type::<KeyCodec>();
 
         let mut index = 0;
-        while let Some((key, _)) = updated_iter.next().transpose()? {
+        while let Some((key, update_status)) = updated_iter.next().transpose()? {
             if index % CANCELLATION_PROBING == 0 && (options.cancel)() {
                 return Err(Error::BuildCancelled);
             }
 
             let inserted = updated_items.insert(key.node.item);
             debug_assert!(inserted, "The keys should be sorted by LMDB");
+
+            if update_status == UpdateStatus::Removed {
+                let inserted = deleted_items.insert(key.node.item);
+                debug_assert!(inserted, "The keys should be sorted by LMDB");
+            }
 
             // SAFETY: Safe because we don't hold any reference to the database currently
             let did_delete = unsafe { updated_iter.del_current()? };
@@ -664,15 +682,6 @@ impl<D: Distance> Writer<D> {
             }
 
             index += 1;
-        }
-
-        drop(updated_iter);
-
-        for updated_item in &updated_items {
-            let key = Key::item(self.index, updated_item);
-            if self.database.remap_data_type::<DecodeIgnore>().get(wtxn, &key)?.is_none() {
-                deleted_items.insert(updated_item);
-            }
         }
 
         Ok((updated_items, deleted_items))
