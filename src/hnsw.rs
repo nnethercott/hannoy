@@ -173,7 +173,8 @@ impl<'a, D: Distance, const M: usize, const M0: usize> HnswBuilder<'a, D, M, M0>
 
         level_groups.into_iter().try_for_each(|grp| {
             grp.into_par_iter().try_for_each(|&(item_id, lvl)| {
-                if cancel_index.fetch_add(1, Relaxed) % CANCELLATION_PROBING == 0 && (self.cancel)()
+                if cancel_index.fetch_add(1, Relaxed).is_multiple_of(CANCELLATION_PROBING)
+                    && (self.cancel)()
                 {
                     Err(Error::BuildCancelled)
                 } else {
@@ -211,14 +212,13 @@ impl<'a, D: Distance, const M: usize, const M0: usize> HnswBuilder<'a, D, M, M0>
             }
         }
 
-        build_stats.compute_mean_degree(wtxn, &database, index)?;
         Ok(build_stats)
     }
 
     /// This function resolves several nasty edge cases that can occur, namely : deleted
     /// or partially deleted entrypoints, new indexed points assigned to higher layers, ensuring
     /// entry points are present on all layers before build
-    #[instrument(skip(self, options, lmdb, levels))]
+    #[instrument(level = "trace", skip(self, options, lmdb, levels))]
     fn prepare_levels_and_entry_points<P>(
         &mut self,
         levels: &mut Vec<(u32, usize)>,
@@ -361,7 +361,7 @@ impl<'a, D: Distance, const M: usize, const M0: usize> HnswBuilder<'a, D, M, M0>
         let cancel_index = AtomicUsize::new(0);
 
         links_in_db.into_par_iter().try_for_each(|result| {
-            if cancel_index.fetch_add(1, Ordering::Relaxed) % CANCELLATION_PROBING == 0
+            if cancel_index.fetch_add(1, Ordering::Relaxed).is_multiple_of(CANCELLATION_PROBING)
                 && (self.cancel)()
             {
                 return Err(Error::BuildCancelled);
@@ -457,7 +457,7 @@ impl<'a, D: Distance, const M: usize, const M0: usize> HnswBuilder<'a, D, M, M0>
     }
 
     #[allow(clippy::too_many_arguments)]
-    #[instrument(name = "walk_layer", skip(self, lmdb, query))]
+    #[instrument(level = "trace", name = "walk_layer", skip(self, lmdb, query))]
     fn walk_layer(
         &self,
         query: &Item<D>,
