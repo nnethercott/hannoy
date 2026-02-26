@@ -21,10 +21,10 @@ use tracing::{debug, instrument};
 use crate::key::Key;
 use crate::node::{Item, Links, Node};
 use crate::ordered_float::OrderedFloat;
-use crate::parallel::{ImmutableItems, ImmutableLinks};
+use crate::parallel::FrozenReader;
 use crate::progress::{AtomicInsertItemsStep, HannoyBuild};
 use crate::stats::BuildStats;
-use crate::writer::{BuildOption, FrozenReader};
+use crate::writer::BuildOption;
 use crate::{Database, Distance, Error, ItemId, Result, CANCELLATION_PROBING};
 
 pub(crate) type ScoredLink = (OrderedFloat, ItemId);
@@ -135,9 +135,7 @@ impl<'a, D: Distance, const M: usize, const M0: usize> HnswBuilder<'a, D, M, M0>
     {
         let mut build_stats = BuildStats::new();
 
-        let items = ImmutableItems::new(wtxn, database, index, options)?;
-        let links = ImmutableLinks::new(wtxn, database, index, database.len(wtxn)?, options)?;
-        let lmdb = FrozenReader { index, items: &items, links: &links };
+        let lmdb = FrozenReader::new(wtxn, index, database)?;
 
         // Generate a random level for each point
         let mut cur_max_level = usize::MIN;
@@ -187,6 +185,8 @@ impl<'a, D: Distance, const M: usize, const M0: usize> HnswBuilder<'a, D, M, M0>
         })?;
 
         self.fill_gaps_from_deleted(&lmdb, to_delete, options)?;
+
+        drop(lmdb);
 
         // Single-threaded write to lmdb
         options.progress.update(HannoyBuild::WritingTheItems);
@@ -242,7 +242,7 @@ impl<'a, D: Distance, const M: usize, const M0: usize> HnswBuilder<'a, D, M, M0>
         let mut l = self.max_level;
         for _ in del_eps.iter() {
             loop {
-                for result in lmdb.links.iter_layer(l as u8) {
+                for result in lmdb.iter_layer_links(l as u8)? {
                     let ((item_id, _), _) = result?;
 
                     if !to_delete.contains(item_id) && new_eps.insert(item_id) {
@@ -297,7 +297,7 @@ impl<'a, D: Distance, const M: usize, const M0: usize> HnswBuilder<'a, D, M, M0>
     ) -> Result<()> {
         let mut eps = Vec::from_iter(self.entry_points.clone());
 
-        let q = lmdb.get_item(query)?;
+        let q = lmdb.item(query)?;
 
         // Greedy search with: ef = 1
         for lvl in (level + 1..=self.max_level).rev() {
@@ -333,7 +333,7 @@ impl<'a, D: Distance, const M: usize, const M0: usize> HnswBuilder<'a, D, M, M0>
     /// Algorithm 4 from FreshDiskANN paper.
     fn fill_gaps_from_deleted<P>(
         &mut self,
-        lmdb: &FrozenReader<D>,
+        lmdb: &FrozenReader<'_, D>,
         to_delete: &RoaringBitmap,
         options: &BuildOption<P>,
     ) -> Result<()>
@@ -344,8 +344,7 @@ impl<'a, D: Distance, const M: usize, const M0: usize> HnswBuilder<'a, D, M, M0>
         options.progress.update(HannoyBuild::PatchOldNewDeletedLinks);
 
         let links_in_db: Vec<_> = lmdb
-            .links
-            .iter()
+            .iter_links()?
             .map(|result| {
                 result.map(|((id, lvl), v)| {
                     // Resize the layers if necessary. We must do this to accomodate links from
@@ -382,7 +381,7 @@ impl<'a, D: Distance, const M: usize, const M0: usize> HnswBuilder<'a, D, M, M0>
 
             let mut bitmap = RoaringBitmap::new();
             for item_id in del_subset.iter() {
-                bitmap.extend(lmdb.get_links(item_id, lvl).unwrap_or_default().iter());
+                bitmap.extend(lmdb.links(item_id, lvl).unwrap_or_default().iter());
             }
             bitmap |= links;
             bitmap -= to_delete;
@@ -401,10 +400,10 @@ impl<'a, D: Distance, const M: usize, const M0: usize> HnswBuilder<'a, D, M, M0>
             }
 
             // Case 2: Some old links may be popped to fill gaps from deleted nodes
-            let curr = &lmdb.get_item(id)?;
+            let curr = &lmdb.item(id)?;
 
             for other in bitmap {
-                let dist = D::distance(curr, &lmdb.get_item(other)?);
+                let dist = D::distance(curr, &lmdb.item(other)?);
                 new_links.push((OrderedFloat(dist), other));
             }
             let pruned = self.robust_prune(new_links, lvl, self.alpha, lmdb)?;
@@ -436,7 +435,7 @@ impl<'a, D: Distance, const M: usize, const M0: usize> HnswBuilder<'a, D, M, M0>
         let mut res = Vec::new();
 
         // O(1) from frozzenreader
-        if let Ok(Links { links }) = lmdb.get_links(item_id, level) {
+        if let Ok(Links { links }) = lmdb.links(item_id, level) {
             build_stats.incr_lmdb_hits();
             res.extend(links.iter());
         }
@@ -473,7 +472,7 @@ impl<'a, D: Distance, const M: usize, const M0: usize> HnswBuilder<'a, D, M, M0>
 
         // Register all entry points as visited and populate candidates
         for &ep in eps {
-            let ve = lmdb.get_item(ep)?;
+            let ve = lmdb.item(ep)?;
             let dist = D::distance(query, &ve);
 
             candidates.push((Reverse(OrderedFloat(dist)), ep));
@@ -496,7 +495,7 @@ impl<'a, D: Distance, const M: usize, const M0: usize> HnswBuilder<'a, D, M, M0>
                 }
                 // If the item isn't in the frozzen reader it must have been deleted from the index,
                 // in which case its OK not to explore it
-                let item = match lmdb.get_item(point) {
+                let item = match lmdb.item(point) {
                     Ok(item) => item,
                     Err(Error::MissingKey { .. }) => continue,
                     Err(e) => return Err(e),
@@ -582,7 +581,7 @@ impl<'a, D: Distance, const M: usize, const M0: usize> HnswBuilder<'a, D, M, M0>
             // ensure we're closer to the query than we are to other candidates
             let mut ok_to_add = true;
             for i in selected.iter().map(|(_, i)| *i) {
-                let d = D::distance(&lmdb.get_item(c)?, &lmdb.get_item(i)?);
+                let d = D::distance(&lmdb.item(c)?, &lmdb.item(i)?);
                 if OrderedFloat(d * alpha) < dist_to_query {
                     ok_to_add = false;
                     break;

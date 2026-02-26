@@ -1,7 +1,7 @@
 use std::any::TypeId;
 use std::path::PathBuf;
 
-use heed::types::{DecodeIgnore, Unit};
+use heed::types::DecodeIgnore;
 use heed::{PutFlags, RoTxn, RwTxn};
 use rand::{Rng, SeedableRng};
 use roaring::RoaringBitmap;
@@ -12,11 +12,11 @@ use crate::distance::Distance;
 use crate::hnsw::HnswBuilder;
 use crate::internals::KeyCodec;
 use crate::item_iter::ItemIter;
-use crate::node::{Item, ItemIds, Links, NodeCodec};
-use crate::parallel::{ImmutableItems, ImmutableLinks};
+use crate::node::{Item, ItemIds, NodeCodec};
 use crate::progress::HannoyBuild;
 use crate::reader::get_item;
 use crate::unaligned_vector::UnalignedVector;
+use crate::update_status::{UpdateStatus, UpdateStatusCodec};
 use crate::version::{Version, VersionCodec};
 use crate::{
     Database, Error, ItemId, Key, Metadata, MetadataCodec, Node, Prefix, PrefixCodec, Result,
@@ -343,10 +343,10 @@ impl<D: Distance> Writer<D> {
         // We mark all the items as updated so
         // the Writer::build method can handle them.
         for item in new_items {
-            self.database.remap_data_type::<Unit>().put(
+            self.database.remap_data_type::<UpdateStatusCodec>().put(
                 wtxn,
                 &Key::updated(self.index, item),
-                &(),
+                &UpdateStatus::Updated,
             )?;
         }
 
@@ -397,8 +397,11 @@ impl<D: Distance> Writer<D> {
             drop(cursor);
 
             for item in updated_items {
-                let key = Key::updated(self.index, item);
-                self.database.remap_types::<KeyCodec, Unit>().put(wtxn, &key, &())?;
+                self.database.remap_types::<KeyCodec, UpdateStatusCodec>().put(
+                    wtxn,
+                    &Key::updated(self.index, item),
+                    &UpdateStatus::Updated,
+                )?;
             }
         }
 
@@ -467,7 +470,11 @@ impl<D: Distance> Writer<D> {
         let vector = UnalignedVector::from_slice(vector);
         let db_item = Item { header: D::new_header(&vector), vector };
         self.database.put(wtxn, &Key::item(self.index, item), &Node::Item(db_item))?;
-        self.database.remap_data_type::<Unit>().put(wtxn, &Key::updated(self.index, item), &())?;
+        self.database.remap_data_type::<UpdateStatusCodec>().put(
+            wtxn,
+            &Key::updated(self.index, item),
+            &UpdateStatus::Updated,
+        )?;
 
         Ok(())
     }
@@ -475,10 +482,10 @@ impl<D: Distance> Writer<D> {
     /// Deletes an item stored in this database and returns `true` if it existed.
     pub fn del_item(&self, wtxn: &mut RwTxn, item: ItemId) -> Result<bool> {
         if self.database.delete(wtxn, &Key::item(self.index, item))? {
-            self.database.remap_data_type::<Unit>().put(
+            self.database.remap_data_type::<UpdateStatusCodec>().put(
                 wtxn,
                 &Key::updated(self.index, item),
-                &(),
+                &UpdateStatus::Removed,
             )?;
 
             Ok(true)
@@ -521,17 +528,29 @@ impl<D: Distance> Writer<D> {
         R: Rng + SeedableRng,
         P: steppe::Progress,
     {
-        let item_indices = self.item_indices(wtxn, options)?;
+        // Get the list of items we already registered in the metadata
+        let indexed_items = self
+            .database
+            .remap_data_type::<MetadataCodec>()
+            .get(wtxn, &Key::metadata(self.index))?
+            .map_or_else(RoaringBitmap::default, |m| m.items);
 
         // In case we have to rebuild all links we can skip the deletion step.
-        let (to_delete, to_insert) = if options.relink_all_items {
-            (RoaringBitmap::new(), item_indices.clone())
+        let (item_indices, to_delete, to_insert) = if options.relink_all_items {
+            (indexed_items.clone(), RoaringBitmap::new(), indexed_items)
         } else {
             // updated items can be an update, an addition or a removed item
-            let updated_items = self.reset_and_retrieve_updated_items(wtxn, options)?;
-            let to_delete = updated_items.clone() - &item_indices;
-            let to_insert = &item_indices & &updated_items;
-            (to_delete, to_insert)
+            // they are identified by a "updated" stone key
+            let (all_updated_items, deleted_items) =
+                self.reset_and_retrieve_updated_items(wtxn, options)?;
+
+            // Item indices corresponds to all items, known ones and updates ones
+            let updated_items = &all_updated_items - &deleted_items;
+            let item_indices = (&updated_items | indexed_items) - &deleted_items;
+
+            let to_delete = all_updated_items.clone() - &item_indices;
+            let to_insert = &item_indices & all_updated_items;
+            (item_indices, to_delete, to_insert)
         };
 
         let metadata = self
@@ -563,17 +582,16 @@ impl<D: Distance> Writer<D> {
         debug!("write the metadata...");
         options.progress.update(HannoyBuild::WriteTheMetadata);
 
-        let metadata = Metadata {
-            dimensions: self.dimensions.try_into().unwrap(),
-            items: item_indices,
-            entry_points: ItemIds::from_slice(&hnsw.entry_points),
-            max_level: hnsw.max_level as u8,
-            distance: D::name(),
-        };
         self.database.remap_data_type::<MetadataCodec>().put(
             wtxn,
             &Key::metadata(self.index),
-            &metadata,
+            &Metadata {
+                dimensions: self.dimensions.try_into().unwrap(),
+                items: item_indices,
+                entry_points: ItemIds::from_slice(&hnsw.entry_points),
+                max_level: hnsw.max_level as u8,
+                distance: D::name(),
+            },
         )?;
         self.database.remap_data_type::<VersionCodec>().put(
             wtxn,
@@ -612,24 +630,23 @@ impl<D: Distance> Writer<D> {
             .get(wtxn, &Key::metadata(self.index))?
             .expect("The metadata must be there");
 
-        // 3. delete metadata
-        self.database.delete(wtxn, &Key::metadata(self.index))?;
-
-        // 4. delete version
-        self.database.delete(wtxn, &Key::version(self.index))?;
-
-        // 5. delete all links
+        // 3. delete all links
         self.delete_links_from_db(&item_ids, wtxn, options)?;
 
-        // 5. trigger build
+        // 4. trigger build
         self.build::<R, P, M, M0>(wtxn, rng, options)
     }
 
+    /// Removes all the "updated" stones from the database
+    /// and returns the list of updated and deleted items.
+    ///
+    /// The updated items corresponds to all the items modified, inserted or deleted.
+    /// The deleted items corresponds to all the items deleted.
     fn reset_and_retrieve_updated_items<P>(
         &self,
         wtxn: &mut RwTxn,
         options: &BuildOption<P>,
-    ) -> Result<RoaringBitmap, Error>
+    ) -> Result<(RoaringBitmap, RoaringBitmap), Error>
     where
         P: steppe::Progress,
     {
@@ -637,20 +654,26 @@ impl<D: Distance> Writer<D> {
         options.progress.update(HannoyBuild::RetrieveTheUpdatedItems);
 
         let mut updated_items = RoaringBitmap::new();
+        let mut deleted_items = RoaringBitmap::new();
         let mut updated_iter = self
             .database
-            .remap_types::<PrefixCodec, DecodeIgnore>()
+            .remap_types::<PrefixCodec, UpdateStatusCodec>()
             .prefix_iter_mut(wtxn, &Prefix::updated(self.index))?
             .remap_key_type::<KeyCodec>();
 
         let mut index = 0;
-        while let Some((key, _)) = updated_iter.next().transpose()? {
+        while let Some((key, update_status)) = updated_iter.next().transpose()? {
             if index % CANCELLATION_PROBING == 0 && (options.cancel)() {
                 return Err(Error::BuildCancelled);
             }
 
             let inserted = updated_items.insert(key.node.item);
             debug_assert!(inserted, "The keys should be sorted by LMDB");
+
+            if update_status == UpdateStatus::Removed {
+                let inserted = deleted_items.insert(key.node.item);
+                debug_assert!(inserted, "The keys should be sorted by LMDB");
+            }
 
             // SAFETY: Safe because we don't hold any reference to the database currently
             let did_delete = unsafe { updated_iter.del_current()? };
@@ -660,34 +683,8 @@ impl<D: Distance> Writer<D> {
 
             index += 1;
         }
-        Ok(updated_items)
-    }
 
-    // Fetches the item's ids, not the links.
-    fn item_indices<P>(&self, wtxn: &mut RwTxn, options: &BuildOption<P>) -> Result<RoaringBitmap>
-    where
-        P: steppe::Progress,
-    {
-        debug!("started retrieving all the items ids...");
-        options.progress.update(HannoyBuild::RetrievingTheItemsIds);
-
-        let mut indices = RoaringBitmap::new();
-        for (index, result) in self
-            .database
-            .remap_types::<PrefixCodec, DecodeIgnore>()
-            .prefix_iter(wtxn, &Prefix::item(self.index))?
-            .remap_key_type::<KeyCodec>()
-            .enumerate()
-        {
-            if index % CANCELLATION_PROBING == 0 && (options.cancel)() {
-                return Err(Error::BuildCancelled);
-            }
-
-            let (i, _) = result?;
-            indices.insert(i.node.unwrap_item());
-        }
-
-        Ok(indices)
+        Ok((updated_items, deleted_items))
     }
 
     // Iterates over links in lmdb and deletes those in `to_delete`. There can be several links
@@ -718,27 +715,6 @@ impl<D: Distance> Writer<D> {
         }
 
         Ok(())
-    }
-}
-
-#[derive(Clone)]
-pub(crate) struct FrozenReader<'a, D: Distance> {
-    pub index: u16,
-    pub items: &'a ImmutableItems<'a, D>,
-    pub links: &'a ImmutableLinks<'a, D>,
-}
-
-impl<'a, D: Distance> FrozenReader<'a, D> {
-    pub fn get_item(&self, item_id: ItemId) -> Result<Item<'a, D>> {
-        let key = Key::item(self.index, item_id);
-        // key is a `Key::item` so returned result must be a Node::Item
-        self.items.get(item_id)?.ok_or(Error::missing_key(key))
-    }
-
-    pub fn get_links(&self, item_id: ItemId, level: usize) -> Result<Links<'a>> {
-        let key = Key::links(self.index, item_id, level as u8);
-        // key is a `Key::item` so returned result must be a Node::Item
-        self.links.get(item_id, level as u8)?.ok_or(Error::missing_key(key))
     }
 }
 
