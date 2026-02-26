@@ -520,17 +520,29 @@ impl<D: Distance> Writer<D> {
         R: Rng + SeedableRng,
         P: steppe::Progress,
     {
-        let item_indices = self.item_indices(wtxn, options)?;
+        // Get the list of items we already registered in the metadata
+        let indexed_items = self
+            .database
+            .remap_data_type::<MetadataCodec>()
+            .get(wtxn, &Key::metadata(self.index))?
+            .map_or_else(RoaringBitmap::default, |m| m.items);
 
         // In case we have to rebuild all links we can skip the deletion step.
-        let (to_delete, to_insert) = if options.relink_all_items {
-            (RoaringBitmap::new(), item_indices.clone())
+        let (item_indices, to_delete, to_insert) = if options.relink_all_items {
+            (indexed_items.clone(), RoaringBitmap::new(), indexed_items)
         } else {
             // updated items can be an update, an addition or a removed item
-            let updated_items = self.reset_and_retrieve_updated_items(wtxn, options)?;
-            let to_delete = updated_items.clone() - &item_indices;
-            let to_insert = &item_indices & &updated_items;
-            (to_delete, to_insert)
+            // they are identified by a "updated" stone key
+            let (all_updated_items, deleted_items) =
+                self.reset_and_retrieve_updated_items(wtxn, options)?;
+
+            // Item indices corresponds to all items, known ones and updates ones
+            let updated_items = &all_updated_items - &deleted_items;
+            let item_indices = (&updated_items | indexed_items) - &deleted_items;
+
+            let to_delete = all_updated_items.clone() - &item_indices;
+            let to_insert = &item_indices & all_updated_items;
+            (item_indices, to_delete, to_insert)
         };
 
         let metadata = self
@@ -562,17 +574,16 @@ impl<D: Distance> Writer<D> {
         debug!("write the metadata...");
         options.progress.update(HannoyBuild::WriteTheMetadata);
 
-        let metadata = Metadata {
-            dimensions: self.dimensions.try_into().unwrap(),
-            items: item_indices,
-            entry_points: ItemIds::from_slice(&hnsw.entry_points),
-            max_level: hnsw.max_level as u8,
-            distance: D::name(),
-        };
         self.database.remap_data_type::<MetadataCodec>().put(
             wtxn,
             &Key::metadata(self.index),
-            &metadata,
+            &Metadata {
+                dimensions: self.dimensions.try_into().unwrap(),
+                items: item_indices,
+                entry_points: ItemIds::from_slice(&hnsw.entry_points),
+                max_level: hnsw.max_level as u8,
+                distance: D::name(),
+            },
         )?;
         self.database.remap_data_type::<VersionCodec>().put(
             wtxn,
@@ -611,16 +622,10 @@ impl<D: Distance> Writer<D> {
             .get(wtxn, &Key::metadata(self.index))?
             .expect("The metadata must be there");
 
-        // 3. delete metadata
-        self.database.delete(wtxn, &Key::metadata(self.index))?;
-
-        // 4. delete version
-        self.database.delete(wtxn, &Key::version(self.index))?;
-
-        // 5. delete all links
+        // 3. delete all links
         self.delete_links_from_db(&item_ids, wtxn, options)?;
 
-        // 5. trigger build
+        // 4. trigger build
         self.build::<R, P, M, M0>(wtxn, rng, options)
     }
 
@@ -628,7 +633,7 @@ impl<D: Distance> Writer<D> {
         &self,
         wtxn: &mut RwTxn,
         options: &BuildOption<P>,
-    ) -> Result<RoaringBitmap, Error>
+    ) -> Result<(RoaringBitmap, RoaringBitmap), Error>
     where
         P: steppe::Progress,
     {
@@ -636,6 +641,7 @@ impl<D: Distance> Writer<D> {
         options.progress.update(HannoyBuild::RetrieveTheUpdatedItems);
 
         let mut updated_items = RoaringBitmap::new();
+        let mut deleted_items = RoaringBitmap::new();
         let mut updated_iter = self
             .database
             .remap_types::<PrefixCodec, DecodeIgnore>()
@@ -659,34 +665,17 @@ impl<D: Distance> Writer<D> {
 
             index += 1;
         }
-        Ok(updated_items)
-    }
 
-    // Fetches the item's ids, not the links.
-    fn item_indices<P>(&self, wtxn: &mut RwTxn, options: &BuildOption<P>) -> Result<RoaringBitmap>
-    where
-        P: steppe::Progress,
-    {
-        debug!("started retrieving all the items ids...");
-        options.progress.update(HannoyBuild::RetrievingTheItemsIds);
+        drop(updated_iter);
 
-        let mut indices = RoaringBitmap::new();
-        for (index, result) in self
-            .database
-            .remap_types::<PrefixCodec, DecodeIgnore>()
-            .prefix_iter(wtxn, &Prefix::item(self.index))?
-            .remap_key_type::<KeyCodec>()
-            .enumerate()
-        {
-            if index % CANCELLATION_PROBING == 0 && (options.cancel)() {
-                return Err(Error::BuildCancelled);
+        for updated_item in &updated_items {
+            let key = Key::item(self.index, updated_item);
+            if self.database.remap_data_type::<DecodeIgnore>().get(wtxn, &key)?.is_none() {
+                deleted_items.insert(updated_item);
             }
-
-            let (i, _) = result?;
-            indices.insert(i.node.unwrap_item());
         }
 
-        Ok(indices)
+        Ok((updated_items, deleted_items))
     }
 
     // Iterates over links in lmdb and deletes those in `to_delete`. There can be several links
