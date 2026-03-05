@@ -83,6 +83,7 @@ mod reader;
 mod roaring;
 mod spaces;
 mod stats;
+mod update_status;
 mod version;
 mod writer;
 
