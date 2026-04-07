@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.4](https://github.com/nnethercott/hannoy/compare/v0.1.3...v0.1.4) - 2026-04-07
+
+### Other
+
+- Drastically speed up the indexing phase by parallelizing reads
+- Don't compute useless stats
+- Make clippy happy
+- Update tests
+- Import and fmt
+- Bump version to 0.1.3 and use latest version of heed
+- Fix reading metadata of empty database
+
 ## [0.1.2](https://github.com/nnethercott/hannoy/compare/v0.1.1...v0.1.2) - 2025-12-16
 
 ### Added
