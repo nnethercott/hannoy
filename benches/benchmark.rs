@@ -1,6 +1,8 @@
-use hannoy::{distances::Cosine, Database, Writer};
+use hannoy::distances::Cosine;
+use hannoy::{Database, Writer};
 use heed::{Env, EnvOpenOptions, RwTxn};
-use rand::{rngs::StdRng, Rng, SeedableRng};
+use rand::rngs::StdRng;
+use rand::{Rng, SeedableRng};
 use tempfile::tempdir;
 
 static M: usize = 16;

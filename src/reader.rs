@@ -25,13 +25,11 @@ const DEFAULT_EF_SEARCH: usize = 100;
 #[cfg(not(windows))]
 const READER_AVAILABLE_MEMORY: &str = "HANNOY_READER_PREFETCH_MEMORY";
 
-#[cfg(not(test))]
-/// The threshold at which linear search is used instead of the HNSW algorithm.
-const LINEAR_SEARCH_THRESHOLD: u64 = 1000;
-#[cfg(test)]
-/// Note that for tests purposes, we use set this threshold
-/// to zero to make sure we test the HNSW algorithm.
-const LINEAR_SEARCH_THRESHOLD: u64 = 0;
+/// The default threshold at which linear search is used instead of the HNSW algorithm.
+const DEFAULT_LINEAR_SCAN_THRESHOLD: usize = 1000;
+
+/// The default threshold ratio at which linear search is used instead of the HNSW algorithm.
+const DEFAULT_LINEAR_SCAN_THRESHOLD_RATIO: f32 = 1.00;
 
 /// Container storing nearest neighbour search result
 #[derive(Debug)]
@@ -64,6 +62,8 @@ pub struct QueryBuilder<'a, D: Distance> {
     candidates: Option<&'a RoaringBitmap>,
     count: usize,
     ef: usize,
+    linear_below: usize,
+    linear_below_ratio: f32,
 }
 
 impl<'a, D: Distance> QueryBuilder<'a, D> {
@@ -216,6 +216,46 @@ impl<'a, D: Distance> QueryBuilder<'a, D> {
     /// ```
     pub fn ef_search(&mut self, ef: usize) -> &mut Self {
         self.ef = ef.max(self.count);
+        self
+    }
+
+    /// Specify a threshold for the number of candidates below which a linear scan is used instead
+    /// of the HNSW algorithm. This can improve performance for small candidate sets.
+    ///
+    /// The default value is 1000.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use hannoy::{Reader, distances::Euclidean};
+    /// # let (reader, rtxn): (Reader<Euclidean>, heed::RoTxn) = todo!();
+    /// reader.nns(20).linear_below(500).by_item(&rtxn, 6);
+    /// ```
+    pub fn linear_below(&mut self, threshold: usize) -> &mut Self {
+        self.linear_below = threshold;
+        self
+    }
+
+    /// Specify a threshold ratio for the number of candidates below which a linear scan is used
+    /// instead of the HNSW algorithm. This can improve performance for small candidate sets.
+    ///
+    /// The threshold ratio must be between 0.0 (inclusive) and 1.0 (inclusive).
+    /// The default value is 0.01.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use hannoy::{Reader, distances::Euclidean};
+    /// # let (reader, rtxn): (Reader<Euclidean>, heed::RoTxn) = todo!();
+    /// reader.nns(20).linear_below_ratio(0.1).by_item(&rtxn, 6);
+    /// ```
+    pub fn linear_below_ratio(&mut self, ratio: f32) -> &mut Self {
+        assert!(
+            (0.0..=1.0).contains(&ratio),
+            "linear scan threshold ratio must be between 0.0 and 1.0"
+        );
+
+        self.linear_below_ratio = ratio;
         self
     }
 }
@@ -410,13 +450,14 @@ impl<D: Distance> Reader<D> {
         index: u16,
         metadata: &Metadata,
     ) -> Result<()> {
-        use crate::unaligned_vector::UnalignedVectorCodec;
+        use std::collections::VecDeque;
+        use std::sync::atomic::{AtomicUsize, Ordering};
 
         use heed::types::Bytes;
         use madvise::AccessPattern;
-        use std::collections::VecDeque;
-        use std::sync::atomic::{AtomicUsize, Ordering};
         use tracing::warn;
+
+        use crate::unaligned_vector::UnalignedVectorCodec;
 
         let page_size = page_size::get();
         let mut available_memory: usize = std::env::var(READER_AVAILABLE_MEMORY)
@@ -568,7 +609,34 @@ impl<D: Distance> Reader<D> {
     ///
     /// You must provide the number of items you want to receive.
     pub fn nns(&self, count: usize) -> QueryBuilder<'_, D> {
-        QueryBuilder { reader: self, candidates: None, count, ef: DEFAULT_EF_SEARCH }
+        QueryBuilder {
+            reader: self,
+            candidates: None,
+            count,
+            ef: DEFAULT_EF_SEARCH,
+            linear_below: DEFAULT_LINEAR_SCAN_THRESHOLD,
+            linear_below_ratio: DEFAULT_LINEAR_SCAN_THRESHOLD_RATIO,
+        }
+    }
+
+    fn should_linear_scan(&self, opt: &QueryBuilder<D>) -> bool {
+        let all_ids = self.item_ids();
+        if all_ids.is_empty() {
+            return false;
+        }
+
+        let candidates = match opt.candidates {
+            Some(candidates) => candidates,
+            None => return false,
+        };
+
+        // We retrieve the subset of candidates that are actually
+        // part of the items in the database
+        let candidates_len = all_ids.intersection_len(candidates);
+        let is_below_threshold = candidates_len < opt.linear_below as u64;
+        let is_below_ratio = candidates_len as f32 / all_ids.len() as f32 <= opt.linear_below_ratio;
+
+        is_below_threshold && is_below_ratio
     }
 
     fn nns_by_vec(
@@ -580,13 +648,15 @@ impl<D: Distance> Reader<D> {
     ) -> Result<Completion<Vec<(ItemId, f32)>>> {
         use Completion::*;
 
+        let item_ids = self.item_ids();
+
         // If we will never find any candidates, return an empty vector
-        if opt.candidates.is_some_and(|c| self.item_ids().is_disjoint(c)) {
+        if item_ids.is_empty() || opt.candidates.is_some_and(|c| item_ids.is_disjoint(c)) {
             return Ok(Done(Vec::new()));
         }
 
         // If the number of candidates is less than a given threshold, perform linear search
-        if let Some(candidates) = opt.candidates.filter(|c| c.len() < LINEAR_SEARCH_THRESHOLD) {
+        if let Some(candidates) = opt.candidates.filter(|_| self.should_linear_scan(opt)) {
             return self.brute_force_search(query, rtxn, candidates, opt.count, cancel_fn);
         }
 
@@ -605,23 +675,39 @@ impl<D: Distance> Reader<D> {
     ) -> Result<Completion<Vec<(ItemId, f32)>>> {
         use Completion::*;
 
-        let mut item_distances = Vec::with_capacity(candidates.len() as usize);
+        // We set the capacity to the maximum number of
+        // candidates we can return as it should be small enough.
+        let mut item_distances = BinaryHeap::<(OrderedFloat, _)>::with_capacity(count);
+        let mut cancelled = false;
 
         for item_id in candidates {
             if cancel_fn() {
-                return Ok(Cancelled(item_distances));
+                cancelled = true;
+                break;
             }
 
             let Some(vector) = self.item_vector(rtxn, item_id)? else { continue };
             let vector = UnalignedVector::from_vec(vector);
             let item = Item { header: D::new_header(&vector), vector };
             let distance = D::distance(&item, query);
-            item_distances.push((item_id, distance));
-        }
-        item_distances.sort_by_key(|(_, dist)| OrderedFloat(*dist));
-        item_distances.truncate(count);
 
-        Ok(Done(item_distances))
+            // We make sure we maintain the number of items
+            // in the heap at a maximum of count elements.
+            if item_distances.len() >= count {
+                if let Some(mut peek) = item_distances.peek_mut() {
+                    if peek.0 > OrderedFloat(distance) {
+                        *peek = (OrderedFloat(distance), item_id);
+                    }
+                }
+            } else {
+                item_distances.push((OrderedFloat(distance), item_id));
+            }
+        }
+
+        let item_distances = item_distances.into_sorted_vec();
+        let output = item_distances.into_iter().map(|(OrderedFloat(d), i)| (i, d)).collect();
+
+        Ok(if cancelled { Cancelled(output) } else { Done(output) })
     }
 
     /// Hnsw search according to arXiv:1603.09320.
@@ -696,13 +782,13 @@ impl<D: Distance> Reader<D> {
                 }
 
                 visitor.eps = vec![id];
-                visitor.ef = opt.count - neighbours.len();
+                visitor.ef = opt.ef.saturating_sub(neighbours.len());
 
                 let more_nns =
                     return_if_cancelled!(visitor.visit(query, self, rtxn, &mut path, cancel_fn)?);
 
                 neighbours.extend(more_nns.into_iter());
-                if neighbours.len() >= opt.count {
+                if neighbours.len() >= opt.ef {
                     break;
                 }
             }
@@ -730,8 +816,10 @@ impl<D: Distance> Reader<D> {
         use Completion::*;
         let cancel_fn = &cancel_fn;
 
+        let item_ids = self.item_ids();
+
         // If we will never find any candidates, return none
-        if opt.candidates.is_some_and(|c| self.item_ids().is_disjoint(c)) {
+        if item_ids.is_empty() || opt.candidates.is_some_and(|c| item_ids.is_disjoint(c)) {
             return Ok(None);
         }
 
@@ -740,7 +828,7 @@ impl<D: Distance> Reader<D> {
         let query = Item { header: D::new_header(&vector), vector };
 
         // If the number of candidates is less than a given threshold, perform linear search
-        if let Some(candidates) = opt.candidates.filter(|c| c.len() < LINEAR_SEARCH_THRESHOLD) {
+        if let Some(candidates) = opt.candidates.filter(|_| self.should_linear_scan(opt)) {
             let nns = self.brute_force_search(&query, rtxn, candidates, opt.count, cancel_fn)?;
             return Ok(Some(nns));
         }
