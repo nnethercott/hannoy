@@ -2,11 +2,8 @@ use std::marker::PhantomData;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use hashbrown::HashMap;
-use heed::{Result, RoTxn};
 
-use crate::key::{KeyCodec, Prefix, PrefixCodec};
-use crate::node::{Links, Node};
-use crate::{Database, Distance};
+use crate::Distance;
 
 // TODO: ignore the phantom
 #[derive(Debug)]

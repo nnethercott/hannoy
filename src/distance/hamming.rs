@@ -1,9 +1,10 @@
 use std::fmt;
 
+use bytemuck::{Pod, Zeroable};
+
 use crate::distance::Distance;
 use crate::node::Item;
 use crate::unaligned_vector::{Binary, UnalignedVector};
-use bytemuck::{Pod, Zeroable};
 
 /// The Hamming distance between two vectors is the number of positions at
 /// which the corresponding symbols are different.

@@ -1,22 +1,22 @@
 use std::any::TypeId;
 use std::path::PathBuf;
 
-use heed::types::{DecodeIgnore, Unit};
+use heed::types::DecodeIgnore;
 use heed::{PutFlags, RoTxn, RwTxn};
 use rand::{Rng, SeedableRng};
 use roaring::RoaringBitmap;
 use steppe::NoProgress;
-use tracing::{debug, error, info};
+use tracing::{debug, error};
 
 use crate::distance::Distance;
 use crate::hnsw::HnswBuilder;
 use crate::internals::KeyCodec;
 use crate::item_iter::ItemIter;
-use crate::node::{Item, ItemIds, Links, NodeCodec};
-use crate::parallel::{ImmutableItems, ImmutableLinks};
+use crate::node::{Item, ItemIds, NodeCodec};
 use crate::progress::HannoyBuild;
 use crate::reader::get_item;
 use crate::unaligned_vector::UnalignedVector;
+use crate::update_status::{UpdateStatus, UpdateStatusCodec};
 use crate::version::{Version, VersionCodec};
 use crate::{
     Database, Error, ItemId, Key, Metadata, MetadataCodec, Node, Prefix, PrefixCodec, Result,
