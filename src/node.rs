@@ -4,7 +4,7 @@ use std::mem::size_of;
 use std::ops::Deref;
 
 use bytemuck::{bytes_of, cast_slice, pod_read_unaligned};
-use byteorder::{ByteOrder, NativeEndian};
+use byteorder::{BigEndian, ByteOrder, NativeEndian};
 use heed::{BoxedError, BytesDecode, BytesEncode};
 use roaring::RoaringBitmap;
 
@@ -136,13 +136,22 @@ impl<'a, D: Distance> BytesEncode<'a> for NodeCodec<D> {
             Node::Item(Item { header, vector }) => {
                 bytes.push(NODE_TAG);
                 bytes.extend_from_slice(bytes_of(header));
-                bytes.extend(vector.as_bytes());
+                let v_bytes = vector.as_bytes();
+                bytes.extend((v_bytes.len() as u64).to_be_bytes());
+                bytes.extend(v_bytes);
             }
             Node::Links(Links { links }) => {
                 bytes.push(LINKS_TAG);
+                bytes.extend(links.serialized_size().to_be_bytes());
                 links.serialize_into(&mut bytes)?;
             }
         }
+
+        // pad to 8-byte boundary ?
+        let padded_len = bytes.len().div_ceil(64) * 64;
+        bytes.resize(padded_len, 0);
+
+        debug_assert!(bytes.len() % 64 == 0);
         Ok(Cow::Owned(bytes))
     }
 }
@@ -155,11 +164,15 @@ impl<'a, D: Distance> BytesDecode<'a> for NodeCodec<D> {
             [NODE_TAG, bytes @ ..] => {
                 let (header_bytes, remaining) = bytes.split_at(size_of::<D::Header>());
                 let header = pod_read_unaligned(header_bytes);
+                let size = BigEndian::read_u64(remaining);
+                let remaining = &remaining[size_of::<u64>()..size_of::<u64>() + size as usize];
                 let vector = UnalignedVector::<D::VectorCodec>::from_bytes(remaining)?;
 
                 Ok(Node::Item(Item { header, vector }))
             }
             [LINKS_TAG, bytes @ ..] => {
+                let size = BigEndian::read_u64(bytes);
+                let bytes = &bytes[size_of::<u64>()..size_of::<u64>() + size as usize];
                 let links: Cow<'_, RoaringBitmap> =
                     Cow::Owned(RoaringBitmap::deserialize_from(bytes).unwrap());
                 Ok(Node::Links(Links { links }))

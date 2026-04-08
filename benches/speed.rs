@@ -85,7 +85,7 @@ fn search_hannoy<const DIM: usize>(bencher: divan::Bencher) {
 
     bencher
         .with_inputs(|| {
-            drop_caches().unwrap();
+            // drop_caches().unwrap();
             let mut query = [f32::default(); DIM];
             thread_rng().fill(&mut query);
             let reader = Reader::<Cosine>::open(&rtxn, 0, db).unwrap();
