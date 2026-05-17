@@ -2,6 +2,8 @@
 # ruff: noqa: E501, F401
 
 import builtins
+import numpy
+import numpy.typing
 import os
 import pathlib
 import typing
@@ -9,7 +11,7 @@ from enum import Enum
 
 class Database:
     r"""
-    An LMDB-backed vector database for vector search.
+    An LMDB-backed database for vector search.
     """
     def __new__(cls, path:builtins.str | os.PathLike | pathlib.Path, distance:Metric=..., name:typing.Optional[builtins.str]=None, env_size:typing.Optional[builtins.int]=None) -> Database: ...
     def writer(self, dimensions:builtins.int, index:builtins.int=0, m:builtins.int=16, ef:builtins.int=96) -> Writer:
@@ -18,7 +20,7 @@ class Database:
         """
     def reader(self, index:builtins.int=0) -> Reader:
         r"""
-        Get a reader for a specific index and dimensions
+        Open a reader for a specific index.
         """
     @staticmethod
     def commit_rw_txn() -> builtins.bool: ...
@@ -65,10 +67,11 @@ class Writer:
         r"""
         Store a vector associated with an item ID in the database.
         """
+    def add_items(self, items:typing.Sequence[builtins.int], vectors:numpy.typing.NDArray[numpy.float32]) -> None: ...
 
 class Metric(Enum):
     r"""
-    Supported distance metrics in hannoy.
+    The supported distance metrics in hannoy.
     """
     COSINE = ...
     EUCLIDEAN = ...
