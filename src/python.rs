@@ -353,7 +353,6 @@ enum DynReader {
     Hamming(Reader<distance::Hamming>),
 }
 
-
 macro_rules! hnsw_search {
     ($reader:expr, |r| r . $($q:tt)*) => {
         match $reader {
@@ -392,16 +391,27 @@ impl PyReader {
     #[pyo3(signature = (query, n=10, ef_search=200))]
     fn by_vec(&self, query: Vec<f32>, n: usize, ef_search: usize) -> PyResult<Vec<(ItemId, f32)>> {
         let rtxn = &self.rtxn;
-        let found = hnsw_search!(&self.dyn_reader, |r| r.nns(n).ef_search(ef_search).by_vector(&rtxn, &query)).map_err(h2py_err)?;
+        let found = hnsw_search!(&self.dyn_reader, |r| r
+            .nns(n)
+            .ef_search(ef_search)
+            .by_vector(&rtxn, &query))
+        .map_err(h2py_err)?;
         Ok(found.into_nns())
     }
-    
+
     /// Retrieve similar items from the db given an item ID.
     /// Returns `None` if the item is not in the database.
     #[pyo3(signature = (item, n=10, ef_search=200))]
-    fn by_item(&self, item: ItemId, n: usize, ef_search: usize) -> PyResult<Option<Vec<(ItemId, f32)>>> {
+    fn by_item(
+        &self,
+        item: ItemId,
+        n: usize,
+        ef_search: usize,
+    ) -> PyResult<Option<Vec<(ItemId, f32)>>> {
         let rtxn = &self.rtxn;
-        let found = hnsw_search!(&self.dyn_reader, |r| r.nns(n).ef_search(ef_search).by_item(&rtxn, item)).map_err(h2py_err)?;
+        let found =
+            hnsw_search!(&self.dyn_reader, |r| r.nns(n).ef_search(ef_search).by_item(&rtxn, item))
+                .map_err(h2py_err)?;
         Ok(found.map(|s| s.into_nns()))
     }
 }
