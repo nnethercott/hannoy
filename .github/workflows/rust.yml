@@ -28,6 +28,7 @@ jobs:
             src:
               - 'src/**'
               - '!src/python.rs'
+              - 'Cargo.toml'
 
   test:
     runs-on: ${{ matrix.os }}
