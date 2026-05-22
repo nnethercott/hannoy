@@ -82,6 +82,14 @@ nns = reader.by_vec([0.0, 1.0, 0.0], n=2)
 (closest, dist) = nns[0]
 ```
 
+Alternatively, you can add many items at once from a 2d numpy array of dtype float 32:
+
+```python
+import numpy as np
+with db.writer(3, m=4, ef=10) as writer:
+    writer.add_items([0, 1], np.array([[3.0, 4.0, 5.0], [6.0, 7.0, 8.0]], dtype=np.float32))
+```
+
 ## Tips and tricks
 ### Reducing cold start latencies
 Search in an hnsw always traverses from the top to bottom layers of the graph, so we know a priori some vectors will be needed. We can hint to the kernel that these vectors (and their neighbours) should be loaded into RAM using [`madvise`](https://man7.org/linux/man-pages/man2/madvise.2.html) to speed up search.
