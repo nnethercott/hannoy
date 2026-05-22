@@ -88,3 +88,15 @@ jobs:
         env:
           HANNOY_FUZZ_DURATION_SEC: 1800
         run: cargo test -- random_read_writes
+
+  ci-pass:
+    runs-on: ubuntu-latest
+    if: always()
+    needs: [test, lint, fuzzer]
+    steps:
+      - name: Verify CI results
+        run: |
+          if [[ "${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}" == "true" ]]; then
+            echo "One or more jobs failed or were cancelled"
+            exit 1
+          fi
