@@ -32,8 +32,6 @@ jobs:
 
   test:
     runs-on: ${{ matrix.os }}
-    needs: filter-changes
-    if: ${{ needs.filter-changes.outputs.src-changed == 'true' }}
     strategy:
       matrix:
         os: [ubuntu-latest, macos-latest]
