@@ -2,13 +2,12 @@
 # ruff: noqa: E501, F401, F403, F405
 
 import builtins
+import enum
 import numpy
 import numpy.typing
 import os
 import pathlib
 import typing
-from enum import Enum
-
 __all__ = [
     "Database",
     "Metric",
@@ -82,7 +81,7 @@ class Writer:
         r"""
         Store a vector associated with an item ID in the database.
         """
-    def add_items(self, items:typing.Sequence[builtins.int], vectors:numpy.typing.NDArray[numpy.float32]) -> None: ...
+    def add_items(self, items: typing.Sequence[builtins.int], vectors: numpy.typing.NDArray[numpy.float32]) -> None: ...
 
 @typing.final
 class Metric(enum.Enum):
