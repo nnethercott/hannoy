@@ -1,8 +1,10 @@
 from pathlib import Path
-from typing import List
+from typing import Literal
+
 import pytest
+
 import hannoy
-from hannoy import Metric, Reader, Writer
+from hannoy import Metric, Reader
 
 
 @pytest.fixture(scope="function", autouse=False)
@@ -26,7 +28,6 @@ def test_read(db: hannoy.Database) -> None:
     query = [0.0, 1.0, 0.0]
 
     res = reader.by_vec(query, n=2)
-    print(res)
     assert len(res) == 2
 
     (item_id, dist) = res[0]
@@ -34,10 +35,21 @@ def test_read(db: hannoy.Database) -> None:
     assert dist == 0.0
 
 
+def test_read_by_item(db: hannoy.Database) -> None:
+    reader: Reader = db.reader(0)
+
+    res = reader.by_item(1, n=2)
+    assert res is not None
+    assert len(res) == 2
+
+    assert {item_id for item_id, _ in res} == {0, 2}
+    assert not any(d == 0 for _, d in res)
+
+
 def test_multithreaded_reads(db) -> None:
     import threading
 
-    def _read(db: hannoy.Database, query: List[float]):
+    def _read(db: hannoy.Database, query: list[float]):
         reader = db.reader(0)
         t_id = threading.get_ident()
         print(f"nns from thread {t_id}: {reader.by_vec(query, 1)}")
