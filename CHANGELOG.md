@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.4](https://github.com/nnethercott/hannoy/compare/v0.1.3...v0.1.4) - 2026-05-22
+
+### Added
+
+- `add_items` python API ([#130](https://github.com/nnethercott/hannoy/pull/130))
+- by_item for Python API ([#128](https://github.com/nnethercott/hannoy/pull/128))
+
+### Fixed
+
+- run tests on Cargo.toml changes ([#132](https://github.com/nnethercott/hannoy/pull/132))
+
+### Other
+
+- ignore fuzzing checks on python features ([#131](https://github.com/nnethercott/hannoy/pull/131))
+
 ## [0.1.2](https://github.com/nnethercott/hannoy/compare/v0.1.1...v0.1.2) - 2025-12-16
 
 ### Added
