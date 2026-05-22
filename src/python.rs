@@ -2,7 +2,9 @@
 use std::path::PathBuf;
 use std::sync::LazyLock;
 
+use crate::{distance, Database, ItemId, Reader, Writer};
 use heed::{RoTxn, RwTxn, WithoutTls};
+use numpy::PyReadonlyArray2;
 use once_cell::sync::OnceCell;
 use parking_lot::{MappedMutexGuard, Mutex, MutexGuard};
 use pyo3::exceptions::{PyIOError, PyRuntimeError};
@@ -10,8 +12,6 @@ use pyo3::prelude::*;
 use pyo3::types::PyType;
 use pyo3_stub_gen::define_stub_info_gatherer;
 use pyo3_stub_gen::derive::{gen_stub_pyclass, gen_stub_pyclass_enum, gen_stub_pymethods};
-
-use crate::{distance, Database, ItemId, Reader, Writer};
 static DEFAULT_ENV_SIZE: usize = 1024 * 1024 * 1024; // 1GiB
 
 // LMDB environment.
@@ -341,6 +341,16 @@ impl PyWriter {
         }
         Ok(())
     }
+
+    fn add_items<'py>(
+        &self,
+        items: Vec<ItemId>,
+        vectors: PyReadonlyArray2<'py, f32>,
+    ) -> PyResult<()> {
+        let vectors_as_array = vectors.as_array();
+        let item_vecs = vectors_as_array.rows().into_iter().map(|r| r.to_vec());
+        items.into_iter().zip(item_vecs).try_for_each(|(item, vector)| self.add_item(item, vector))
+    }
 }
 
 enum DynReader {
@@ -351,6 +361,20 @@ enum DynReader {
     BqEuclidean(Reader<distance::BinaryQuantizedEuclidean>),
     BqManhattan(Reader<distance::BinaryQuantizedManhattan>),
     Hamming(Reader<distance::Hamming>),
+}
+
+macro_rules! hnsw_search {
+    ($reader:expr, |r| r . $($q:tt)*) => {
+        match $reader {
+            DynReader::Cosine(reader) => reader . $($q)*,
+            DynReader::Euclidean(reader) => reader . $($q)*,
+            DynReader::Manhattan(reader) => reader . $($q)*,
+            DynReader::BqCosine(reader) => reader . $($q)*,
+            DynReader::BqEuclidean(reader) => reader . $($q)*,
+            DynReader::BqManhattan(reader) => reader . $($q)*,
+            DynReader::Hamming(reader) => reader . $($q)*,
+        }
+    };
 }
 
 /// A thread-local Database reader holding its own `RoTxn`. It is safe to spawn multiple readers in
@@ -377,23 +401,28 @@ impl PyReader {
     #[pyo3(signature = (query, n=10, ef_search=200))]
     fn by_vec(&self, query: Vec<f32>, n: usize, ef_search: usize) -> PyResult<Vec<(ItemId, f32)>> {
         let rtxn = &self.rtxn;
-
-        macro_rules! hnsw_search {
-            ($read:expr, $q:expr) => {
-                $read.nns(n).ef_search(ef_search).by_vector(&rtxn, $q).map_err(h2py_err)
-            };
-        }
-
-        let found = match &self.dyn_reader {
-            DynReader::Cosine(reader) => hnsw_search!(reader, &query)?,
-            DynReader::Euclidean(reader) => hnsw_search!(reader, &query)?,
-            DynReader::Manhattan(reader) => hnsw_search!(reader, &query)?,
-            DynReader::BqCosine(reader) => hnsw_search!(reader, &query)?,
-            DynReader::BqEuclidean(reader) => hnsw_search!(reader, &query)?,
-            DynReader::BqManhattan(reader) => hnsw_search!(reader, &query)?,
-            DynReader::Hamming(reader) => hnsw_search!(reader, &query)?,
-        };
+        let found = hnsw_search!(&self.dyn_reader, |r| r
+            .nns(n)
+            .ef_search(ef_search)
+            .by_vector(&rtxn, &query))
+        .map_err(h2py_err)?;
         Ok(found.into_nns())
+    }
+
+    /// Retrieve similar items from the db given an item ID.
+    /// Returns `None` if the item is not in the database.
+    #[pyo3(signature = (item, n=10, ef_search=200))]
+    fn by_item(
+        &self,
+        item: ItemId,
+        n: usize,
+        ef_search: usize,
+    ) -> PyResult<Option<Vec<(ItemId, f32)>>> {
+        let rtxn = &self.rtxn;
+        let found =
+            hnsw_search!(&self.dyn_reader, |r| r.nns(n).ef_search(ef_search).by_item(&rtxn, item))
+                .map_err(h2py_err)?;
+        Ok(found.map(|s| s.into_nns()))
     }
 }
 
@@ -436,3 +465,28 @@ fn hannoy_module(m: &Bound<'_, PyModule>) -> PyResult<()> {
 
 // Define a function to gather stub information.
 define_stub_info_gatherer!(stub_info);
+#[cfg(test)]
+mod test {
+    use super::*;
+    use numpy::PyArray2;
+    use numpy::PyArrayMethods;
+
+    #[test]
+    fn write_vectors_py() {
+        Python::with_gil(|py| {
+            let dir = tempfile::tempdir().unwrap();
+            let distance = PyDistance::Cosine;
+            let database = PyDatabase::new(dir.path().to_path_buf(), distance, None, None).unwrap();
+            let writer = database.writer(3, 0, 4, 10);
+            let input = PyArray2::from_vec2(py, &vec![vec![0.0, 1.0, 2.0], vec![1.0, 0.0, 2.0]])
+                .unwrap()
+                .readonly();
+            writer.add_items(vec![0, 1], input).unwrap();
+            writer.build().unwrap();
+            PyDatabase::commit_rw_txn().unwrap();
+            let reader = database.reader(0).unwrap();
+            assert_eq!(vec![(0, 0.0)], reader.by_vec(vec![0.0, 1.0, 2.0], 1, 10).unwrap());
+            assert_eq!(vec![(1, 0.0)], reader.by_vec(vec![1.0, 0.0, 2.0], 1, 10).unwrap());
+        });
+    }
+}
