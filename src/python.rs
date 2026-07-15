@@ -370,8 +370,6 @@ impl PyWriter {
     }
 }
 
-type ByArrayResult = Either<Vec<(ItemId, f32)>, Vec<Vec<(ItemId, f32)>>>;
-
 /// Borrow a tensor's data as a slice of `f32`s.
 fn tensor_as_f32_slice(tensor: &PyTensor) -> PyResult<&[f32]> {
     if !tensor.device().is_cpu() {
@@ -474,7 +472,7 @@ impl PyReader {
         array: &Bound<'_, PyAny>,
         n: usize,
         ef_search: usize,
-    ) -> PyResult<ByArrayResult> {
+    ) -> PyResult<Either<Vec<(ItemId, f32)>, Vec<Vec<(ItemId, f32)>>>> {
         let tensor = PyTensor::from_pyany(array.py(), array)?;
         let data = tensor_as_f32_slice(&tensor)?;
         let rtxn = &self.rtxn;

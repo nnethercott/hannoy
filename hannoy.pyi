@@ -57,9 +57,10 @@ class Reader:
         """
     def by_array(self, array: typing.Any, n: builtins.int = 10, ef_search: builtins.int = 200) -> typing.Union[builtins.list[tuple[builtins.int, builtins.float]], builtins.list[builtins.list[tuple[builtins.int, builtins.float]]]]:
         r"""
-        Retrieve similar items from the db given a tensor implementing the DLPack protocol
-        (e.g. a numpy array or a PyTorch tensor). A 1D tensor is treated as a single query
-        vector; a 2D tensor is treated as one query vector per row.
+        Retrieve similar items from the db, given a CPU 2D tensor implementing `.__dlpack__()`, one row per item.
+        
+        This includes all Array API arrays (e.g. a numpy array or a PyTorch tensor).
+        A 1D tensor is treated as a single query vector; a 2D tensor is treated as one query vector per row.
         """
 
 @typing.final
@@ -87,8 +88,9 @@ class Writer:
         """
     def add_items(self, items: typing.Sequence[builtins.int], vectors: typing.Any) -> None:
         r"""
-        Store vectors associated with item IDs in the database, given a 2D tensor implementing
-        the DLPack protocol (e.g. a numpy array or a PyTorch tensor), one row per item.
+        Store vectors associated with item IDs in the database, given a CPU 2D tensor implementing `.__dlpack__()`, one row per item.
+        
+        This includes all Array API arrays (e.g. a numpy array or a PyTorch tensor).
         """
 
 @typing.final
