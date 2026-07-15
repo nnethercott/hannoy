@@ -381,9 +381,9 @@ fn tensor_as_f32_slice(tensor: &PyTensor) -> PyResult<&[f32]> {
     if !tensor.is_contiguous() {
         return Err(PyValueError::new_err("only contiguous tensors are supported"));
     }
-    assert!(tensor.numel() * size_of::<f32>() < isize::MAX as usize);
+    assert!(tensor.nbytes() < isize::MAX as usize);
     // SAFETY:
-    // 1: `data`` is non-null and contains `tensor.numel()` properly aligned values (`is_cpu()`)
+    // 1: `data` is non-null and contains `tensor.nbytes()` properly aligned values (`is_cpu()`)
     // 2: `data` contains consecutive initialized f32 values (`is_f32()` & `is_contiguous()`)
     // 3: `data` is not being mutated for `tensor`’s lifetime (`PyTensor` guarantee)
     // 4: we assert the `isize::MAX` invariant
