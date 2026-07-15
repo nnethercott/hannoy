@@ -349,26 +349,24 @@ impl PyWriter {
     fn add_items(&self, items: Vec<ItemId>, vectors: &Bound<'_, PyAny>) -> PyResult<()> {
         let tensor = PyTensor::from_pyany(vectors.py(), vectors)?;
         let data = tensor_as_f32_slice(&tensor)?;
-        match tensor.shape() {
-            [rows, cols] => {
-                let (rows, cols) = (*rows as usize, *cols as usize);
-                if items.len() != rows {
-                    return Err(PyValueError::new_err(format!(
-                        "add_items requires as many items as the array has rows: got {} items \
-                         for {rows} rows",
-                        items.len()
-                    )));
-                }
-                items
-                    .into_iter()
-                    .zip(data.chunks_exact(cols))
-                    .try_for_each(|(item, vector)| self.add_item(item, vector.to_vec()))
-            }
-            shape => Err(PyValueError::new_err(format!(
+        let [rows, cols] = tensor.shape() else {
+            return Err(PyValueError::new_err(format!(
                 "add_items requires a 2D array, got {}D",
-                shape.len()
-            ))),
+                tensor.shape().len()
+            )));
+        };
+        let (rows, cols) = (*rows as usize, *cols as usize);
+        if items.len() != rows {
+            return Err(PyValueError::new_err(format!(
+                "add_items requires as many items as the array has rows: got {} items \
+                    for {rows} rows",
+                items.len()
+            )));
         }
+        items
+            .into_iter()
+            .zip(data.chunks_exact(cols))
+            .try_for_each(|(item, vector)| self.add_item(item, vector.to_vec()))
     }
 }
 
