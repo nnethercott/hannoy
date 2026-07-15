@@ -477,29 +477,18 @@ impl PyReader {
         let data = tensor_as_f32_slice(&tensor)?;
         let rtxn = &self.rtxn;
 
+        let search = |row| {
+            hnsw_search!(&self.dyn_reader, |r| r.nns(n).ef_search(ef_search).by_vector(rtxn, row))
+                .map(|found| found.into_nns())
+                .map_err(h2py_err)
+        };
+
         match tensor.shape() {
-            [_] => {
-                let found = hnsw_search!(&self.dyn_reader, |r| r
-                    .nns(n)
-                    .ef_search(ef_search)
-                    .by_vector(rtxn, data))
-                .map_err(h2py_err)?;
-                Ok(Either::Left(found.into_nns()))
-            }
+            [_] => Ok(Either::Left(search(data)?)),
             [rows, cols] => {
                 let (rows, cols) = (*rows as usize, *cols as usize);
-                let results = data
-                    .chunks_exact(cols)
-                    .take(rows)
-                    .map(|row| {
-                        hnsw_search!(&self.dyn_reader, |r| r
-                            .nns(n)
-                            .ef_search(ef_search)
-                            .by_vector(rtxn, row))
-                        .map(|found| found.into_nns())
-                        .map_err(h2py_err)
-                    })
-                    .collect::<PyResult<_>>()?;
+                let results =
+                    data.chunks_exact(cols).take(rows).map(search).collect::<PyResult<_>>()?;
                 Ok(Either::Right(results))
             }
             shape => Err(PyValueError::new_err(format!(
