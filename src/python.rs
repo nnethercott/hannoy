@@ -344,7 +344,7 @@ impl PyWriter {
     }
 
     /// Store vectors associated with item IDs in the database, given a CPU 2D tensor implementing `.__dlpack__()`, one row per item.
-    /// 
+    ///
     /// This includes all Array API arrays (e.g. a numpy array or a PyTorch tensor).
     fn add_items(&self, items: Vec<ItemId>, vectors: &Bound<'_, PyAny>) -> PyResult<()> {
         let tensor = PyTensor::from_pyany(vectors.py(), vectors)?;
@@ -464,9 +464,8 @@ impl PyReader {
         Ok(found.map(|s| s.into_nns()))
     }
 
-    
     /// Retrieve similar items from the db, given a CPU 2D tensor implementing `.__dlpack__()`, one row per item.
-    /// 
+    ///
     /// This includes all Array API arrays (e.g. a numpy array or a PyTorch tensor).
     /// A 1D tensor is treated as a single query vector; a 2D tensor is treated as one query vector per row.
     #[pyo3(signature = (array, n=10, ef_search=200))]
@@ -564,9 +563,8 @@ mod test {
             let distance = PyDistance::Cosine;
             let database = PyDatabase::new(dir.path().to_path_buf(), distance, None, None).unwrap();
             let writer = database.writer(3, 0, 4, 10);
-            let input =
-                PyArray2::<f32>::from_vec2(py, &[vec![0.0, 1.0, 2.0], vec![1.0, 0.0, 2.0]])
-                    .unwrap();
+            let input = PyArray2::<f32>::from_vec2(py, &[vec![0.0, 1.0, 2.0], vec![1.0, 0.0, 2.0]])
+                .unwrap();
             writer.add_items(vec![0, 1], input.as_any()).unwrap();
             writer.build().unwrap();
             PyDatabase::commit_rw_txn().unwrap();
