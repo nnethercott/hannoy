@@ -50,17 +50,23 @@ class Reader:
         r"""
         Retrieve similar items from the db given a query.
         """
+    def by_array(self, array: typing.Any, n: builtins.int = 10, ef_search: builtins.int = 200, out: typing.Optional[tuple] = None) -> typing.Optional[typing.Union[builtins.list[tuple[builtins.int, builtins.float]], builtins.list[builtins.list[tuple[builtins.int, builtins.float]]]]]:
+        r"""
+        Retrieve similar items from the db, given a CPU 1D or 2D tensor implementing `.__dlpack__()`.
+        
+        This includes all Array API arrays (e.g. a numpy array or a PyTorch tensor).
+        A 1D tensor is treated as a single query vector; a 2D tensor is treated as one query vector per row.
+        
+        If `out` is given, `None` is returned instead of a list of results.
+        Results are written into `out`, which must be an `(ids, distances)` tuple of writable,
+        contiguous, CPU tensors, `ids` holdings `u32`s and `distances` holding `f32`s.
+        Both are to be shaped `(n,)` for a 1D query or `(rows, n)` for a 2D query.
+        Rows with fewer than `n` hits are padded with `id` `u32::MAX` and `distance` `f32::INFINITY`.
+        """
     def by_item(self, item: builtins.int, n: builtins.int = 10, ef_search: builtins.int = 200) -> typing.Optional[builtins.list[tuple[builtins.int, builtins.float]]]:
         r"""
         Retrieve similar items from the db given an item ID.
         Returns `None` if the item is not in the database.
-        """
-    def by_array(self, array: typing.Any, n: builtins.int = 10, ef_search: builtins.int = 200) -> typing.Union[builtins.list[tuple[builtins.int, builtins.float]], builtins.list[builtins.list[tuple[builtins.int, builtins.float]]]]:
-        r"""
-        Retrieve similar items from the db, given a CPU 2D tensor implementing `.__dlpack__()`, one row per item.
-        
-        This includes all Array API arrays (e.g. a numpy array or a PyTorch tensor).
-        A 1D tensor is treated as a single query vector; a 2D tensor is treated as one query vector per row.
         """
 
 @typing.final

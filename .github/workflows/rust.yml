@@ -46,7 +46,7 @@ jobs:
         with:
           python-version: '3.x'
       - name: Install Python test dependencies
-        run: pip install --group test
+        run: pip install --group test -e .
       - uses: actions-rs/cargo@v1
         with:
           command: build
@@ -58,6 +58,8 @@ jobs:
         with:
           command: test
           args: --features python
+      - name: Run Python tests
+        run: pytest tests/
 
   lint:
     runs-on: ubuntu-latest
@@ -67,7 +69,6 @@ jobs:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@1.89
         with:
-          profile: minimal
           components: clippy, rustfmt
       - uses: actions-rs/cargo@v1
         with:

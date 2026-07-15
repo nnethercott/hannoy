@@ -1,7 +1,10 @@
 //! Python bindings for hannoy.
+mod dlpack;
+
 use std::path::PathBuf;
 use std::sync::LazyLock;
 
+use crate::python::dlpack::AsTypedSlice as _;
 use crate::{distance, Database, ItemId, Reader, Writer};
 use either::Either;
 use heed::{RoTxn, RwTxn, WithoutTls};
@@ -9,7 +12,7 @@ use once_cell::sync::OnceCell;
 use parking_lot::{MappedMutexGuard, Mutex, MutexGuard};
 use pyo3::exceptions::{PyIOError, PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::PyType;
+use pyo3::types::{PyTuple, PyType};
 use pyo3_dlpack::PyTensor;
 use pyo3_stub_gen::define_stub_info_gatherer;
 use pyo3_stub_gen::derive::{gen_stub_pyclass, gen_stub_pyclass_enum, gen_stub_pymethods};
@@ -348,7 +351,7 @@ impl PyWriter {
     /// This includes all Array API arrays (e.g. a numpy array or a PyTorch tensor).
     fn add_items(&self, items: Vec<ItemId>, vectors: &Bound<'_, PyAny>) -> PyResult<()> {
         let tensor = PyTensor::from_pyany(vectors.py(), vectors)?;
-        let data = tensor_as_f32_slice(&tensor)?;
+        let data: &[f32] = tensor.as_slice()?;
         let [rows, cols] = tensor.shape() else {
             return Err(PyValueError::new_err(format!(
                 "add_items requires a 2D array, got {}D",
@@ -368,26 +371,6 @@ impl PyWriter {
             .zip(data.chunks_exact(cols))
             .try_for_each(|(item, vector)| self.add_item(item, vector.to_vec()))
     }
-}
-
-/// Borrow a tensor's data as a slice of `f32`s.
-fn tensor_as_f32_slice(tensor: &PyTensor) -> PyResult<&[f32]> {
-    if !tensor.device().is_cpu() {
-        return Err(PyValueError::new_err("only CPU tensors are supported"));
-    }
-    if !tensor.dtype().is_f32() {
-        return Err(PyValueError::new_err("only float32 tensors are supported"));
-    }
-    if !tensor.is_contiguous() {
-        return Err(PyValueError::new_err("only contiguous tensors are supported"));
-    }
-    assert!(tensor.nbytes() < isize::MAX as usize);
-    // SAFETY:
-    // 1: `data` is non-null and contains `tensor.nbytes()` properly aligned values (`is_cpu()`)
-    // 2: `data` contains consecutive initialized f32 values (`is_f32()` & `is_contiguous()`)
-    // 3: `data` is not being mutated for `tensor`’s lifetime (`PyTensor` guarantee)
-    // 4: we assert the `isize::MAX` invariant
-    Ok(unsafe { std::slice::from_raw_parts(tensor.data_ptr() as *const f32, tensor.numel()) })
 }
 
 enum DynReader {
@@ -413,6 +396,8 @@ macro_rules! hnsw_search {
         }
     };
 }
+
+type ByArrayResult = Either<Vec<(ItemId, f32)>, Vec<Vec<(ItemId, f32)>>>;
 
 /// A thread-local Database reader holding its own `RoTxn`. It is safe to spawn multiple readers in
 /// different threads.
@@ -446,6 +431,78 @@ impl PyReader {
         Ok(found.into_nns())
     }
 
+    /// Retrieve similar items from the db, given a CPU 1D or 2D tensor implementing `.__dlpack__()`.
+    ///
+    /// This includes all Array API arrays (e.g. a numpy array or a PyTorch tensor).
+    /// A 1D tensor is treated as a single query vector; a 2D tensor is treated as one query vector per row.
+    ///
+    /// If `out` is given, `None` is returned instead of a list of results.
+    /// Results are written into `out`, which must be an `(ids, distances)` tuple of writable,
+    /// contiguous, CPU tensors, `ids` holdings `u32`s and `distances` holding `f32`s.
+    /// Both are to be shaped `(n,)` for a 1D query or `(rows, n)` for a 2D query.
+    /// Rows with fewer than `n` hits are padded with `id` `u32::MAX` and `distance` `f32::INFINITY`.
+    #[pyo3(signature = (array, n=10, ef_search=200, out=None))]
+    fn by_array(
+        &self,
+        array: &Bound<'_, PyAny>,
+        n: usize,
+        ef_search: usize,
+        out: Option<Bound<'_, PyTuple>>,
+    ) -> PyResult<Option<ByArrayResult>> {
+        let tensor = PyTensor::from_pyany(array.py(), array)?;
+        let data: &[f32] = tensor.as_slice()?;
+        let out = out
+            .map(|out| {
+                if out.len() != 2 {
+                    return Err(PyValueError::new_err("out must be a tuple of 2 tensors"));
+                }
+                let ids = PyTensor::from_pyany(out.py(), &out.get_item(0)?)?;
+                let distances = PyTensor::from_pyany(out.py(), &out.get_item(1)?)?;
+                Ok((ids, distances))
+            })
+            .transpose()?;
+        let rtxn = &self.rtxn;
+
+        let search = |row| {
+            hnsw_search!(&self.dyn_reader, |r| r.nns(n).ef_search(ef_search).by_vector(rtxn, row))
+                .map(|found| found.into_nns())
+                .map_err(h2py_err)
+        };
+
+        match tensor.shape() {
+            [_] => {
+                let Some((mut ids, mut distances)) = out else {
+                    return Ok(Some(Either::Left(search(data)?)));
+                };
+                let (ids, distances) = validate_out(&mut ids, &mut distances, &[n as i64])?;
+                let found = search(data)?;
+                write_row(ids, distances, found, n);
+                Ok(None)
+            }
+            [rows, cols] => {
+                let (rows, cols) = (*rows as usize, *cols as usize);
+                let queries = data.chunks_exact(cols).take(rows);
+
+                let Some((mut ids, mut distances)) = out else {
+                    return Ok(Some(Either::Right(queries.map(search).collect::<PyResult<_>>()?)));
+                };
+                let (ids, distances) =
+                    validate_out(&mut ids, &mut distances, &[rows as i64, n as i64])?;
+
+                for ((query, ids_row), distances_row) in
+                    queries.zip(ids.chunks_exact_mut(n)).zip(distances.chunks_exact_mut(n))
+                {
+                    write_row(ids_row, distances_row, search(query)?, n);
+                }
+                Ok(None)
+            }
+            shape => Err(PyValueError::new_err(format!(
+                "by_array requires a 1D or 2D tensor, got {}D",
+                shape.len()
+            ))),
+        }
+    }
+
     /// Retrieve similar items from the db given an item ID.
     /// Returns `None` if the item is not in the database.
     #[pyo3(signature = (item, n=10, ef_search=200))]
@@ -460,42 +517,6 @@ impl PyReader {
             hnsw_search!(&self.dyn_reader, |r| r.nns(n).ef_search(ef_search).by_item(&rtxn, item))
                 .map_err(h2py_err)?;
         Ok(found.map(|s| s.into_nns()))
-    }
-
-    /// Retrieve similar items from the db, given a CPU 2D tensor implementing `.__dlpack__()`, one row per item.
-    ///
-    /// This includes all Array API arrays (e.g. a numpy array or a PyTorch tensor).
-    /// A 1D tensor is treated as a single query vector; a 2D tensor is treated as one query vector per row.
-    #[pyo3(signature = (array, n=10, ef_search=200))]
-    fn by_array(
-        &self,
-        array: &Bound<'_, PyAny>,
-        n: usize,
-        ef_search: usize,
-    ) -> PyResult<Either<Vec<(ItemId, f32)>, Vec<Vec<(ItemId, f32)>>>> {
-        let tensor = PyTensor::from_pyany(array.py(), array)?;
-        let data = tensor_as_f32_slice(&tensor)?;
-        let rtxn = &self.rtxn;
-
-        let search = |row| {
-            hnsw_search!(&self.dyn_reader, |r| r.nns(n).ef_search(ef_search).by_vector(rtxn, row))
-                .map(|found| found.into_nns())
-                .map_err(h2py_err)
-        };
-
-        match tensor.shape() {
-            [_] => Ok(Either::Left(search(data)?)),
-            [rows, cols] => {
-                let (rows, cols) = (*rows as usize, *cols as usize);
-                let results =
-                    data.chunks_exact(cols).take(rows).map(search).collect::<PyResult<_>>()?;
-                Ok(Either::Right(results))
-            }
-            shape => Err(PyValueError::new_err(format!(
-                "by_array requires a 1D or 2D tensor, got {}D",
-                shape.len()
-            ))),
-        }
     }
 }
 
@@ -522,6 +543,39 @@ fn get_ro_txn() -> PyResult<RoTxn<'static, WithoutTls>> {
     let env = ENV.get().ok_or_else(|| PyRuntimeError::new_err("No environment"))?;
     let rtxn = env.read_txn().map_err(h2py_err)?;
     Ok(rtxn)
+}
+
+/// Extract and validate an `(ids, distances)` tuple: both tensors must be shaped `expected_shape`;
+/// their dtype and writability are checked lazily by [`AsTypedSlice`] once the caller borrows them as slices.
+fn validate_out<'a>(
+    ids: &'a mut PyTensor,
+    distances: &'a mut PyTensor,
+    expected_shape: &[i64],
+) -> PyResult<(&'a mut [u32], &'a mut [f32])> {
+    if ids.shape() != expected_shape {
+        return Err(PyValueError::new_err(format!(
+            "out[0] (ids) must have shape {expected_shape:?}, got {:?}",
+            ids.shape()
+        )));
+    }
+    if distances.shape() != expected_shape {
+        return Err(PyValueError::new_err(format!(
+            "out[1] (distances) must have shape {expected_shape:?}, got {:?}",
+            distances.shape()
+        )));
+    }
+    // SAFETY: since they are being validated to have different dtypes, they can’t alias
+    Ok((unsafe { ids.as_mut_slice()? }, unsafe { distances.as_mut_slice()? }))
+}
+
+/// Write one query's `(item, distance)` results into `n`-length `ids`/`distances` slices,
+/// padding with `(u32::MAX, f32::INFINITY)` past the number of hits found.
+fn write_row(ids: &mut [u32], distances: &mut [f32], found: Vec<(ItemId, f32)>, n: usize) {
+    for i in 0..n {
+        let (item, distance) = found.get(i).copied().unwrap_or((ItemId::MAX, f32::INFINITY));
+        ids[i] = item;
+        distances[i] = distance;
+    }
 }
 
 /// Python bindings for Hannoy <https://github.com/nnethercott/hannoy>; a KV-backed HNSW
