@@ -39,12 +39,13 @@ thiserror = "2.0.9"
 tinyvec = { version = "1.9.0", features = ["rustc_1_55"] }
 tracing = "0.1.41"
 steppe = { version = "0.4", default-features = false }
-pyo3 = { version = "0.26.0", optional = true }
+pyo3 = { version = "0.28.0", optional = true, features = ["either"] }
 pyo3-stub-gen = { version = "0.22.1", optional = true }
+pyo3-dlpack = { version = "0.3.0", optional = true }
+either = { version = "1.9", optional = true }
 once_cell = { version = "1.21.3", optional = true }
 tempfile = { version = "3.21.0", optional = true }
 parking_lot = { version = "0.12.4", optional = true }
-numpy = { version = "0.26.0", optional = true }
 thread_local = "1.1.9"
 crossbeam-channel = "0.5.15"
 
@@ -61,6 +62,8 @@ divan = { version = "3.0.5", package = "codspeed-divan-compat" }
 hnsw_rs = "0.3.2"
 insta = "1.42.0"
 instant-distance = "0.6.1"
+numpy = "0.28.0"
+pyo3 = { version = "0.28.0", features = ["auto-initialize"] }
 proptest = "1.6.0"
 rand = { version = "0.8.5", features = ["std_rng", "min_const_gen"] }
 tempfile = "3.20.0"
@@ -76,7 +79,7 @@ arroy = []
 assert-reader-validity = []
 
 # Enabling this feature allows using the crate from Python.
-python = ["dep:pyo3", "pyo3-stub-gen", "once_cell", "parking_lot", "numpy"]
+python = ["dep:pyo3", "pyo3-stub-gen", "pyo3-dlpack", "either", "once_cell", "parking_lot"]
 extension-module = ["python", "pyo3/extension-module"]
 
 [profile.dev]

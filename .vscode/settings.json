@@ -1,0 +1,5 @@
+{
+    "rust-analyzer.cargo.features": "all",
+    "python.testing.pytestEnabled": true,
+    "python.testing.pytestArgs": [],
+}

@@ -787,7 +787,7 @@ impl<D: Distance> Reader<D> {
                 let more_nns =
                     return_if_cancelled!(visitor.visit(query, self, rtxn, &mut path, cancel_fn)?);
 
-                neighbours.extend(more_nns.into_iter());
+                neighbours.extend(more_nns);
                 if neighbours.len() >= opt.ef {
                     break;
                 }
@@ -881,7 +881,7 @@ impl<D: Distance> Reader<D> {
 
                 let more_nns =
                     return_if_cancelled!(visitor.visit(&query, self, rtxn, &mut path, cancel_fn)?);
-                neighbours.extend(more_nns.into_iter());
+                neighbours.extend(more_nns);
                 if neighbours.len() >= opt.count {
                     break;
                 }

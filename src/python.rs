@@ -3,13 +3,14 @@ use std::path::PathBuf;
 use std::sync::LazyLock;
 
 use crate::{distance, Database, ItemId, Reader, Writer};
+use either::Either;
 use heed::{RoTxn, RwTxn, WithoutTls};
-use numpy::PyReadonlyArray2;
 use once_cell::sync::OnceCell;
 use parking_lot::{MappedMutexGuard, Mutex, MutexGuard};
-use pyo3::exceptions::{PyIOError, PyRuntimeError};
+use pyo3::exceptions::{PyIOError, PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::PyType;
+use pyo3_dlpack::PyTensor;
 use pyo3_stub_gen::define_stub_info_gatherer;
 use pyo3_stub_gen::derive::{gen_stub_pyclass, gen_stub_pyclass_enum, gen_stub_pymethods};
 static DEFAULT_ENV_SIZE: usize = 1024 * 1024 * 1024; // 1GiB
@@ -20,7 +21,7 @@ static RW_TXN: LazyLock<Mutex<Option<heed::RwTxn<'static>>>> = LazyLock::new(|| 
 
 /// The supported distance metrics in hannoy.
 #[gen_stub_pyclass_enum]
-#[pyclass(name = "Metric")]
+#[pyclass(name = "Metric", from_py_object)]
 #[derive(Clone)]
 pub(super) enum PyDistance {
     #[pyo3(name = "COSINE")]
@@ -342,15 +343,55 @@ impl PyWriter {
         Ok(())
     }
 
-    fn add_items<'py>(
-        &self,
-        items: Vec<ItemId>,
-        vectors: PyReadonlyArray2<'py, f32>,
-    ) -> PyResult<()> {
-        let vectors_as_array = vectors.as_array();
-        let item_vecs = vectors_as_array.rows().into_iter().map(|r| r.to_vec());
-        items.into_iter().zip(item_vecs).try_for_each(|(item, vector)| self.add_item(item, vector))
+    /// Store vectors associated with item IDs in the database, given a CPU 2D tensor implementing `.__dlpack__()`, one row per item.
+    /// 
+    /// This includes all Array API arrays (e.g. a numpy array or a PyTorch tensor).
+    fn add_items(&self, items: Vec<ItemId>, vectors: &Bound<'_, PyAny>) -> PyResult<()> {
+        let tensor = PyTensor::from_pyany(vectors.py(), vectors)?;
+        let data = tensor_as_f32_slice(&tensor)?;
+        match tensor.shape() {
+            [rows, cols] => {
+                let (rows, cols) = (*rows as usize, *cols as usize);
+                if items.len() != rows {
+                    return Err(PyValueError::new_err(format!(
+                        "add_items requires as many items as the array has rows: got {} items \
+                         for {rows} rows",
+                        items.len()
+                    )));
+                }
+                items
+                    .into_iter()
+                    .zip(data.chunks_exact(cols))
+                    .try_for_each(|(item, vector)| self.add_item(item, vector.to_vec()))
+            }
+            shape => Err(PyValueError::new_err(format!(
+                "add_items requires a 2D array, got {}D",
+                shape.len()
+            ))),
+        }
     }
+}
+
+type ByArrayResult = Either<Vec<(ItemId, f32)>, Vec<Vec<(ItemId, f32)>>>;
+
+/// Borrow a tensor's data as a slice of `f32`s.
+fn tensor_as_f32_slice(tensor: &PyTensor) -> PyResult<&[f32]> {
+    if !tensor.device().is_cpu() {
+        return Err(PyValueError::new_err("only CPU tensors are supported"));
+    }
+    if !tensor.dtype().is_f32() {
+        return Err(PyValueError::new_err("only float32 tensors are supported"));
+    }
+    if !tensor.is_contiguous() {
+        return Err(PyValueError::new_err("only contiguous tensors are supported"));
+    }
+    assert!(tensor.numel() * size_of::<f32>() < isize::MAX as usize);
+    // SAFETY:
+    // 1: `data`` is non-null and contains `tensor.numel()` properly aligned values (`is_cpu()`)
+    // 2: `data` contains consecutive initialized f32 values (`is_f32()` & `is_contiguous()`)
+    // 3: `data` is not being mutated for `tensor`’s lifetime (`PyTensor` guarantee)
+    // 4: we assert the `isize::MAX` invariant
+    Ok(unsafe { std::slice::from_raw_parts(tensor.data_ptr() as *const f32, tensor.numel()) })
 }
 
 enum DynReader {
@@ -424,6 +465,54 @@ impl PyReader {
                 .map_err(h2py_err)?;
         Ok(found.map(|s| s.into_nns()))
     }
+
+    
+    /// Retrieve similar items from the db, given a CPU 2D tensor implementing `.__dlpack__()`, one row per item.
+    /// 
+    /// This includes all Array API arrays (e.g. a numpy array or a PyTorch tensor).
+    /// A 1D tensor is treated as a single query vector; a 2D tensor is treated as one query vector per row.
+    #[pyo3(signature = (array, n=10, ef_search=200))]
+    fn by_array(
+        &self,
+        array: &Bound<'_, PyAny>,
+        n: usize,
+        ef_search: usize,
+    ) -> PyResult<ByArrayResult> {
+        let tensor = PyTensor::from_pyany(array.py(), array)?;
+        let data = tensor_as_f32_slice(&tensor)?;
+        let rtxn = &self.rtxn;
+
+        match tensor.shape() {
+            [_] => {
+                let found = hnsw_search!(&self.dyn_reader, |r| r
+                    .nns(n)
+                    .ef_search(ef_search)
+                    .by_vector(rtxn, data))
+                .map_err(h2py_err)?;
+                Ok(Either::Left(found.into_nns()))
+            }
+            [rows, cols] => {
+                let (rows, cols) = (*rows as usize, *cols as usize);
+                let results = data
+                    .chunks_exact(cols)
+                    .take(rows)
+                    .map(|row| {
+                        hnsw_search!(&self.dyn_reader, |r| r
+                            .nns(n)
+                            .ef_search(ef_search)
+                            .by_vector(rtxn, row))
+                        .map(|found| found.into_nns())
+                        .map_err(h2py_err)
+                    })
+                    .collect::<PyResult<_>>()?;
+                Ok(Either::Right(results))
+            }
+            shape => Err(PyValueError::new_err(format!(
+                "by_array requires a 1D or 2D tensor, got {}D",
+                shape.len()
+            ))),
+        }
+    }
 }
 
 fn h2py_err<E: Into<crate::error::Error>>(e: E) -> PyErr {
@@ -469,19 +558,18 @@ define_stub_info_gatherer!(stub_info);
 mod test {
     use super::*;
     use numpy::PyArray2;
-    use numpy::PyArrayMethods;
 
     #[test]
     fn write_vectors_py() {
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let dir = tempfile::tempdir().unwrap();
             let distance = PyDistance::Cosine;
             let database = PyDatabase::new(dir.path().to_path_buf(), distance, None, None).unwrap();
             let writer = database.writer(3, 0, 4, 10);
-            let input = PyArray2::from_vec2(py, &vec![vec![0.0, 1.0, 2.0], vec![1.0, 0.0, 2.0]])
-                .unwrap()
-                .readonly();
-            writer.add_items(vec![0, 1], input).unwrap();
+            let input =
+                PyArray2::<f32>::from_vec2(py, &[vec![0.0, 1.0, 2.0], vec![1.0, 0.0, 2.0]])
+                    .unwrap();
+            writer.add_items(vec![0, 1], input.as_any()).unwrap();
             writer.build().unwrap();
             PyDatabase::commit_rw_txn().unwrap();
             let reader = database.reader(0).unwrap();

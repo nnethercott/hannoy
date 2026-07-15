@@ -3,8 +3,6 @@
 
 import builtins
 import enum
-import numpy
-import numpy.typing
 import os
 import pathlib
 import typing
@@ -20,7 +18,7 @@ class Database:
     r"""
     An LMDB-backed database for vector search.
     """
-    def __new__(cls, path: builtins.str | os.PathLike | pathlib.Path, distance: Metric = ..., name: typing.Optional[builtins.str] = None, env_size: typing.Optional[builtins.int] = None) -> Database: ...
+    def __new__(cls, path: builtins.str | os.PathLike | pathlib.Path, distance: Metric = Metric.EUCLIDEAN, name: typing.Optional[builtins.str] = None, env_size: typing.Optional[builtins.int] = None) -> Database: ...
     def writer(self, dimensions: builtins.int, index: builtins.int = 0, m: builtins.int = 16, ef: builtins.int = 96) -> Writer:
         r"""
         Get a writer for a specific index and dimensions.
@@ -57,6 +55,12 @@ class Reader:
         Retrieve similar items from the db given an item ID.
         Returns `None` if the item is not in the database.
         """
+    def by_array(self, array: typing.Any, n: builtins.int = 10, ef_search: builtins.int = 200) -> typing.Union[builtins.list[tuple[builtins.int, builtins.float]], builtins.list[builtins.list[tuple[builtins.int, builtins.float]]]]:
+        r"""
+        Retrieve similar items from the db given a tensor implementing the DLPack protocol
+        (e.g. a numpy array or a PyTorch tensor). A 1D tensor is treated as a single query
+        vector; a 2D tensor is treated as one query vector per row.
+        """
 
 @typing.final
 class Writer:
@@ -81,7 +85,11 @@ class Writer:
         r"""
         Store a vector associated with an item ID in the database.
         """
-    def add_items(self, items: typing.Sequence[builtins.int], vectors: numpy.typing.NDArray[numpy.float32]) -> None: ...
+    def add_items(self, items: typing.Sequence[builtins.int], vectors: typing.Any) -> None:
+        r"""
+        Store vectors associated with item IDs in the database, given a 2D tensor implementing
+        the DLPack protocol (e.g. a numpy array or a PyTorch tensor), one row per item.
+        """
 
 @typing.final
 class Metric(enum.Enum):

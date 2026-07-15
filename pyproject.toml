@@ -27,8 +27,9 @@ features = ["extension-module"]
 [dependency-groups]
 dev = [
     "maturin[patchelf]>=1.9.4",
-    "pytest>=8.4.2",
+    { include-group = "test" },
 ]
 test = [
     "pytest>=8.4.1",
+    "numpy>=1.22",
 ]
