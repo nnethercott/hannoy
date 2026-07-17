@@ -50,7 +50,7 @@ class Reader:
         r"""
         Retrieve similar items from the db given a query.
         """
-    def by_array(self, array: typing.Any, n: builtins.int = 10, ef_search: builtins.int = 200, out: typing.Optional[tuple] = None) -> typing.Optional[typing.Union[builtins.list[tuple[builtins.int, builtins.float]], builtins.list[builtins.list[tuple[builtins.int, builtins.float]]]]]:
+    def by_array(self, array: typing.Any, n: builtins.int = 10, ef_search: builtins.int = 200, out: tuple[typing.Any, typing.Any] = None) -> typing.Optional[typing.Union[builtins.list[tuple[builtins.int, builtins.float]], builtins.list[builtins.list[tuple[builtins.int, builtins.float]]]]]:
         r"""
         Retrieve similar items from the db, given a CPU 1D or 2D tensor implementing `.__dlpack__()`.
         

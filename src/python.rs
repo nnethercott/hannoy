@@ -4,16 +4,20 @@ mod dlpack;
 use std::path::PathBuf;
 use std::sync::LazyLock;
 
-use crate::python::dlpack::AsTypedSlice as _;
+use self::dlpack::MutTensorExt as _;
+use crate::python::dlpack::dl2py_err;
 use crate::{distance, Database, ItemId, Reader, Writer};
+use anyhow::ensure;
+use dlpark::ffi::DataType;
+use dlpark::traits::TensorView;
+use dlpark::SafeManagedTensorVersioned as Tensor;
 use either::Either;
 use heed::{RoTxn, RwTxn, WithoutTls};
 use once_cell::sync::OnceCell;
 use parking_lot::{MappedMutexGuard, Mutex, MutexGuard};
 use pyo3::exceptions::{PyIOError, PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::{PyTuple, PyType};
-use pyo3_dlpack::PyTensor;
+use pyo3::types::PyType;
 use pyo3_stub_gen::define_stub_info_gatherer;
 use pyo3_stub_gen::derive::{gen_stub_pyclass, gen_stub_pyclass_enum, gen_stub_pymethods};
 static DEFAULT_ENV_SIZE: usize = 1024 * 1024 * 1024; // 1GiB
@@ -349,13 +353,19 @@ impl PyWriter {
     /// Store vectors associated with item IDs in the database, given a CPU 2D tensor implementing `.__dlpack__()`, one row per item.
     ///
     /// This includes all Array API arrays (e.g. a numpy array or a PyTorch tensor).
-    fn add_items(&self, items: Vec<ItemId>, vectors: &Bound<'_, PyAny>) -> PyResult<()> {
-        let tensor = PyTensor::from_pyany(vectors.py(), vectors)?;
-        let data: &[f32] = tensor.as_slice()?;
-        let [rows, cols] = tensor.shape() else {
+    fn add_items(
+        &self,
+        items: Vec<ItemId>,
+        #[gen_stub(override_type(type_repr="typing.Any", imports=("typing",)))] vectors: Tensor,
+    ) -> PyResult<()> {
+        if vectors.data_type() != &DataType::F32 { // https://github.com/SunDoge/dlpark/issues/55
+            return Err(PyValueError::new_err("array must be f32"));
+        }
+        let data = vectors.as_slice_contiguous::<f32>().map_err(dl2py_err)?;
+        let [rows, cols] = vectors.shape() else {
             return Err(PyValueError::new_err(format!(
                 "add_items requires a 2D array, got {}D",
-                tensor.shape().len()
+                vectors.shape().len()
             )));
         };
         let (rows, cols) = (*rows as usize, *cols as usize);
@@ -444,23 +454,16 @@ impl PyReader {
     #[pyo3(signature = (array, n=10, ef_search=200, out=None))]
     fn by_array(
         &self,
-        array: &Bound<'_, PyAny>,
+        #[gen_stub(override_type(type_repr="typing.Any", imports=("typing",)))] array: Tensor,
         n: usize,
         ef_search: usize,
-        out: Option<Bound<'_, PyTuple>>,
+        #[gen_stub(override_type(type_repr="tuple[typing.Any, typing.Any]", imports=("typing",)))]
+        out: Option<(Tensor, Tensor)>,
     ) -> PyResult<Option<ByArrayResult>> {
-        let tensor = PyTensor::from_pyany(array.py(), array)?;
-        let data: &[f32] = tensor.as_slice()?;
-        let out = out
-            .map(|out| {
-                if out.len() != 2 {
-                    return Err(PyValueError::new_err("out must be a tuple of 2 tensors"));
-                }
-                let ids = PyTensor::from_pyany(out.py(), &out.get_item(0)?)?;
-                let distances = PyTensor::from_pyany(out.py(), &out.get_item(1)?)?;
-                Ok((ids, distances))
-            })
-            .transpose()?;
+        if array.data_type() != &DataType::F32 { // https://github.com/SunDoge/dlpark/issues/55
+            return Err(PyValueError::new_err("array must be f32"));
+        }
+        let data = array.as_slice_contiguous::<f32>().map_err(dl2py_err)?;
         let rtxn = &self.rtxn;
 
         let search = |row| {
@@ -469,7 +472,7 @@ impl PyReader {
                 .map_err(h2py_err)
         };
 
-        match tensor.shape() {
+        match array.shape() {
             [_] => {
                 let Some((mut ids, mut distances)) = out else {
                     return Ok(Some(Either::Left(search(data)?)));
@@ -548,8 +551,8 @@ fn get_ro_txn() -> PyResult<RoTxn<'static, WithoutTls>> {
 /// Extract and validate an `(ids, distances)` tuple: both tensors must be shaped `expected_shape`;
 /// their dtype and writability are checked lazily by [`AsTypedSlice`] once the caller borrows them as slices.
 fn validate_out<'a>(
-    ids: &'a mut PyTensor,
-    distances: &'a mut PyTensor,
+    ids: &'a mut Tensor,
+    distances: &'a mut Tensor,
     expected_shape: &[i64],
 ) -> PyResult<(&'a mut [u32], &'a mut [f32])> {
     if ids.shape() != expected_shape {
@@ -565,7 +568,7 @@ fn validate_out<'a>(
         )));
     }
     // SAFETY: since they are being validated to have different dtypes, they can’t alias
-    Ok((unsafe { ids.as_mut_slice()? }, unsafe { distances.as_mut_slice()? }))
+    Ok(unsafe { (ids.as_slice_contiguous_mut()?, distances.as_slice_contiguous_mut()?) })
 }
 
 /// Write one query's `(item, distance)` results into `n`-length `ids`/`distances` slices,
@@ -606,7 +609,7 @@ mod test {
             let writer = database.writer(3, 0, 4, 10);
             let input = PyArray2::<f32>::from_vec2(py, &[vec![0.0, 1.0, 2.0], vec![1.0, 0.0, 2.0]])
                 .unwrap();
-            writer.add_items(vec![0, 1], input.as_any()).unwrap();
+            writer.add_items(vec![0, 1], input.extract().unwrap()).unwrap();
             writer.build().unwrap();
             PyDatabase::commit_rw_txn().unwrap();
             let reader = database.reader(0).unwrap();
