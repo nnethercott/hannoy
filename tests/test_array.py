@@ -113,7 +113,7 @@ def test_by_array_out_pads_missing_hits(array_db: hannoy.Database) -> None:
     [
         pytest.param(
             np.array([1.0, 0.0, 0.0], dtype=np.float64),
-            ValueError("only float32 tensors are supported"),
+            ValueError("dtype mismatch"),
             id="wrong-dtype",
         ),
         pytest.param(
@@ -142,22 +142,22 @@ def _out_with_readonly_ids() -> tuple[np.ndarray, np.ndarray]:
     [
         pytest.param(
             (np.zeros(2, dtype=np.uint32),),
-            ValueError("out must be a tuple of exactly two tensors: (ids, distances)"),
+            ValueError("expected tuple of length 2, but got tuple of length 1"),
             id="wrong-tuple-length",
         ),
         pytest.param(
             (np.zeros(2, dtype=np.int32), np.zeros(2, dtype=np.float32)),
-            ValueError("only uint32 tensors are supported"),
+            ValueError("dtype mismatch"),
             id="wrong-ids-dtype",
         ),
         pytest.param(
             (np.zeros(3, dtype=np.uint32), np.zeros(2, dtype=np.float32)),
-            ValueError("out[0] (ids) must have shape [2], got [3]"),
+            ValueError("out[0] (ids) must have shape [2], got Ok([3])"),
             id="wrong-ids-shape",
         ),
         pytest.param(
             _out_with_readonly_ids(),
-            ValueError("out tensors must be writable"),
+            ValueError("tensor is read-only"),
             id="read-only",
         ),
     ],

@@ -1,16 +1,9 @@
 //! Python bindings for hannoy.
-mod dlpack;
-
 use std::path::PathBuf;
 use std::sync::LazyLock;
 
-use self::dlpack::MutTensorExt as _;
-use crate::python::dlpack::dl2py_err;
 use crate::{distance, Database, ItemId, Reader, Writer};
-use anyhow::ensure;
-use dlpark::ffi::DataType;
-use dlpark::traits::TensorView;
-use dlpark::SafeManagedTensorVersioned as Tensor;
+use dlpark::versioned::Dlpack;
 use either::Either;
 use heed::{RoTxn, RwTxn, WithoutTls};
 use once_cell::sync::OnceCell;
@@ -356,16 +349,14 @@ impl PyWriter {
     fn add_items(
         &self,
         items: Vec<ItemId>,
-        #[gen_stub(override_type(type_repr="typing.Any", imports=("typing",)))] vectors: Tensor,
+        #[gen_stub(override_type(type_repr="typing.Any", imports=("typing",)))] vectors: Dlpack,
     ) -> PyResult<()> {
-        if vectors.data_type() != &DataType::F32 { // https://github.com/SunDoge/dlpark/issues/55
-            return Err(PyValueError::new_err("array must be f32"));
-        }
-        let data = vectors.as_slice_contiguous::<f32>().map_err(dl2py_err)?;
-        let [rows, cols] = vectors.shape() else {
+        let data = vectors.cpu_data_slice::<f32>().map_err(dl2py_err)?;
+        let shape = vectors.shape().map_err(dl2py_err)?;
+        let [rows, cols] = shape else {
             return Err(PyValueError::new_err(format!(
                 "add_items requires a 2D array, got {}D",
-                vectors.shape().len()
+                shape.len()
             )));
         };
         let (rows, cols) = (*rows as usize, *cols as usize);
@@ -454,16 +445,13 @@ impl PyReader {
     #[pyo3(signature = (array, n=10, ef_search=200, out=None))]
     fn by_array(
         &self,
-        #[gen_stub(override_type(type_repr="typing.Any", imports=("typing",)))] array: Tensor,
+        #[gen_stub(override_type(type_repr="typing.Any", imports=("typing",)))] array: Dlpack,
         n: usize,
         ef_search: usize,
         #[gen_stub(override_type(type_repr="tuple[typing.Any, typing.Any]", imports=("typing",)))]
-        out: Option<(Tensor, Tensor)>,
+        out: Option<(Dlpack, Dlpack)>,
     ) -> PyResult<Option<ByArrayResult>> {
-        if array.data_type() != &DataType::F32 { // https://github.com/SunDoge/dlpark/issues/55
-            return Err(PyValueError::new_err("array must be f32"));
-        }
-        let data = array.as_slice_contiguous::<f32>().map_err(dl2py_err)?;
+        let data = array.cpu_data_slice::<f32>().map_err(dl2py_err)?;
         let rtxn = &self.rtxn;
 
         let search = |row| {
@@ -472,7 +460,7 @@ impl PyReader {
                 .map_err(h2py_err)
         };
 
-        match array.shape() {
+        match array.shape().map_err(dl2py_err)? {
             [_] => {
                 let Some((mut ids, mut distances)) = out else {
                     return Ok(Some(Either::Left(search(data)?)));
@@ -551,24 +539,27 @@ fn get_ro_txn() -> PyResult<RoTxn<'static, WithoutTls>> {
 /// Extract and validate an `(ids, distances)` tuple: both tensors must be shaped `expected_shape`;
 /// their dtype and writability are checked lazily by [`AsTypedSlice`] once the caller borrows them as slices.
 fn validate_out<'a>(
-    ids: &'a mut Tensor,
-    distances: &'a mut Tensor,
+    ids: &'a mut Dlpack,
+    distances: &'a mut Dlpack,
     expected_shape: &[i64],
 ) -> PyResult<(&'a mut [u32], &'a mut [f32])> {
-    if ids.shape() != expected_shape {
+    if ids.shape().map_err(dl2py_err)? != expected_shape {
         return Err(PyValueError::new_err(format!(
             "out[0] (ids) must have shape {expected_shape:?}, got {:?}",
             ids.shape()
         )));
     }
-    if distances.shape() != expected_shape {
+    if distances.shape().map_err(dl2py_err)? != expected_shape {
         return Err(PyValueError::new_err(format!(
             "out[1] (distances) must have shape {expected_shape:?}, got {:?}",
             distances.shape()
         )));
     }
     // SAFETY: since they are being validated to have different dtypes, they can’t alias
-    Ok(unsafe { (ids.as_slice_contiguous_mut()?, distances.as_slice_contiguous_mut()?) })
+    Ok((
+        unsafe { ids.cpu_data_slice_mut() }.map_err(dl2py_err)?,
+        unsafe { distances.cpu_data_slice_mut() }.map_err(dl2py_err)?,
+    ))
 }
 
 /// Write one query's `(item, distance)` results into `n`-length `ids`/`distances` slices,
@@ -579,6 +570,10 @@ fn write_row(ids: &mut [u32], distances: &mut [f32], found: Vec<(ItemId, f32)>, 
         ids[i] = item;
         distances[i] = distance;
     }
+}
+
+pub(super) fn dl2py_err(err: dlpark::tensor::Error) -> PyErr {
+    PyValueError::new_err(err.to_string())
 }
 
 /// Python bindings for Hannoy <https://github.com/nnethercott/hannoy>; a KV-backed HNSW
