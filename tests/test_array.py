@@ -38,7 +38,8 @@ def test_add_items_from_numpy_array(array_db: hannoy.Database) -> None:
         ),
         pytest.param(
             np.array([1.0, 0.0, 0.0], dtype=np.float32),
-            ValueError("add_items requires a 2D array, got 1D"),
+            # https://github.com/PyO3/rust-numpy/issues/561
+            TypeError("'ndarray' object is not an instance of 'ndarray'"),
             id="requires-2d",
         ),
     ],
@@ -113,12 +114,13 @@ def test_by_array_out_pads_missing_hits(array_db: hannoy.Database) -> None:
     [
         pytest.param(
             np.array([1.0, 0.0, 0.0], dtype=np.float64),
-            ValueError("dtype mismatch"),
+            # https://github.com/PyO3/rust-numpy/issues/561
+            TypeError("'ndarray' object is not an instance of 'ndarray'"),
             id="wrong-dtype",
         ),
         pytest.param(
             np.zeros((2, 2, 2), dtype=np.float32),
-            ValueError("by_array requires a 1D or 2D tensor, got 3D"),
+            ValueError("by_array requires a 1D or 2D array, got 3D"),
             id="wrong-ndim",
         ),
     ],
@@ -147,17 +149,17 @@ def _out_with_readonly_ids() -> tuple[np.ndarray, np.ndarray]:
         ),
         pytest.param(
             (np.zeros(2, dtype=np.int32), np.zeros(2, dtype=np.float32)),
-            ValueError("dtype mismatch"),
+            TypeError("'ndarray' object is not an instance of 'ndarray'"),
             id="wrong-ids-dtype",
         ),
         pytest.param(
             (np.zeros(3, dtype=np.uint32), np.zeros(2, dtype=np.float32)),
-            ValueError("out[0] (ids) must have shape [2], got Ok([3])"),
+            ValueError("out[0] (ids) must have shape [2], got [3]"),
             id="wrong-ids-shape",
         ),
         pytest.param(
             _out_with_readonly_ids(),
-            ValueError("tensor is read-only"),
+            TypeError("The given array is not writeable"),
             id="read-only",
         ),
     ],

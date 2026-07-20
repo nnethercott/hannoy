@@ -3,9 +3,13 @@ use std::path::PathBuf;
 use std::sync::LazyLock;
 
 use crate::{distance, Database, ItemId, Reader, Writer};
-use dlpark::versioned::Dlpack;
 use either::Either;
 use heed::{RoTxn, RwTxn, WithoutTls};
+use numpy::ndarray::{ArrayView1, ArrayViewMut, ArrayViewMut1, Dim, Dimension};
+use numpy::{
+    prelude::*, Element, PyReadonlyArray, PyReadonlyArray2, PyReadonlyArrayDyn, PyReadwriteArray,
+    PyReadwriteArrayDyn,
+};
 use once_cell::sync::OnceCell;
 use parking_lot::{MappedMutexGuard, Mutex, MutexGuard};
 use pyo3::exceptions::{PyIOError, PyRuntimeError, PyValueError};
@@ -343,33 +347,24 @@ impl PyWriter {
         Ok(())
     }
 
-    /// Store vectors associated with item IDs in the database, given a CPU 2D tensor implementing `.__dlpack__()`, one row per item.
-    ///
-    /// This includes all Array API arrays (e.g. a numpy array or a PyTorch tensor).
-    fn add_items(
+    /// Store vectors associated with item IDs in the database, given a 2D numpy array of dtype
+    /// `float32`, one row per item.
+    fn add_items<'py>(
         &self,
         items: Vec<ItemId>,
-        #[gen_stub(override_type(type_repr="typing.Any", imports=("typing",)))] vectors: Dlpack,
+        vectors: PyReadonlyArray2<'py, f32>,
     ) -> PyResult<()> {
-        let data = vectors.cpu_data_slice::<f32>().map_err(dl2py_err)?;
-        let shape = vectors.shape().map_err(dl2py_err)?;
-        let [rows, cols] = shape else {
-            return Err(PyValueError::new_err(format!(
-                "add_items requires a 2D array, got {}D",
-                shape.len()
-            )));
-        };
-        let (rows, cols) = (*rows as usize, *cols as usize);
+        let vectors = vectors.as_array();
+        let rows = vectors.nrows();
         if items.len() != rows {
             return Err(PyValueError::new_err(format!(
-                "add_items requires as many items as the array has rows: got {} items \
-                    for {rows} rows",
+                "add_items requires as many items as the array has rows: got {} items for {rows} rows",
                 items.len()
             )));
         }
         items
             .into_iter()
-            .zip(data.chunks_exact(cols))
+            .zip(vectors.rows())
             .try_for_each(|(item, vector)| self.add_item(item, vector.to_vec()))
     }
 }
@@ -432,63 +427,73 @@ impl PyReader {
         Ok(found.into_nns())
     }
 
-    /// Retrieve similar items from the db, given a CPU 1D or 2D tensor implementing `.__dlpack__()`.
+    /// Retrieve similar items from the db, given a 1D or 2D numpy array of dtype `float32`.
     ///
-    /// This includes all Array API arrays (e.g. a numpy array or a PyTorch tensor).
-    /// A 1D tensor is treated as a single query vector; a 2D tensor is treated as one query vector per row.
+    /// A 1D array is treated as a single query vector; a 2D array is treated as one query vector per row.
     ///
     /// If `out` is given, `None` is returned instead of a list of results.
     /// Results are written into `out`, which must be an `(ids, distances)` tuple of writable,
-    /// contiguous, CPU tensors, `ids` holdings `u32`s and `distances` holding `f32`s.
+    /// contiguous numpy arrays, `ids` holding `u32`s and `distances` holding `f32`s.
     /// Both are to be shaped `(n,)` for a 1D query or `(rows, n)` for a 2D query.
     /// Rows with fewer than `n` hits are padded with `id` `u32::MAX` and `distance` `f32::INFINITY`.
     #[pyo3(signature = (array, n=10, ef_search=200, out=None))]
-    fn by_array(
+    fn by_array<'py>(
         &self,
-        #[gen_stub(override_type(type_repr="typing.Any", imports=("typing",)))] array: Dlpack,
+        array: PyReadonlyArrayDyn<'py, f32>,
         n: usize,
         ef_search: usize,
-        #[gen_stub(override_type(type_repr="tuple[typing.Any, typing.Any]", imports=("typing",)))]
-        out: Option<(Dlpack, Dlpack)>,
+        out: Option<(PyReadonlyArrayDyn<'py, u32>, PyReadonlyArrayDyn<'py, f32>)>,
     ) -> PyResult<Option<ByArrayResult>> {
-        let data = array.cpu_data_slice::<f32>().map_err(dl2py_err)?;
+        let view = array.as_array();
         let rtxn = &self.rtxn;
 
-        let search = |row| {
+        let search = |row: ArrayView1<'_, f32>| {
+            let row = row
+                .to_slice()
+                .ok_or_else(|| PyValueError::new_err("by_array requires a C-contiguous array"))?;
             hnsw_search!(&self.dyn_reader, |r| r.nns(n).ef_search(ef_search).by_vector(rtxn, row))
                 .map(|found| found.into_nns())
                 .map_err(h2py_err)
         };
 
-        match array.shape().map_err(dl2py_err)? {
-            [_] => {
-                let Some((mut ids, mut distances)) = out else {
-                    return Ok(Some(Either::Left(search(data)?)));
+        match view.shape() {
+            &[_] => {
+                let row: ArrayView1<f32> =
+                    view.into_dimensionality().expect("We just validated it’s 1D");
+                let Some((ids, distances)) = out else {
+                    return Ok(Some(Either::Left(search(row)?)));
                 };
-                let (ids, distances) = validate_out(&mut ids, &mut distances, &[n as i64])?;
-                let found = search(data)?;
+                let (mut ids, mut distances) =
+                    (try_into_readwrite(ids)?, try_into_readwrite(distances)?);
+                let ids = validate_out(&mut ids, "out[0] (ids)", &[n])?;
+                let distances = validate_out(&mut distances, "out[1] (distances)", &[n])?;
+                let found = search(row)?;
                 write_row(ids, distances, found, n);
                 Ok(None)
             }
-            [rows, cols] => {
-                let (rows, cols) = (*rows as usize, *cols as usize);
-                let queries = data.chunks_exact(cols).take(rows);
-
-                let Some((mut ids, mut distances)) = out else {
-                    return Ok(Some(Either::Right(queries.map(search).collect::<PyResult<_>>()?)));
+            &[rows, _] => {
+                let Some((ids, distances)) = out else {
+                    return Ok(Some(Either::Right(
+                        view.rows().into_iter().map(search).collect::<PyResult<_>>()?,
+                    )));
                 };
-                let (ids, distances) =
-                    validate_out(&mut ids, &mut distances, &[rows as i64, n as i64])?;
+                if n == 0 {
+                    return Err(PyValueError::new_err("n must be at least 1 when out is given"));
+                }
+                let (mut ids, mut distances) =
+                    (try_into_readwrite(ids)?, try_into_readwrite(distances)?);
+                let mut ids = validate_out(&mut ids, "out[0] (ids)", &[rows, n])?;
+                let mut distances = validate_out(&mut distances, "out[1] (distances)", &[rows, n])?;
 
                 for ((query, ids_row), distances_row) in
-                    queries.zip(ids.chunks_exact_mut(n)).zip(distances.chunks_exact_mut(n))
+                    view.rows().into_iter().zip(ids.rows_mut()).zip(distances.rows_mut())
                 {
                     write_row(ids_row, distances_row, search(query)?, n);
                 }
                 Ok(None)
             }
             shape => Err(PyValueError::new_err(format!(
-                "by_array requires a 1D or 2D tensor, got {}D",
+                "by_array requires a 1D or 2D array, got {}D",
                 shape.len()
             ))),
         }
@@ -536,44 +541,49 @@ fn get_ro_txn() -> PyResult<RoTxn<'static, WithoutTls>> {
     Ok(rtxn)
 }
 
-/// Extract and validate an `(ids, distances)` tuple: both tensors must be shaped `expected_shape`;
-/// their dtype and writability are checked lazily by [`AsTypedSlice`] once the caller borrows them as slices.
-fn validate_out<'a>(
-    ids: &'a mut Dlpack,
-    distances: &'a mut Dlpack,
-    expected_shape: &[i64],
-) -> PyResult<(&'a mut [u32], &'a mut [f32])> {
-    if ids.shape().map_err(dl2py_err)? != expected_shape {
-        return Err(PyValueError::new_err(format!(
-            "out[0] (ids) must have shape {expected_shape:?}, got {:?}",
-            ids.shape()
-        )));
-    }
-    if distances.shape().map_err(dl2py_err)? != expected_shape {
-        return Err(PyValueError::new_err(format!(
-            "out[1] (distances) must have shape {expected_shape:?}, got {:?}",
-            distances.shape()
-        )));
-    }
-    // SAFETY: since they are being validated to have different dtypes, they can’t alias
-    Ok((
-        unsafe { ids.cpu_data_slice_mut() }.map_err(dl2py_err)?,
-        unsafe { distances.cpu_data_slice_mut() }.map_err(dl2py_err)?,
-    ))
+/// Upgrade a read-only array borrow into a mutable one.
+///
+/// `PyReadwriteArrayDyn` can't be used as a `#[pymethods]` parameter directly:
+/// https://github.com/PyO3/rust-numpy/pull/560
+fn try_into_readwrite<'py, T: Element, D: Dimension>(
+    array: PyReadonlyArray<'py, T, D>,
+) -> PyResult<PyReadwriteArray<'py, T, D>> {
+    let bound = (*array).clone();
+    drop(array); // drop the read borrow so we can create a rw one
+    Ok(bound.try_readwrite()?)
 }
 
-/// Write one query's `(item, distance)` results into `n`-length `ids`/`distances` slices,
+/// Validate that `array` is shaped `expected_shape`.
+fn validate_out<'a, 'py, T: Element, const N: usize>(
+    array: &'a mut PyReadwriteArrayDyn<'py, T>,
+    label: &str,
+    expected_shape: &[usize; N],
+) -> PyResult<ArrayViewMut<'a, T, Dim<[usize; N]>>>
+where
+    Dim<[usize; N]>: Dimension,
+{
+    if array.shape() != expected_shape {
+        return Err(PyValueError::new_err(format!(
+            "{label} must have shape {expected_shape:?}, got {:?}",
+            array.shape()
+        )));
+    }
+    Ok(array.as_array_mut().into_dimensionality().expect("shape was just validated"))
+}
+
+/// Write one query's `(item, distance)` results into `n`-length `ids`/`distances` rows,
 /// padding with `(u32::MAX, f32::INFINITY)` past the number of hits found.
-fn write_row(ids: &mut [u32], distances: &mut [f32], found: Vec<(ItemId, f32)>, n: usize) {
+fn write_row(
+    mut ids: ArrayViewMut1<'_, u32>,
+    mut distances: ArrayViewMut1<'_, f32>,
+    found: Vec<(ItemId, f32)>,
+    n: usize,
+) {
     for i in 0..n {
         let (item, distance) = found.get(i).copied().unwrap_or((ItemId::MAX, f32::INFINITY));
         ids[i] = item;
         distances[i] = distance;
     }
-}
-
-pub(super) fn dl2py_err(err: dlpark::tensor::Error) -> PyErr {
-    PyValueError::new_err(err.to_string())
 }
 
 /// Python bindings for Hannoy <https://github.com/nnethercott/hannoy>; a KV-backed HNSW
@@ -593,7 +603,7 @@ define_stub_info_gatherer!(stub_info);
 #[cfg(test)]
 mod test {
     use super::*;
-    use numpy::PyArray2;
+    use numpy::{PyArray2, PyArrayMethods};
 
     #[test]
     fn write_vectors_py() {
@@ -604,7 +614,7 @@ mod test {
             let writer = database.writer(3, 0, 4, 10);
             let input = PyArray2::<f32>::from_vec2(py, &[vec![0.0, 1.0, 2.0], vec![1.0, 0.0, 2.0]])
                 .unwrap();
-            writer.add_items(vec![0, 1], input.extract().unwrap()).unwrap();
+            writer.add_items(vec![0, 1], input.readonly()).unwrap();
             writer.build().unwrap();
             PyDatabase::commit_rw_txn().unwrap();
             let reader = database.reader(0).unwrap();

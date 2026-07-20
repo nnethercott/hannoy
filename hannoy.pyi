@@ -3,6 +3,8 @@
 
 import builtins
 import enum
+import numpy
+import numpy.typing
 import os
 import pathlib
 import typing
@@ -50,16 +52,15 @@ class Reader:
         r"""
         Retrieve similar items from the db given a query.
         """
-    def by_array(self, array: typing.Any, n: builtins.int = 10, ef_search: builtins.int = 200, out: tuple[typing.Any, typing.Any] = None) -> typing.Optional[typing.Union[builtins.list[tuple[builtins.int, builtins.float]], builtins.list[builtins.list[tuple[builtins.int, builtins.float]]]]]:
+    def by_array(self, array: numpy.typing.NDArray[numpy.float32], n: builtins.int = 10, ef_search: builtins.int = 200, out: typing.Optional[tuple[numpy.typing.NDArray[numpy.uint32], numpy.typing.NDArray[numpy.float32]]] = None) -> typing.Optional[typing.Union[builtins.list[tuple[builtins.int, builtins.float]], builtins.list[builtins.list[tuple[builtins.int, builtins.float]]]]]:
         r"""
-        Retrieve similar items from the db, given a CPU 1D or 2D tensor implementing `.__dlpack__()`.
+        Retrieve similar items from the db, given a 1D or 2D numpy array of dtype `float32`.
         
-        This includes all Array API arrays (e.g. a numpy array or a PyTorch tensor).
-        A 1D tensor is treated as a single query vector; a 2D tensor is treated as one query vector per row.
+        A 1D array is treated as a single query vector; a 2D array is treated as one query vector per row.
         
         If `out` is given, `None` is returned instead of a list of results.
         Results are written into `out`, which must be an `(ids, distances)` tuple of writable,
-        contiguous, CPU tensors, `ids` holdings `u32`s and `distances` holding `f32`s.
+        contiguous numpy arrays, `ids` holding `u32`s and `distances` holding `f32`s.
         Both are to be shaped `(n,)` for a 1D query or `(rows, n)` for a 2D query.
         Rows with fewer than `n` hits are padded with `id` `u32::MAX` and `distance` `f32::INFINITY`.
         """
@@ -92,11 +93,10 @@ class Writer:
         r"""
         Store a vector associated with an item ID in the database.
         """
-    def add_items(self, items: typing.Sequence[builtins.int], vectors: typing.Any) -> None:
+    def add_items(self, items: typing.Sequence[builtins.int], vectors: numpy.typing.NDArray[numpy.float32]) -> None:
         r"""
-        Store vectors associated with item IDs in the database, given a CPU 2D tensor implementing `.__dlpack__()`, one row per item.
-        
-        This includes all Array API arrays (e.g. a numpy array or a PyTorch tensor).
+        Store vectors associated with item IDs in the database, given a 2D numpy array of dtype
+        `float32`, one row per item.
         """
 
 @typing.final
