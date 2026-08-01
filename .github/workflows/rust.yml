@@ -27,7 +27,6 @@ jobs:
           filters: |
             src:
               - 'src/**'
-              - '!src/python.rs'
               - 'Cargo.toml'
 
   test:
@@ -41,28 +40,35 @@ jobs:
           - stable
           - beta
     steps:
-      - uses: actions/checkout@v1
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@1.89
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.x'
+      - name: Install Python test dependencies
+        run: pip install --group test -e .
       - uses: actions-rs/cargo@v1
         with:
           command: build
-          args: --all-targets ${{ matrix.features }}
+          args: --all-targets --features python
       - uses: actions-rs/cargo@v1
         with:
           command: test
       - uses: actions-rs/cargo@v1
         with:
           command: test
+          args: --features python
+      - name: Run Python tests
+        run: pytest tests/
 
   lint:
     runs-on: ubuntu-latest
     needs: filter-changes
     if: ${{ needs.filter-changes.outputs.src-changed == 'true' }}
     steps:
-      - uses: actions/checkout@v1
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@1.89
         with:
-          profile: minimal
           components: clippy, rustfmt
       - uses: actions-rs/cargo@v1
         with:
@@ -83,7 +89,7 @@ jobs:
     needs: filter-changes
     if: ${{ needs.filter-changes.outputs.src-changed == 'true' }}
     steps:
-      - uses: actions/checkout@v1
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@1.89
       - name: Run fuzzer
         env:

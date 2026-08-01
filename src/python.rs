@@ -3,11 +3,16 @@ use std::path::PathBuf;
 use std::sync::LazyLock;
 
 use crate::{distance, Database, ItemId, Reader, Writer};
+use either::Either;
 use heed::{RoTxn, RwTxn, WithoutTls};
-use numpy::PyReadonlyArray2;
+use numpy::ndarray::{ArrayView1, ArrayViewMut, ArrayViewMut1, Dim, Dimension};
+use numpy::{
+    prelude::*, Element, PyReadonlyArray, PyReadonlyArray2, PyReadonlyArrayDyn, PyReadwriteArray,
+    PyReadwriteArrayDyn,
+};
 use once_cell::sync::OnceCell;
 use parking_lot::{MappedMutexGuard, Mutex, MutexGuard};
-use pyo3::exceptions::{PyIOError, PyRuntimeError};
+use pyo3::exceptions::{PyIOError, PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::PyType;
 use pyo3_stub_gen::define_stub_info_gatherer;
@@ -20,7 +25,7 @@ static RW_TXN: LazyLock<Mutex<Option<heed::RwTxn<'static>>>> = LazyLock::new(|| 
 
 /// The supported distance metrics in hannoy.
 #[gen_stub_pyclass_enum]
-#[pyclass(name = "Metric")]
+#[pyclass(name = "Metric", from_py_object)]
 #[derive(Clone)]
 pub(super) enum PyDistance {
     #[pyo3(name = "COSINE")]
@@ -342,14 +347,25 @@ impl PyWriter {
         Ok(())
     }
 
+    /// Store vectors associated with item IDs in the database, given a 2D numpy array of dtype
+    /// `float32`, one row per item.
     fn add_items<'py>(
         &self,
         items: Vec<ItemId>,
         vectors: PyReadonlyArray2<'py, f32>,
     ) -> PyResult<()> {
-        let vectors_as_array = vectors.as_array();
-        let item_vecs = vectors_as_array.rows().into_iter().map(|r| r.to_vec());
-        items.into_iter().zip(item_vecs).try_for_each(|(item, vector)| self.add_item(item, vector))
+        let vectors = vectors.as_array();
+        let rows = vectors.nrows();
+        if items.len() != rows {
+            return Err(PyValueError::new_err(format!(
+                "add_items requires as many items as the array has rows: got {} items for {rows} rows",
+                items.len()
+            )));
+        }
+        items
+            .into_iter()
+            .zip(vectors.rows())
+            .try_for_each(|(item, vector)| self.add_item(item, vector.to_vec()))
     }
 }
 
@@ -376,6 +392,8 @@ macro_rules! hnsw_search {
         }
     };
 }
+
+type ByArrayResult = Either<Vec<(ItemId, f32)>, Vec<Vec<(ItemId, f32)>>>;
 
 /// A thread-local Database reader holding its own `RoTxn`. It is safe to spawn multiple readers in
 /// different threads.
@@ -407,6 +425,78 @@ impl PyReader {
             .by_vector(&rtxn, &query))
         .map_err(h2py_err)?;
         Ok(found.into_nns())
+    }
+
+    /// Retrieve similar items from the db, given a 1D or 2D numpy array of dtype `float32`.
+    ///
+    /// A 1D array is treated as a single query vector; a 2D array is treated as one query vector per row.
+    ///
+    /// If `out` is given, `None` is returned instead of a list of results.
+    /// Results are written into `out`, which must be an `(ids, distances)` tuple of writable,
+    /// contiguous numpy arrays, `ids` holding `u32`s and `distances` holding `f32`s.
+    /// Both are to be shaped `(n,)` for a 1D query or `(rows, n)` for a 2D query.
+    /// Rows with fewer than `n` hits are padded with `id` `u32::MAX` and `distance` `f32::INFINITY`.
+    #[pyo3(signature = (array, n=10, ef_search=200, out=None))]
+    fn by_array<'py>(
+        &self,
+        array: PyReadonlyArrayDyn<'py, f32>,
+        n: usize,
+        ef_search: usize,
+        out: Option<(PyReadonlyArrayDyn<'py, u32>, PyReadonlyArrayDyn<'py, f32>)>,
+    ) -> PyResult<Option<ByArrayResult>> {
+        let view = array.as_array();
+        let rtxn = &self.rtxn;
+
+        let search = |row: ArrayView1<'_, f32>| {
+            let row = row
+                .to_slice()
+                .ok_or_else(|| PyValueError::new_err("by_array requires a C-contiguous array"))?;
+            hnsw_search!(&self.dyn_reader, |r| r.nns(n).ef_search(ef_search).by_vector(rtxn, row))
+                .map(|found| found.into_nns())
+                .map_err(h2py_err)
+        };
+
+        match view.shape() {
+            &[_] => {
+                let row: ArrayView1<f32> =
+                    view.into_dimensionality().expect("We just validated it’s 1D");
+                let Some((ids, distances)) = out else {
+                    return Ok(Some(Either::Left(search(row)?)));
+                };
+                let (mut ids, mut distances) =
+                    (try_into_readwrite(ids)?, try_into_readwrite(distances)?);
+                let ids = validate_out(&mut ids, "out[0] (ids)", &[n])?;
+                let distances = validate_out(&mut distances, "out[1] (distances)", &[n])?;
+                let found = search(row)?;
+                write_row(ids, distances, found, n);
+                Ok(None)
+            }
+            &[rows, _] => {
+                let Some((ids, distances)) = out else {
+                    return Ok(Some(Either::Right(
+                        view.rows().into_iter().map(search).collect::<PyResult<_>>()?,
+                    )));
+                };
+                if n == 0 {
+                    return Err(PyValueError::new_err("n must be at least 1 when out is given"));
+                }
+                let (mut ids, mut distances) =
+                    (try_into_readwrite(ids)?, try_into_readwrite(distances)?);
+                let mut ids = validate_out(&mut ids, "out[0] (ids)", &[rows, n])?;
+                let mut distances = validate_out(&mut distances, "out[1] (distances)", &[rows, n])?;
+
+                for ((query, ids_row), distances_row) in
+                    view.rows().into_iter().zip(ids.rows_mut()).zip(distances.rows_mut())
+                {
+                    write_row(ids_row, distances_row, search(query)?, n);
+                }
+                Ok(None)
+            }
+            shape => Err(PyValueError::new_err(format!(
+                "by_array requires a 1D or 2D array, got {}D",
+                shape.len()
+            ))),
+        }
     }
 
     /// Retrieve similar items from the db given an item ID.
@@ -451,6 +541,51 @@ fn get_ro_txn() -> PyResult<RoTxn<'static, WithoutTls>> {
     Ok(rtxn)
 }
 
+/// Upgrade a read-only array borrow into a mutable one.
+///
+/// `PyReadwriteArrayDyn` can't be used as a `#[pymethods]` parameter directly:
+/// https://github.com/PyO3/rust-numpy/pull/560
+fn try_into_readwrite<'py, T: Element, D: Dimension>(
+    array: PyReadonlyArray<'py, T, D>,
+) -> PyResult<PyReadwriteArray<'py, T, D>> {
+    let bound = (*array).clone();
+    drop(array); // drop the read borrow so we can create a rw one
+    Ok(bound.try_readwrite()?)
+}
+
+/// Validate that `array` is shaped `expected_shape`.
+fn validate_out<'a, 'py, T: Element, const N: usize>(
+    array: &'a mut PyReadwriteArrayDyn<'py, T>,
+    label: &str,
+    expected_shape: &[usize; N],
+) -> PyResult<ArrayViewMut<'a, T, Dim<[usize; N]>>>
+where
+    Dim<[usize; N]>: Dimension,
+{
+    if array.shape() != expected_shape {
+        return Err(PyValueError::new_err(format!(
+            "{label} must have shape {expected_shape:?}, got {:?}",
+            array.shape()
+        )));
+    }
+    Ok(array.as_array_mut().into_dimensionality().expect("shape was just validated"))
+}
+
+/// Write one query's `(item, distance)` results into `n`-length `ids`/`distances` rows,
+/// padding with `(u32::MAX, f32::INFINITY)` past the number of hits found.
+fn write_row(
+    mut ids: ArrayViewMut1<'_, u32>,
+    mut distances: ArrayViewMut1<'_, f32>,
+    found: Vec<(ItemId, f32)>,
+    n: usize,
+) {
+    for i in 0..n {
+        let (item, distance) = found.get(i).copied().unwrap_or((ItemId::MAX, f32::INFINITY));
+        ids[i] = item;
+        distances[i] = distance;
+    }
+}
+
 /// Python bindings for Hannoy <https://github.com/nnethercott/hannoy>; a KV-backed HNSW
 /// implementation in Rust using LMDB <https://en.wikipedia.org/wiki/Lightning_Memory-Mapped_Database>.
 #[pyo3::pymodule]
@@ -468,20 +603,18 @@ define_stub_info_gatherer!(stub_info);
 #[cfg(test)]
 mod test {
     use super::*;
-    use numpy::PyArray2;
-    use numpy::PyArrayMethods;
+    use numpy::{PyArray2, PyArrayMethods};
 
     #[test]
     fn write_vectors_py() {
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let dir = tempfile::tempdir().unwrap();
             let distance = PyDistance::Cosine;
             let database = PyDatabase::new(dir.path().to_path_buf(), distance, None, None).unwrap();
             let writer = database.writer(3, 0, 4, 10);
-            let input = PyArray2::from_vec2(py, &vec![vec![0.0, 1.0, 2.0], vec![1.0, 0.0, 2.0]])
-                .unwrap()
-                .readonly();
-            writer.add_items(vec![0, 1], input).unwrap();
+            let input = PyArray2::<f32>::from_vec2(py, &[vec![0.0, 1.0, 2.0], vec![1.0, 0.0, 2.0]])
+                .unwrap();
+            writer.add_items(vec![0, 1], input.readonly()).unwrap();
             writer.build().unwrap();
             PyDatabase::commit_rw_txn().unwrap();
             let reader = database.reader(0).unwrap();

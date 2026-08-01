@@ -30,9 +30,9 @@ enum WriteOp<const M: usize> {
 
 fn assert_all_readable<const DIM: usize>(rtxn: &RoTxn, database: Database<Cosine>) {
     info!("READING");
-    let reader = Reader::<Cosine>::open(&rtxn, 0, database).unwrap();
+    let reader = Reader::<Cosine>::open(rtxn, 0, database).unwrap();
     let n = reader.item_ids().len() as usize;
-    let found = reader.nns(n).ef_search(n).by_vector(&rtxn, &[0.0; DIM]).unwrap().into_nns();
+    let found = reader.nns(n).ef_search(n).by_vector(rtxn, &[0.0; DIM]).unwrap().into_nns();
     assert_eq!(&RoaringBitmap::from_iter(found.into_iter().map(|(id, _)| id)), reader.item_ids())
 }
 
@@ -42,7 +42,7 @@ fn assert_deleted_items_are_gone(
     deleted: &RoaringBitmap,
 ) {
     // assert the reader cannot find any deleted vectors
-    let reader = Reader::<Cosine>::open(&rtxn, 0, database).unwrap();
+    let reader = Reader::<Cosine>::open(rtxn, 0, database).unwrap();
     let item_intersection = deleted & reader.item_ids();
     assert!(item_intersection.is_empty(), "{:?} should be deleted!", item_intersection);
 
@@ -113,7 +113,7 @@ fn random_read_writes() {
 
         // get batch of write operations and apply them
         info!("WRITING");
-        let mut data = [0_u8; 1024 * 1024 * 1];
+        let mut data = [0_u8; 1024 * 1024];
         rng.fill(&mut data);
         let mut u = Unstructured::new(&data);
         let ops: Vec<WriteOp<DIM>> = (0..100).map(|_| u.arbitrary().unwrap()).collect();

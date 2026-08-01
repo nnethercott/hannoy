@@ -6,7 +6,6 @@ use std::io::Write;
 use hannoy::distances::Cosine;
 use hannoy::{Database, Reader, Writer};
 use heed::{Env, EnvOpenOptions, RwTxn};
-use hnsw_rs;
 use hnsw_rs::hnsw::Hnsw;
 use hnsw_rs::prelude::DistCosine;
 use rand::rngs::StdRng;

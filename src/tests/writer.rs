@@ -265,7 +265,7 @@ fn convert_from_arroy_to_hannoy() {
 
     let mut wtxn = env.write_txn().unwrap();
     let rtxn = env.read_txn().unwrap();
-    let database: crate::Database<Cosine> = env.open_database(&mut wtxn, None).unwrap().unwrap();
+    let database: crate::Database<Cosine> = env.open_database(&wtxn, None).unwrap().unwrap();
 
     db_indexes.shuffle(&mut rng);
 
@@ -276,7 +276,7 @@ fn convert_from_arroy_to_hannoy() {
 
         let writer = Writer::new(database, index, pre_commit_arroy_reader.dimensions());
         writer.builder(&mut rng).prepare_arroy_conversion(&mut wtxn).unwrap();
-        assert!(writer.need_build(&mut wtxn).unwrap());
+        assert!(writer.need_build(&wtxn).unwrap());
         writer.builder(&mut rng).build::<16, 32>(&mut wtxn).unwrap();
 
         for result in pre_commit_arroy_reader.iter(&rtxn).unwrap() {
@@ -337,7 +337,7 @@ fn convert_from_arroy_to_hannoy_binary_quantized() {
     let mut wtxn = env.write_txn().unwrap();
     let rtxn = env.read_txn().unwrap();
     let database: crate::Database<BinaryQuantizedCosine> =
-        env.open_database(&mut wtxn, None).unwrap().unwrap();
+        env.open_database(&wtxn, None).unwrap().unwrap();
 
     db_indexes.shuffle(&mut rng);
 
@@ -352,7 +352,7 @@ fn convert_from_arroy_to_hannoy_binary_quantized() {
 
         let writer = Writer::new(database, index, pre_commit_arroy_reader.dimensions());
         writer.builder(&mut rng).prepare_arroy_conversion(&mut wtxn).unwrap();
-        assert!(writer.need_build(&mut wtxn).unwrap());
+        assert!(writer.need_build(&wtxn).unwrap());
         writer.builder(&mut rng).build::<16, 32>(&mut wtxn).unwrap();
 
         for result in pre_commit_arroy_reader.iter(&rtxn).unwrap() {
