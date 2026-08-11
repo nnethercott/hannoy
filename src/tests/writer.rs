@@ -1,9 +1,9 @@
 use heed::types::DecodeIgnore;
 use proptest::proptest;
-use rand::distributions::Uniform;
+use rand::distr::Uniform;
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
-use rand::{thread_rng, Rng, SeedableRng};
+use rand::{RngExt, SeedableRng};
 use roaring::RoaringBitmap;
 
 use super::{create_database, rng};
@@ -134,7 +134,7 @@ fn write_and_update_lot_of_random_points_with_snapshot() {
     let writer = Writer::new(handle.database, 0, 30);
     let mut rng = rng();
     for id in 0..100 {
-        let vector: [f32; 30] = std::array::from_fn(|_| rng.gen());
+        let vector: [f32; 30] = std::array::from_fn(|_| rng.random());
         writer.add_item(&mut wtxn, id, &vector).unwrap();
     }
 
@@ -145,7 +145,7 @@ fn write_and_update_lot_of_random_points_with_snapshot() {
     let mut wtxn = handle.env.write_txn().unwrap();
     let writer = Writer::new(handle.database, 0, 30);
     for id in (0..100).step_by(2) {
-        let vector: [f32; 30] = std::array::from_fn(|_| rng.gen());
+        let vector: [f32; 30] = std::array::from_fn(|_| rng.random());
         writer.add_item(&mut wtxn, id, &vector).unwrap();
     }
     writer.builder(&mut rng).build::<M, M0>(&mut wtxn).unwrap();
@@ -219,7 +219,7 @@ fn write_random_vectors_to_random_indexes() {
 
         // We're going to write 10 vectors per index
         for i in 0..10 {
-            let vector: [f32; 10] = std::array::from_fn(|_| rng.gen());
+            let vector: [f32; 10] = std::array::from_fn(|_| rng.random());
             writer.add_item(&mut wtxn, i, &vector).unwrap();
         }
         writer.builder(&mut rng).build::<M, M0>(&mut wtxn).unwrap();
@@ -252,7 +252,7 @@ fn convert_from_arroy_to_hannoy() {
         let writer = arroy::Writer::new(database, index, DIM);
 
         // We're going to write 100 vectors per index
-        let unif = Uniform::new(-1.0, 1.0);
+        let unif = Uniform::new(-1.0, 1.0).unwrap();
         for i in 0..100 {
             let vector: [f32; DIM] = std::array::from_fn(|_| rng.sample(unif));
             writer.add_item(&mut wtxn, i, &vector).unwrap();
@@ -323,7 +323,7 @@ fn convert_from_arroy_to_hannoy_binary_quantized() {
         let writer = arroy::Writer::new(database, index, DIM);
 
         // We're going to write 100 vectors per index
-        let unif = Uniform::new(-1.0, 1.0);
+        let unif = Uniform::new(-1.0, 1.0).unwrap();
         for i in 0..100 {
             let vector: [f32; DIM] = std::array::from_fn(|_| rng.sample(unif));
             writer.add_item(&mut wtxn, i, &vector).unwrap();
@@ -733,13 +733,14 @@ proptest! {
     #[test]
     fn fuzz_writer(n in 1..=10_000u32, dim in 128..=1024usize) {
         let handle = create_database::<Euclidean>();
-        let mut rng = StdRng::from_seed(thread_rng().gen());
+        let mut thread_rng = rand::rngs::ThreadRng::default();
+        let mut rng = StdRng::from_seed(thread_rng.random());
         let mut wtxn = handle.env.write_txn().unwrap();
 
         let writer = Writer::new(handle.database, 0, dim);
 
         for i in 1..=n {
-            let vector: Vec<f32> = (0..dim).map(|_| rng.gen()).collect();
+            let vector: Vec<f32> = (0..dim).map(|_| rng.random()).collect();
             writer.add_item(&mut wtxn, i, &vector).unwrap();
         }
         writer.builder(&mut rng).build::<M, M0>(&mut wtxn).unwrap();
