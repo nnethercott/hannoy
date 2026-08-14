@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.1](https://github.com/nnethercott/hannoy/compare/v0.2.0...v0.2.1) - 2026-08-14
+
+### Other
+
+- release v0.2.0 ([#135](https://github.com/nnethercott/hannoy/pull/135))
+
 ## [0.2.0](https://github.com/nnethercott/hannoy/compare/v0.1.7-nested-rtxns...v0.2.0) - 2026-08-14
 
 ### Added
