@@ -1,26 +1,20 @@
-use std::{
-    env::VarError,
-    time::{Duration, Instant},
-};
+use std::env::VarError;
+use std::time::{Duration, Instant};
 
-use crate::{
-    distance::Cosine,
-    key::{KeyCodec, Prefix, PrefixCodec},
-    node::{Links, Node, NodeCodec},
-    node_id::NodeMode,
-    tests::{create_database_indices_with_items, DatabaseHandle},
-    Database, Reader, Writer,
-};
 use arbitrary::{Arbitrary, Unstructured};
 use heed::RoTxn;
-use rand::{
-    self,
-    distributions::Uniform,
-    rngs::{StdRng, ThreadRng},
-    Rng, SeedableRng,
-};
+use rand::distr::Uniform;
+use rand::rngs::{StdRng, ThreadRng};
+use rand::{self, RngExt as _, SeedableRng};
 use roaring::RoaringBitmap;
 use tracing::info;
+
+use crate::distance::Cosine;
+use crate::key::{KeyCodec, Prefix, PrefixCodec};
+use crate::node::{Links, Node, NodeCodec};
+use crate::node_id::NodeMode;
+use crate::tests::{create_database_indices_with_items, DatabaseHandle};
+use crate::{Database, Reader, Writer};
 
 #[derive(Arbitrary, Debug)]
 enum WriteOp<const M: usize> {
@@ -90,11 +84,11 @@ fn random_read_writes() {
         create_database_indices_with_items::<Cosine, DIM, M, M0, _>(0..1, NUMEL, &mut rng);
 
     let mut deleted = RoaringBitmap::new();
-    let mut vec_rng = rand::thread_rng();
+    let mut vec_rng = rand::rngs::ThreadRng::default();
 
     // util for generating new vectors on the fly
     fn gen_vec(rng: &mut ThreadRng) -> [f32; DIM] {
-        let unif = Uniform::new(-1.0, 1.0);
+        let unif = Uniform::new(-1.0, 1.0).unwrap();
         std::array::from_fn(|_| rng.sample(unif))
     }
 

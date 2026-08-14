@@ -3,9 +3,9 @@ use std::ops::Range;
 
 use heed::types::LazyDecode;
 use heed::{Env, EnvOpenOptions, WithTls};
-use rand::distributions::Uniform;
-use rand::rngs::StdRng;
-use rand::{thread_rng, Rng, SeedableRng};
+use rand::distr::Uniform;
+use rand::rngs::{StdRng, ThreadRng};
+use rand::{Rng, RngExt as _, SeedableRng};
 use tempfile::TempDir;
 use tracing_subscriber::fmt::layer;
 use tracing_subscriber::prelude::*;
@@ -130,9 +130,10 @@ fn create_database_indices_with_items<
     for i in indices {
         let writer = Writer::new(database, i, DIM);
 
-        let unif = Uniform::new(-1.0, 1.0);
+        let mut thread_rng = ThreadRng::default();
+        let unif = Uniform::new(-1.0, 1.0).unwrap();
         for i in 0..n {
-            let vector: [f32; DIM] = std::array::from_fn(|_| thread_rng().sample(unif));
+            let vector: [f32; DIM] = std::array::from_fn(|_| thread_rng.sample(unif));
             writer.add_item(&mut wtxn, i as u32, &vector).unwrap();
         }
         writer.builder(rng).build::<M, M0>(&mut wtxn).unwrap();

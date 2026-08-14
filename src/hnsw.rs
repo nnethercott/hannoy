@@ -10,7 +10,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use heed::RwTxn;
 use min_max_heap::MinMaxHeap;
 use papaya::HashMap;
-use rand::distributions::WeightedIndex;
+use rand::distr::weighted::WeightedIndex;
 use rand::prelude::Distribution;
 use rand::Rng;
 use rayon::iter::{IntoParallelIterator, ParallelIterator};

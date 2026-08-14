@@ -1,9 +1,9 @@
 use heed::types::DecodeIgnore;
 use proptest::proptest;
-use rand::distributions::Uniform;
+use rand::distr::Uniform;
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
-use rand::{thread_rng, Rng, SeedableRng};
+use rand::{RngExt, SeedableRng};
 use roaring::RoaringBitmap;
 
 use super::{create_database, rng};
@@ -78,7 +78,7 @@ fn use_u32_max_minus_one_for_a_vec() {
     ==================
     Dumping index 0
     Root: Metadata { dimensions: 3, items: RoaringBitmap<[4294967294]>, distance: "euclidean", entry_points: [4294967294], max_level: 1 }
-    Version: Version { major: 0, minor: 1, patch: 3 }
+    Version: Version { major: 0, minor: 2, patch: 0 }
     Links 4294967294: Links(Links { links: RoaringBitmap<[]> })
     Links 4294967294: Links(Links { links: RoaringBitmap<[]> })
     Item 4294967294: Item(Item { header: NodeHeaderEuclidean { bias: "0.0000" }, vector: [0.0000, 1.0000, 2.0000] })
@@ -99,7 +99,7 @@ fn use_u32_max_for_a_vec() {
     ==================
     Dumping index 0
     Root: Metadata { dimensions: 3, items: RoaringBitmap<[4294967295]>, distance: "euclidean", entry_points: [4294967295], max_level: 1 }
-    Version: Version { major: 0, minor: 1, patch: 3 }
+    Version: Version { major: 0, minor: 2, patch: 0 }
     Links 4294967295: Links(Links { links: RoaringBitmap<[]> })
     Links 4294967295: Links(Links { links: RoaringBitmap<[]> })
     Item 4294967295: Item(Item { header: NodeHeaderEuclidean { bias: "0.0000" }, vector: [0.0000, 1.0000, 2.0000] })
@@ -120,7 +120,7 @@ fn write_one_vector() {
     ==================
     Dumping index 0
     Root: Metadata { dimensions: 3, items: RoaringBitmap<[0]>, distance: "euclidean", entry_points: [0], max_level: 1 }
-    Version: Version { major: 0, minor: 1, patch: 3 }
+    Version: Version { major: 0, minor: 2, patch: 0 }
     Links 0: Links(Links { links: RoaringBitmap<[]> })
     Links 0: Links(Links { links: RoaringBitmap<[]> })
     Item 0: Item(Item { header: NodeHeaderEuclidean { bias: "0.0000" }, vector: [0.0000, 1.0000, 2.0000] })
@@ -134,7 +134,7 @@ fn write_and_update_lot_of_random_points_with_snapshot() {
     let writer = Writer::new(handle.database, 0, 30);
     let mut rng = rng();
     for id in 0..100 {
-        let vector: [f32; 30] = std::array::from_fn(|_| rng.gen());
+        let vector: [f32; 30] = std::array::from_fn(|_| rng.random());
         writer.add_item(&mut wtxn, id, &vector).unwrap();
     }
 
@@ -145,7 +145,7 @@ fn write_and_update_lot_of_random_points_with_snapshot() {
     let mut wtxn = handle.env.write_txn().unwrap();
     let writer = Writer::new(handle.database, 0, 30);
     for id in (0..100).step_by(2) {
-        let vector: [f32; 30] = std::array::from_fn(|_| rng.gen());
+        let vector: [f32; 30] = std::array::from_fn(|_| rng.random());
         writer.add_item(&mut wtxn, id, &vector).unwrap();
     }
     writer.builder(&mut rng).build::<M, M0>(&mut wtxn).unwrap();
@@ -170,35 +170,35 @@ fn write_multiple_indexes() {
     ==================
     Dumping index 0
     Root: Metadata { dimensions: 3, items: RoaringBitmap<[0]>, distance: "euclidean", entry_points: [0], max_level: 1 }
-    Version: Version { major: 0, minor: 1, patch: 3 }
+    Version: Version { major: 0, minor: 2, patch: 0 }
     Links 0: Links(Links { links: RoaringBitmap<[]> })
     Links 0: Links(Links { links: RoaringBitmap<[]> })
     Item 0: Item(Item { header: NodeHeaderEuclidean { bias: "0.0000" }, vector: [0.0000, 1.0000, 2.0000] })
     ==================
     Dumping index 1
     Root: Metadata { dimensions: 3, items: RoaringBitmap<[0]>, distance: "euclidean", entry_points: [0], max_level: 1 }
-    Version: Version { major: 0, minor: 1, patch: 3 }
+    Version: Version { major: 0, minor: 2, patch: 0 }
     Links 0: Links(Links { links: RoaringBitmap<[]> })
     Links 0: Links(Links { links: RoaringBitmap<[]> })
     Item 0: Item(Item { header: NodeHeaderEuclidean { bias: "0.0000" }, vector: [0.0000, 1.0000, 2.0000] })
     ==================
     Dumping index 2
     Root: Metadata { dimensions: 3, items: RoaringBitmap<[0]>, distance: "euclidean", entry_points: [0], max_level: 1 }
-    Version: Version { major: 0, minor: 1, patch: 3 }
+    Version: Version { major: 0, minor: 2, patch: 0 }
     Links 0: Links(Links { links: RoaringBitmap<[]> })
     Links 0: Links(Links { links: RoaringBitmap<[]> })
     Item 0: Item(Item { header: NodeHeaderEuclidean { bias: "0.0000" }, vector: [0.0000, 1.0000, 2.0000] })
     ==================
     Dumping index 3
     Root: Metadata { dimensions: 3, items: RoaringBitmap<[0]>, distance: "euclidean", entry_points: [0], max_level: 1 }
-    Version: Version { major: 0, minor: 1, patch: 3 }
+    Version: Version { major: 0, minor: 2, patch: 0 }
     Links 0: Links(Links { links: RoaringBitmap<[]> })
     Links 0: Links(Links { links: RoaringBitmap<[]> })
     Item 0: Item(Item { header: NodeHeaderEuclidean { bias: "0.0000" }, vector: [0.0000, 1.0000, 2.0000] })
     ==================
     Dumping index 4
     Root: Metadata { dimensions: 3, items: RoaringBitmap<[0]>, distance: "euclidean", entry_points: [0], max_level: 1 }
-    Version: Version { major: 0, minor: 1, patch: 3 }
+    Version: Version { major: 0, minor: 2, patch: 0 }
     Links 0: Links(Links { links: RoaringBitmap<[]> })
     Links 0: Links(Links { links: RoaringBitmap<[]> })
     Item 0: Item(Item { header: NodeHeaderEuclidean { bias: "0.0000" }, vector: [0.0000, 1.0000, 2.0000] })
@@ -219,7 +219,7 @@ fn write_random_vectors_to_random_indexes() {
 
         // We're going to write 10 vectors per index
         for i in 0..10 {
-            let vector: [f32; 10] = std::array::from_fn(|_| rng.gen());
+            let vector: [f32; 10] = std::array::from_fn(|_| rng.random());
             writer.add_item(&mut wtxn, i, &vector).unwrap();
         }
         writer.builder(&mut rng).build::<M, M0>(&mut wtxn).unwrap();
@@ -252,7 +252,7 @@ fn convert_from_arroy_to_hannoy() {
         let writer = arroy::Writer::new(database, index, DIM);
 
         // We're going to write 100 vectors per index
-        let unif = Uniform::new(-1.0, 1.0);
+        let unif = Uniform::new(-1.0, 1.0).unwrap();
         for i in 0..100 {
             let vector: [f32; DIM] = std::array::from_fn(|_| rng.sample(unif));
             writer.add_item(&mut wtxn, i, &vector).unwrap();
@@ -323,7 +323,7 @@ fn convert_from_arroy_to_hannoy_binary_quantized() {
         let writer = arroy::Writer::new(database, index, DIM);
 
         // We're going to write 100 vectors per index
-        let unif = Uniform::new(-1.0, 1.0);
+        let unif = Uniform::new(-1.0, 1.0).unwrap();
         for i in 0..100 {
             let vector: [f32; DIM] = std::array::from_fn(|_| rng.sample(unif));
             writer.add_item(&mut wtxn, i, &vector).unwrap();
@@ -389,7 +389,7 @@ fn overwrite_one_item_incremental() {
     ==================
     Dumping index 0
     Root: Metadata { dimensions: 2, items: RoaringBitmap<[0, 1, 2, 3, 4, 5]>, distance: "euclidean", entry_points: [0, 2, 3], max_level: 1 }
-    Version: Version { major: 0, minor: 1, patch: 3 }
+    Version: Version { major: 0, minor: 2, patch: 0 }
     Links 0: Links(Links { links: RoaringBitmap<[1, 2]> })
     Links 0: Links(Links { links: RoaringBitmap<[2]> })
     Links 1: Links(Links { links: RoaringBitmap<[0, 2]> })
@@ -418,7 +418,7 @@ fn overwrite_one_item_incremental() {
     ==================
     Dumping index 0
     Root: Metadata { dimensions: 2, items: RoaringBitmap<[0, 1, 2, 3, 4, 5]>, distance: "euclidean", entry_points: [0, 2, 3], max_level: 1 }
-    Version: Version { major: 0, minor: 1, patch: 3 }
+    Version: Version { major: 0, minor: 2, patch: 0 }
     Links 0: Links(Links { links: RoaringBitmap<[1, 2]> })
     Links 0: Links(Links { links: RoaringBitmap<[2]> })
     Links 1: Links(Links { links: RoaringBitmap<[0, 2]> })
@@ -453,7 +453,7 @@ fn delete_one_item_in_a_one_item_db() {
     ==================
     Dumping index 0
     Root: Metadata { dimensions: 2, items: RoaringBitmap<[0]>, distance: "euclidean", entry_points: [0], max_level: 1 }
-    Version: Version { major: 0, minor: 1, patch: 3 }
+    Version: Version { major: 0, minor: 2, patch: 0 }
     Links 0: Links(Links { links: RoaringBitmap<[]> })
     Links 0: Links(Links { links: RoaringBitmap<[]> })
     Item 0: Item(Item { header: NodeHeaderEuclidean { bias: "0.0000" }, vector: [0.0000, 0.0000] })
@@ -471,7 +471,7 @@ fn delete_one_item_in_a_one_item_db() {
     ==================
     Dumping index 0
     Root: Metadata { dimensions: 2, items: RoaringBitmap<[]>, distance: "euclidean", entry_points: [], max_level: 0 }
-    Version: Version { major: 0, minor: 1, patch: 3 }
+    Version: Version { major: 0, minor: 2, patch: 0 }
     "###);
 
     let rtxn = handle.env.read_txn().unwrap();
@@ -497,7 +497,7 @@ fn delete_document_in_an_empty_index_74() {
     ==================
     Dumping index 0
     Root: Metadata { dimensions: 2, items: RoaringBitmap<[0]>, distance: "euclidean", entry_points: [0], max_level: 1 }
-    Version: Version { major: 0, minor: 1, patch: 3 }
+    Version: Version { major: 0, minor: 2, patch: 0 }
     Links 0: Links(Links { links: RoaringBitmap<[]> })
     Links 0: Links(Links { links: RoaringBitmap<[]> })
     Item 0: Item(Item { header: NodeHeaderEuclidean { bias: "0.0000" }, vector: [0.0000, 0.0000] })
@@ -529,11 +529,11 @@ fn delete_document_in_an_empty_index_74() {
     ==================
     Dumping index 0
     Root: Metadata { dimensions: 2, items: RoaringBitmap<[]>, distance: "euclidean", entry_points: [], max_level: 0 }
-    Version: Version { major: 0, minor: 1, patch: 3 }
+    Version: Version { major: 0, minor: 2, patch: 0 }
     ==================
     Dumping index 1
     Root: Metadata { dimensions: 2, items: RoaringBitmap<[]>, distance: "euclidean", entry_points: [], max_level: 0 }
-    Version: Version { major: 0, minor: 1, patch: 3 }
+    Version: Version { major: 0, minor: 2, patch: 0 }
     "###);
 
     let rtxn = handle.env.read_txn().unwrap();
@@ -563,7 +563,7 @@ fn delete_one_item_in_a_single_document_database() {
     ==================
     Dumping index 0
     Root: Metadata { dimensions: 2, items: RoaringBitmap<[0]>, distance: "cosine", entry_points: [0], max_level: 1 }
-    Version: Version { major: 0, minor: 1, patch: 3 }
+    Version: Version { major: 0, minor: 2, patch: 0 }
     Links 0: Links(Links { links: RoaringBitmap<[]> })
     Links 0: Links(Links { links: RoaringBitmap<[]> })
     Item 0: Item(Item { header: NodeHeaderCosine { norm: "0.0000" }, vector: [0.0000, 0.0000] })
@@ -581,7 +581,7 @@ fn delete_one_item_in_a_single_document_database() {
     ==================
     Dumping index 0
     Root: Metadata { dimensions: 2, items: RoaringBitmap<[]>, distance: "cosine", entry_points: [], max_level: 0 }
-    Version: Version { major: 0, minor: 1, patch: 3 }
+    Version: Version { major: 0, minor: 2, patch: 0 }
     "###);
 }
 
@@ -603,7 +603,7 @@ fn delete_one_item() {
     ==================
     Dumping index 0
     Root: Metadata { dimensions: 2, items: RoaringBitmap<[0, 1, 2, 3, 4, 5]>, distance: "euclidean", entry_points: [0, 2, 3], max_level: 1 }
-    Version: Version { major: 0, minor: 1, patch: 3 }
+    Version: Version { major: 0, minor: 2, patch: 0 }
     Links 0: Links(Links { links: RoaringBitmap<[1, 2]> })
     Links 0: Links(Links { links: RoaringBitmap<[2]> })
     Links 1: Links(Links { links: RoaringBitmap<[0, 2]> })
@@ -633,7 +633,7 @@ fn delete_one_item() {
     ==================
     Dumping index 0
     Root: Metadata { dimensions: 2, items: RoaringBitmap<[0, 1, 2, 4, 5]>, distance: "euclidean", entry_points: [0, 1, 2], max_level: 1 }
-    Version: Version { major: 0, minor: 1, patch: 3 }
+    Version: Version { major: 0, minor: 2, patch: 0 }
     Links 0: Links(Links { links: RoaringBitmap<[1]> })
     Links 0: Links(Links { links: RoaringBitmap<[1, 2]> })
     Links 1: Links(Links { links: RoaringBitmap<[0, 2]> })
@@ -662,7 +662,7 @@ fn delete_one_item() {
     ==================
     Dumping index 0
     Root: Metadata { dimensions: 2, items: RoaringBitmap<[0, 2, 4, 5]>, distance: "euclidean", entry_points: [0, 2, 4], max_level: 1 }
-    Version: Version { major: 0, minor: 1, patch: 3 }
+    Version: Version { major: 0, minor: 2, patch: 0 }
     Links 0: Links(Links { links: RoaringBitmap<[0, 2]> })
     Links 0: Links(Links { links: RoaringBitmap<[0, 2]> })
     Links 2: Links(Links { links: RoaringBitmap<[0, 2, 4]> })
@@ -733,13 +733,14 @@ proptest! {
     #[test]
     fn fuzz_writer(n in 1..=10_000u32, dim in 128..=1024usize) {
         let handle = create_database::<Euclidean>();
-        let mut rng = StdRng::from_seed(thread_rng().gen());
+        let mut thread_rng = rand::rngs::ThreadRng::default();
+        let mut rng = StdRng::from_seed(thread_rng.random());
         let mut wtxn = handle.env.write_txn().unwrap();
 
         let writer = Writer::new(handle.database, 0, dim);
 
         for i in 1..=n {
-            let vector: Vec<f32> = (0..dim).map(|_| rng.gen()).collect();
+            let vector: Vec<f32> = (0..dim).map(|_| rng.random()).collect();
             writer.add_item(&mut wtxn, i, &vector).unwrap();
         }
         writer.builder(&mut rng).build::<M, M0>(&mut wtxn).unwrap();
