@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0](https://github.com/nnethercott/hannoy/compare/v0.1.7-nested-rtxns...v0.2.0) - 2026-08-14
+
+### Added
+
+- support all Python CPU arrays, add multi query ([#134](https://github.com/nnethercott/hannoy/pull/134))
+- `add_items` python API ([#130](https://github.com/nnethercott/hannoy/pull/130))
+- by_item for Python API ([#128](https://github.com/nnethercott/hannoy/pull/128))
+
+### Fixed
+
+- run tests on Cargo.toml changes ([#132](https://github.com/nnethercott/hannoy/pull/132))
+
+### Other
+
+- Bump dependencies and bump version to v0.2.0 ([#136](https://github.com/nnethercott/hannoy/pull/136))
+- ignore fuzzing checks on python features ([#131](https://github.com/nnethercott/hannoy/pull/131))
+- Drastically speed up the indexing phase by parallelizing reads
+- Don't compute useless stats
+- Make clippy happy
+- Update tests
+- Import and fmt
+- Bump version to 0.1.3 and use latest version of heed
+- Fix reading metadata of empty database
+
 ## [0.1.2](https://github.com/nnethercott/hannoy/compare/v0.1.1...v0.1.2) - 2025-12-16
 
 ### Added
