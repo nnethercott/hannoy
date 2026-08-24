@@ -67,7 +67,7 @@ pub struct QueryBuilder<'a, D: Distance> {
 }
 
 impl<'a, D: Distance> QueryBuilder<'a, D> {
-    /// Returns the closests items from `item`.
+    /// Returns the closest items from `item`.
     ///
     /// See also [`Self::by_vector`].
     ///
@@ -86,6 +86,21 @@ impl<'a, D: Distance> QueryBuilder<'a, D> {
             }
             None => None,
         })
+    }
+
+    /// Returns the closest items for each id sent via batched items.
+    ///
+    /// Alternative to calling by_item on each id separately.
+    ///
+    /// # Examples
+    /// ```no_run
+    /// # use hannoy::{Reader, distances::Euclidean};
+    /// # let (reader, rtxn): (Reader<Euclidean>, heed::RoTxn) = todo!();
+    /// reader.nns(20).by_items(&rtxn, &[5, 6, 7]);
+    /// ```
+    pub fn by_items(&self, rtxn: &RoTxn, items: &[ItemId]) -> Result<Vec<Option<Searched>>> {
+        // searches run sequentially but could be parallelized
+        items.iter().map(|&item| self.by_item (rtxn, item)).collect()
     }
 
     /// Returns as many nearest neighbours to the query as possible before `cancel_fn` evaluates to

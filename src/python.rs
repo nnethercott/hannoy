@@ -514,6 +514,22 @@ impl PyReader {
                 .map_err(h2py_err)?;
         Ok(found.map(|s| s.into_nns()))
     }
+
+    /// Retrieve similar items for each of the batched item IDs.
+    /// Returns `None` if the item(s) is not in in the database
+    #[pyo3(signature = (items, n=10, ef_search=200))]
+    fn by_items(
+        &self,
+        items: Vec<ItemId>,
+        n: usize,
+        ef_search: usize,
+    ) -> PyResult<Vec<Option<Vec<(ItemId, f32)>>>> {
+        let rtxn = &self.rtxn;
+        let found = 
+            hnsw_search!(&self.dyn_reader, |r| r.nns(n).ef_search(ef_search).by_items(&rtxn, &items))
+                .map_err(h2py_err)?;
+        Ok(found.into_iter().map(|opt| opt.map(|s| s.into_nns())).collect())
+    }
 }
 
 fn h2py_err<E: Into<crate::error::Error>>(e: E) -> PyErr {

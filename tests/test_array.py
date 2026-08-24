@@ -9,16 +9,6 @@ from hannoy import Metric, Reader
 
 
 @pytest.fixture(scope="function")
-def array_db(tmp_path: Path) -> hannoy.Database:
-    db = hannoy.Database(tmp_path, Metric.EUCLIDEAN)
-    vectors = np.array(
-        [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]], dtype=np.float32
-    )
-    with db.writer(3, m=4, ef=10) as writer:
-        writer.add_items([0, 1, 2], vectors)
-    return db
-
-
 def test_add_items_from_numpy_array(array_db: hannoy.Database) -> None:
     reader: Reader = array_db.reader(0)
     assert reader.by_vec([1.0, 0.0, 0.0], n=1) == [(0, 0.0)]
