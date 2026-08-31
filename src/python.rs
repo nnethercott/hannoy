@@ -516,21 +516,23 @@ impl PyReader {
     }
 
     /// Retrieve similar items for each of the batched item IDs.
-    /// Returns `None` if the item(s) is not in in the database
+    // Paralle version of by_items
+    // Returns None if the item(s) is not in the database
     #[pyo3(signature = (items, n=10, ef_search=200))]
     fn by_items(
         &self,
         items: Vec<ItemId>,
         n: usize,
         ef_search: usize,
-    ) -> PyResult<Vec<Option<Vec<(ItemId, f32)>>>> {
-        let rtxn = &self.rtxn;
-        let found = 
-            hnsw_search!(&self.dyn_reader, |r| r.nns(n).ef_search(ef_search).by_items(&rtxn, &items))
-                .map_err(h2py_err)?;
-        Ok(found.into_iter().map(|opt| opt.map(|s| s.into_nns())).collect())
+    ) -> PyResult<Vec<Option<Vec<(ItemId, f32)>>>>{
+        let env = ENV.get().ok_or_else( || PyRuntimeError::new_err("No environment"))?;
+        let found = hnsw_search!(&self.dyn_reader, |r| r.par_by_items(env, &items, n, ef_search)).map_err(h2py_err)?;
+        let results: Vec<Option<Vec<(ItemId, f32)>>> = found.into_iter().map(|opt| opt.map(|s| s.into_nns())).collect();
+        Ok(results)
     }
+
 }
+
 
 fn h2py_err<E: Into<crate::error::Error>>(e: E) -> PyErr {
     match e.into() {
