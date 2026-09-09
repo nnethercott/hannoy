@@ -88,21 +88,6 @@ impl<'a, D: Distance> QueryBuilder<'a, D> {
         })
     }
 
-    /// Returns the closest items for each id sent via batched items.
-    ///
-    /// Alternative to calling by_item on each id separately.
-    ///
-    /// # Examples
-    /// ```no_run
-    /// # use hannoy::{Reader, distances::Euclidean};
-    /// # let (reader, rtxn): (Reader<Euclidean>, heed::RoTxn) = todo!();
-    /// reader.nns(20).by_items(&rtxn, &[5, 6, 7]);
-    /// ```
-    // pub fn by_items(&self, rtxn: &RoTxn, items: &[ItemId]) -> Result<Vec<Option<Searched>>> {
-    //     // searches run sequentially but could be parallelized
-    //     items.iter().map(|&item| self.by_item (rtxn, item)).collect()
-    // }
-
     /// Returns as many nearest neighbours to the query as possible before `cancel_fn` evaluates to
     /// true, and indicates whether or not search terminated early.
     ///
@@ -634,9 +619,7 @@ impl<D: Distance> Reader<D> {
         }
     }
 
-    /// Parallel and batch version of items
-    ///
-    /// Returns the closest items for each id sent via batched items
+    /// Returns the closest items for each id sent via batched items; batches and in parallel
     ///
     /// Alternative to calling by_item on each id separately. 
     /// Returns `None` if that id is not in the database
@@ -644,11 +627,12 @@ impl<D: Distance> Reader<D> {
     /// # Examples
     /// ```no_run
     /// # use hannoy::{Reader, distances::Euclidean};
-    /// # use heed::{Env, WithoutTLs};
-    /// # let (reader, env): (Reader<Euclidean>, Env<WithoutTLs>) = todo!();
-    /// reader.par_by_items(&env, &[5, 6, 7], 10, 200);
+    /// # use heed::{Env, WithoutTls};
+    /// # let (reader, env): (Reader<Euclidean>, Env<WithoutTls>) = todo!();
+    /// reader.by_items(&env, &[5, 6, 7], 10, 200);
+    /// ```
 
-    pub fn par_by_items(&self, env: &Env<WithoutTls>, items: &[ItemId], 
+    pub fn by_items(&self, env: &Env<WithoutTls>, items: &[ItemId], 
                         n: usize, ef_search: usize) -> Result<Vec<Option<Searched>>>  where D: Sync, {
         
         use rayon::prelude::*;
