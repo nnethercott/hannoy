@@ -9,7 +9,7 @@ use heed::{Env, EnvOpenOptions, RwTxn};
 use hnsw_rs::hnsw::Hnsw;
 use hnsw_rs::prelude::DistCosine;
 use rand::rngs::StdRng;
-use rand::{thread_rng, Rng, SeedableRng};
+use rand::{RngExt, SeedableRng};
 use tempfile::tempdir;
 
 static M: usize = 16;
@@ -22,11 +22,12 @@ fn rng() -> StdRng {
 fn gen_vecs<const DIM: usize>(size: usize) -> Vec<[f32; DIM]> {
     let mut rng = rng();
 
+    #[allow(clippy::useless_conversion)]
     (0..size)
         .into_iter()
         .map(|_| {
             let mut arr = [0.0; DIM];
-            rng.fill(&mut arr);
+            arr.fill_with(|| rng.random());
             arr
         })
         .collect()
@@ -34,18 +35,17 @@ fn gen_vecs<const DIM: usize>(size: usize) -> Vec<[f32; DIM]> {
 
 fn setup_lmdb() -> Env {
     let temp_dir = tempdir().unwrap();
-    let env = unsafe {
+    unsafe {
         EnvOpenOptions::new()
             .map_size(1024 * 1024 * 1024 * 2) // 2GiB
             .open(temp_dir)
     }
-    .unwrap();
-    env
+    .unwrap()
 }
 
 fn create_lmdb_and_fill_with_vecs<'a, const DIM: usize>(
     env: &'a Env,
-    vecs: &'a Vec<[f32; DIM]>,
+    vecs: &'a [[f32; DIM]],
 ) -> hannoy::Result<(Writer<Cosine>, RwTxn<'a>, Database<Cosine>)> {
     let mut wtxn = env.write_txn().unwrap();
 
@@ -86,7 +86,7 @@ fn search_hannoy<const DIM: usize>(bencher: divan::Bencher) {
         .with_inputs(|| {
             drop_caches().unwrap();
             let mut query = [f32::default(); DIM];
-            thread_rng().fill(&mut query);
+            query.fill_with(|| rand::rng().random());
             let reader = Reader::<Cosine>::open(&rtxn, 0, db).unwrap();
             (reader, query)
         })
@@ -111,11 +111,11 @@ fn search_hannoy_in_cache<const DIM: usize>(bencher: divan::Bencher) {
     let rtxn = env.read_txn().unwrap();
 
     // prefetch whole graph
-    env::set_var("HANNOY_READER_PREFETCH_MEMORY", format!("{}", 1024 * 1024 * 1024));
+    unsafe { env::set_var("HANNOY_READER_PREFETCH_MEMORY", format!("{}", 1024 * 1024 * 1024)) };
     bencher
         .with_inputs(|| {
             let mut query = [f32::default(); DIM];
-            thread_rng().fill(&mut query);
+            query.fill_with(|| rand::rng().random());
             let reader = Reader::<Cosine>::open(&rtxn, 0, db).unwrap();
             (reader, query)
         })
@@ -151,7 +151,7 @@ fn search_hnsw_rs<const DIM: usize>(bencher: divan::Bencher) {
     bencher
         .with_inputs(|| {
             let mut query = [f32::default(); DIM];
-            thread_rng().fill(&mut query);
+            query.fill_with(|| rand::rng().random());
             query
         })
         .bench_local_values(|query| {
