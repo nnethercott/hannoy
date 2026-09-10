@@ -1,5 +1,3 @@
-#![cfg(target_feature = "neon")]
-
 use std::arch::aarch64::*;
 use std::ptr::read_unaligned;
 
