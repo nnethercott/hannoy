@@ -15,7 +15,7 @@ def test_by_items_matches_by_item(array_db: hannoy.Database) -> None:
 def test_by_items_batches_query(array_db: hannoy.Database) -> None:
     reader: Reader = array_db.reader(0)
     res = reader.by_items([0, 1, 2], n = 2, ef_search = 10)
-    assert(len(res)) == 3
+    assert len(res) == 3
     assert [sorted(i for i, _ in row) for row in res] == [[1, 2], [0, 2], [0, 1]]
 
 

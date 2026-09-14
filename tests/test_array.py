@@ -8,7 +8,6 @@ import hannoy
 from hannoy import Metric, Reader
 
 
-@pytest.fixture(scope="function")
 def test_add_items_from_numpy_array(array_db: hannoy.Database) -> None:
     reader: Reader = array_db.reader(0)
     assert reader.by_vec([1.0, 0.0, 0.0], n=1) == [(0, 0.0)]
