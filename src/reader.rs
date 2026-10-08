@@ -4,7 +4,7 @@ use std::marker;
 use std::num::NonZeroUsize;
 
 use heed::types::DecodeIgnore;
-use heed::RoTxn;
+use heed::{Env, RoTxn, WithoutTls};
 use min_max_heap::MinMaxHeap;
 use roaring::RoaringBitmap;
 
@@ -67,7 +67,7 @@ pub struct QueryBuilder<'a, D: Distance> {
 }
 
 impl<'a, D: Distance> QueryBuilder<'a, D> {
-    /// Returns the closests items from `item`.
+    /// Returns the closest items from `item`.
     ///
     /// See also [`Self::by_vector`].
     ///
@@ -617,6 +617,36 @@ impl<D: Distance> Reader<D> {
             linear_below: DEFAULT_LINEAR_SCAN_THRESHOLD,
             linear_below_ratio: DEFAULT_LINEAR_SCAN_THRESHOLD_RATIO,
         }
+    }
+
+    /// Returns the closest items for each id sent via batched items; batches and in parallel
+    ///
+    /// Alternative to calling by_item on each id separately. 
+    /// Returns `None` if that id is not in the database
+    ///
+    /// # Examples
+    /// ```no_run
+    /// # use hannoy::{Reader, distances::Euclidean};
+    /// # use heed::{Env, WithoutTls};
+    /// # let (reader, env): (Reader<Euclidean>, Env<WithoutTls>) = todo!();
+    /// reader.by_items(&env, &[5, 6, 7], 10, 200);
+    /// ```
+
+    pub fn by_items(&self, env: &Env<WithoutTls>, items: &[ItemId], 
+                        n: usize, ef_search: usize) -> Result<Vec<Option<Searched>>>  where D: Sync, {
+        
+        use rayon::prelude::*;
+        // going with opening one read transaction per worker
+        let num_threads = rayon::current_num_threads() + 1;
+        let (sender, pool) = crossbeam_channel::bounded(num_threads);
+        for _ in 0..num_threads {
+            sender.try_send(env.read_txn()?).unwrap();
+        }
+        let txns: thread_local::ThreadLocal<RoTxn<WithoutTls>> = thread_local::ThreadLocal::new();
+        items.par_iter().map(|&item| 
+            { 
+                let rtxn = txns.get_or( || pool.try_recv().unwrap());
+                self.nns(n).ef_search(ef_search).by_item(rtxn, item)}).collect()
     }
 
     fn should_linear_scan(&self, opt: &QueryBuilder<D>) -> bool {
