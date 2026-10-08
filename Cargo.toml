@@ -17,7 +17,7 @@ authors = [
     "Nate <natenethercott@gmail.com>",
 ]
 license = "MIT"
-edition = "2021"
+edition = "2024"
 
 [lib]
 name = "hannoy"
@@ -63,7 +63,7 @@ hnsw_rs = "0.3.4"
 insta = "1.48.0"
 instant-distance = "0.6.1"
 proptest = "1.11.0"
-rand = { version = "0.10.2", features = ["std_rng"] }
+rand = { version = "0.10.2", features = ["std_rng", "thread_rng"] }
 tempfile = "3.27.0"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 

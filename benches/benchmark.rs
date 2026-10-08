@@ -2,7 +2,7 @@ use hannoy::distances::Cosine;
 use hannoy::{Database, Writer};
 use heed::{Env, EnvOpenOptions, RwTxn};
 use rand::rngs::StdRng;
-use rand::{Rng, SeedableRng};
+use rand::{RngExt, SeedableRng};
 use tempfile::tempdir;
 
 static M: usize = 16;
@@ -15,19 +15,17 @@ fn rng() -> StdRng {
 // hnsw build and search benchmarks
 mod hnsw {
     use hannoy::Reader;
-    use rand::thread_rng;
 
     use super::*;
 
     fn setup_lmdb() -> Env {
         let temp_dir = tempdir().unwrap();
-        let env = unsafe {
+        unsafe {
             EnvOpenOptions::new()
                 .map_size(1024 * 1024 * 1024 * 2) // 2GiB
                 .open(temp_dir)
         }
-        .unwrap();
-        env
+        .unwrap()
     }
 
     fn create_db_and_fill_with_vecs<const DIM: usize>(
@@ -43,7 +41,7 @@ mod hnsw {
         // insert random vectors
         for vec_id in 0..size {
             let mut vec = [0.0; DIM];
-            rng.fill(&mut vec);
+            vec.fill_with(|| rng.random());
             writer.add_item(&mut wtxn, vec_id as u32, &vec)?;
         }
 
@@ -87,7 +85,7 @@ mod hnsw {
         bencher
             .with_inputs(|| {
                 let mut query = [f32::default(); DIM];
-                thread_rng().fill(&mut query);
+                query.fill_with(|| rand::rng().random());
                 // Reader::open can incur some system calls that mess with profiling
                 let reader = Reader::<Cosine>::open(&rtxn, 0, db).unwrap();
                 (reader, query)

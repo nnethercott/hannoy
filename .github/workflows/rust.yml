@@ -41,7 +41,7 @@ jobs:
           - beta
     steps:
       - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@1.89
+      - uses: dtolnay/rust-toolchain@1.90
       - uses: actions/setup-python@v6
         with:
           python-version: '3.x'
@@ -67,7 +67,7 @@ jobs:
     if: ${{ needs.filter-changes.outputs.src-changed == 'true' }}
     steps:
       - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@1.89
+      - uses: dtolnay/rust-toolchain@1.90
         with:
           components: clippy, rustfmt
       - uses: actions-rs/cargo@v1
@@ -78,7 +78,7 @@ jobs:
         if: always()
         with:
           command: clippy
-          args: --all-features
+          args: --all-targets --all-features
       - uses: actions-rs/cargo@v1
         if: always()
         with:
@@ -90,7 +90,7 @@ jobs:
     if: ${{ needs.filter-changes.outputs.src-changed == 'true' }}
     steps:
       - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@1.89
+      - uses: dtolnay/rust-toolchain@1.90
       - name: Run fuzzer
         env:
           HANNOY_FUZZ_DURATION_SEC: 1800

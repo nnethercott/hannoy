@@ -49,8 +49,9 @@ impl<'t, D: Distance> FrozenReader<'t, D> {
     pub fn iter_layer_links(
         &self,
         layer: u8,
-    ) -> heed::Result<impl Iterator<Item = heed::Result<((ItemId, u8), Cow<'_, RoaringBitmap>)>>>
-    {
+    ) -> heed::Result<
+        impl Iterator<Item = heed::Result<((ItemId, u8), Cow<'_, RoaringBitmap>)>> + use<'_, D>,
+    > {
         let rtxn = self.rtxns.get_or(|| self.rtxns_pool.try_recv().unwrap());
         let prefix_key = Prefix::links(self.index);
 
@@ -85,8 +86,9 @@ impl<'t, D: Distance> FrozenReader<'t, D> {
     #[allow(clippy::type_complexity)]
     pub fn iter_links(
         &self,
-    ) -> heed::Result<impl Iterator<Item = heed::Result<((ItemId, u8), Cow<'_, RoaringBitmap>)>>>
-    {
+    ) -> heed::Result<
+        impl Iterator<Item = heed::Result<((ItemId, u8), Cow<'_, RoaringBitmap>)>> + use<'_, D>,
+    > {
         let rtxn = self.rtxns.get_or(|| self.rtxns_pool.try_recv().unwrap());
         let prefix_key = Prefix::links(self.index);
 

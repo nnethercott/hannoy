@@ -109,7 +109,7 @@ impl<'a> ItemIds<'a> {
         self.bytes.len() / size_of::<ItemId>()
     }
 
-    pub fn iter(&self) -> impl Iterator<Item = ItemId> + 'a {
+    pub fn iter(&self) -> impl Iterator<Item = ItemId> + use<'a> {
         self.bytes.chunks_exact(size_of::<ItemId>()).map(NativeEndian::read_u32)
     }
 }
