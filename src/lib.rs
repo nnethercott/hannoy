@@ -19,7 +19,7 @@
 //!
 //! ```rust
 //! use hannoy::{distances::Cosine, Database, Reader, Result, Writer};
-//! use heed::EnvOpenOptions;
+//! use heed::{EnvOpenOptions, CommitOrAbort};
 //! use rand::{rngs::StdRng, SeedableRng};
 //!
 //! fn main() -> Result<()> {
@@ -33,10 +33,13 @@
 //!     }
 //!     .unwrap();
 //!
-//!     let mut wtxn = env.write_txn().unwrap();
-//!     let db: Database<Cosine> = env.create_database(&mut wtxn, None)?;
+//!     let wtxn = env.write_txn().unwrap();
+//!     let db: Database<Cosine> = env.create_databases_and_commit(wtxn, |dbo, wtxn| -> heed::Result<_> {
+//!         dbo.create_database(wtxn, None).map(CommitOrAbort::<_, ()>::Commit)
+//!     })?.unwrap_commit();
 //!     let writer: Writer<Cosine> = Writer::new(db, 0, DIM);
 //!
+//!     let mut wtxn = env.write_txn().unwrap();
 //!     // insert into lmdb
 //!     writer.add_item(&mut wtxn, 0, &vecs[0])?;
 //!     writer.add_item(&mut wtxn, 1, &vecs[1])?;
@@ -128,7 +131,7 @@ pub mod distances {
 pub type Result<T, E = Error> = std::result::Result<T, E>;
 
 /// The database required by hannoy for reading or writing operations.
-pub type Database<D> = heed::Database<internals::KeyCodec, NodeCodec<D>>;
+pub type Database<'t, D> = heed::Database<'t, internals::KeyCodec, NodeCodec<D>>;
 
 /// An identifier for the items stored in the database.
 pub type ItemId = u32;
