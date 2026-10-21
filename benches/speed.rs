@@ -5,7 +5,7 @@ use std::io::Write;
 
 use hannoy::distances::Cosine;
 use hannoy::{Database, Reader, Writer};
-use heed::{Env, EnvOpenOptions, RwTxn};
+use heed::{CommitOrAbort, Env, EnvOpenOptions, RwTxn};
 use hnsw_rs::hnsw::Hnsw;
 use hnsw_rs::prelude::DistCosine;
 use rand::rngs::StdRng;
@@ -46,10 +46,16 @@ fn setup_lmdb() -> Env {
 fn create_lmdb_and_fill_with_vecs<'a, const DIM: usize>(
     env: &'a Env,
     vecs: &'a [[f32; DIM]],
-) -> hannoy::Result<(Writer<Cosine>, RwTxn<'a>, Database<Cosine>)> {
-    let mut wtxn = env.write_txn().unwrap();
+) -> hannoy::Result<(Writer<'a, Cosine>, RwTxn<'a>, Database<'a, Cosine>)> {
+    let rtxn = env.read_txn().unwrap();
+    let db: Database<Cosine> = env
+        .open_databases_and_commit(rtxn, |dbo, rtxn| {
+            dbo.open_database(rtxn, None).map(CommitOrAbort::<_, ()>::Commit)
+        })?
+        .unwrap_commit()
+        .unwrap();
 
-    let db: Database<Cosine> = env.create_database(&mut wtxn, None)?;
+    let mut wtxn = env.write_txn().unwrap();
     let writer: Writer<Cosine> = Writer::new(db, 0, DIM);
 
     // insert random vectors

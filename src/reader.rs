@@ -57,8 +57,8 @@ impl Searched {
 }
 
 /// Options used to make a query against an hannoy [`Reader`].
-pub struct QueryBuilder<'a, D: Distance> {
-    reader: &'a Reader<D>,
+pub struct QueryBuilder<'e, 'a, D: Distance> {
+    reader: &'a Reader<'e, D>,
     candidates: Option<&'a RoaringBitmap>,
     count: usize,
     ef: usize,
@@ -66,7 +66,7 @@ pub struct QueryBuilder<'a, D: Distance> {
     linear_below_ratio: f32,
 }
 
-impl<'a, D: Distance> QueryBuilder<'a, D> {
+impl<'e, 'a, D: Distance> QueryBuilder<'e, 'a, D> {
     /// Returns the closest items from `item`.
     ///
     /// See also [`Self::by_vector`].
@@ -371,8 +371,8 @@ impl<'a> Visitor<'a> {
 
 /// A reader over the hannoy hnsw graph
 #[derive(Debug)]
-pub struct Reader<D: Distance> {
-    pub(crate) database: Database<'static, D>,
+pub struct Reader<'e, D: Distance> {
+    pub(crate) database: Database<'e, D>,
     pub(crate) index: u16,
     entry_points: Vec<ItemId>,
     max_level: usize,
@@ -382,9 +382,9 @@ pub struct Reader<D: Distance> {
     _marker: marker::PhantomData<D>,
 }
 
-impl<D: Distance> Reader<D> {
+impl<'e, D: Distance> Reader<'e, D> {
     /// Returns a reader over the database with the specified [`Distance`] type.
-    pub fn open(rtxn: &RoTxn, index: u16, database: Database<'static, D>) -> Result<Reader<D>> {
+    pub fn open(rtxn: &RoTxn<'e>, index: u16, database: Database<'e, D>) -> Result<Reader<'e, D>> {
         let metadata_key = Key::metadata(index);
 
         let metadata = match database.remap_data_type::<MetadataCodec>().get(rtxn, &metadata_key)? {
@@ -608,7 +608,7 @@ impl<D: Distance> Reader<D> {
     /// Return a [`QueryBuilder`] that lets you configure and execute a search request.
     ///
     /// You must provide the number of items you want to receive.
-    pub fn nns(&self, count: usize) -> QueryBuilder<'_, D> {
+    pub fn nns(&self, count: usize) -> QueryBuilder<'_, '_, D> {
         QueryBuilder {
             reader: self,
             candidates: None,
