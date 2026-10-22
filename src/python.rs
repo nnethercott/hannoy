@@ -637,6 +637,7 @@ mod test {
 
     #[test]
     fn write_vectors_py() {
+        Python::initialize();
         Python::attach(|py| {
             let dir = tempfile::tempdir().unwrap();
             let distance = PyDistance::Cosine;
@@ -646,8 +647,13 @@ mod test {
                 .unwrap();
             writer.add_items(vec![0, 1], input.readonly()).unwrap();
             writer.build().unwrap();
+            assert!(
+                PyDatabase::new(dir.path().to_path_buf(), PyDistance::Cosine, None, None).is_err()
+            );
             PyDatabase::commit_rw_txn().unwrap();
-            let reader = database.reader(0).unwrap();
+            let reopened =
+                PyDatabase::new(dir.path().to_path_buf(), PyDistance::Cosine, None, None).unwrap();
+            let reader = reopened.reader(0).unwrap();
             assert_eq!(vec![(0, 0.0)], reader.by_vec(vec![0.0, 1.0, 2.0], 1, 10).unwrap());
             assert_eq!(vec![(1, 0.0)], reader.by_vec(vec![1.0, 0.0, 2.0], 1, 10).unwrap());
         });
