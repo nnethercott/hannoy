@@ -4,7 +4,7 @@ use std::sync::LazyLock;
 
 use crate::{distance, Database, ItemId, Reader, Writer};
 use either::Either;
-use heed::{RoTxn, RwTxn, WithoutTls};
+use heed::{CommitOrAbort, RoTxn, RwTxn, WithoutTls};
 use numpy::ndarray::{ArrayView1, ArrayViewMut, ArrayViewMut1, Dim, Dimension};
 use numpy::{
     prelude::*, Element, PyReadonlyArray, PyReadonlyArray2, PyReadonlyArrayDyn, PyReadwriteArray,
@@ -61,33 +61,40 @@ impl PyDistance {
 }
 
 enum DynDatabase {
-    Cosine(Database<distance::Cosine>),
-    Euclidean(Database<distance::Euclidean>),
-    Manhattan(Database<distance::Manhattan>),
-    BqCosine(Database<distance::BinaryQuantizedCosine>),
-    BqEuclidean(Database<distance::BinaryQuantizedEuclidean>),
-    BqManhattan(Database<distance::BinaryQuantizedManhattan>),
-    Hamming(Database<distance::Hamming>),
+    Cosine(Database<'static, distance::Cosine>),
+    Euclidean(Database<'static, distance::Euclidean>),
+    Manhattan(Database<'static, distance::Manhattan>),
+    BqCosine(Database<'static, distance::BinaryQuantizedCosine>),
+    BqEuclidean(Database<'static, distance::BinaryQuantizedEuclidean>),
+    BqManhattan(Database<'static, distance::BinaryQuantizedManhattan>),
+    Hamming(Database<'static, distance::Hamming>),
 }
 impl DynDatabase {
     pub fn new(
-        env: &heed::Env<WithoutTls>,
-        wtxn: &mut RwTxn,
+        env: &'static heed::Env<WithoutTls>,
+        wtxn: RwTxn<'static>,
         name: Option<&str>,
         distance: PyDistance,
     ) -> heed::Result<Self> {
+        fn create<D: crate::Distance>(
+            env: &'static heed::Env<WithoutTls>,
+            wtxn: RwTxn<'static>,
+            name: Option<&str>,
+        ) -> heed::Result<Database<'static, D>> {
+            env.create_databases_and_commit(wtxn, |dbo, wtxn| -> heed::Result<_> {
+                dbo.create_database(wtxn, name).map(CommitOrAbort::<_, ()>::Commit)
+            })
+            .map(CommitOrAbort::unwrap_commit)
+        }
+
         match distance {
-            PyDistance::Cosine => Ok(DynDatabase::Cosine(env.create_database(wtxn, name)?)),
-            PyDistance::Euclidean => Ok(DynDatabase::Euclidean(env.create_database(wtxn, name)?)),
-            PyDistance::Manhattan => Ok(DynDatabase::Manhattan(env.create_database(wtxn, name)?)),
-            PyDistance::BqCosine => Ok(DynDatabase::BqCosine(env.create_database(wtxn, name)?)),
-            PyDistance::BqEuclidean => {
-                Ok(DynDatabase::BqEuclidean(env.create_database(wtxn, name)?))
-            }
-            PyDistance::BqManhattan => {
-                Ok(DynDatabase::BqManhattan(env.create_database(wtxn, name)?))
-            }
-            PyDistance::Hamming => Ok(DynDatabase::Hamming(env.create_database(wtxn, name)?)),
+            PyDistance::Cosine => create(env, wtxn, name).map(DynDatabase::Cosine),
+            PyDistance::Euclidean => create(env, wtxn, name).map(DynDatabase::Euclidean),
+            PyDistance::Manhattan => create(env, wtxn, name).map(DynDatabase::Manhattan),
+            PyDistance::BqCosine => create(env, wtxn, name).map(DynDatabase::BqCosine),
+            PyDistance::BqEuclidean => create(env, wtxn, name).map(DynDatabase::BqEuclidean),
+            PyDistance::BqManhattan => create(env, wtxn, name).map(DynDatabase::BqManhattan),
+            PyDistance::Hamming => create(env, wtxn, name).map(DynDatabase::Hamming),
         }
     }
 }
@@ -114,8 +121,14 @@ impl PyDatabase {
                 heed::EnvOpenOptions::new().read_txn_without_tls().map_size(size).open(path)
             })
             .map_err(h2py_err)?;
-        let mut wtxn = get_rw_txn()?;
-        let db = DynDatabase::new(env, &mut wtxn, name, distance).map_err(h2py_err)?;
+        let pending_txn = RW_TXN.lock();
+        if pending_txn.is_some() {
+            return Err(PyRuntimeError::new_err(
+                "Commit or abort the pending write transaction before opening another database",
+            ));
+        }
+        let wtxn = env.write_txn().map_err(h2py_err)?;
+        let db = DynDatabase::new(env, wtxn, name, distance).map_err(h2py_err)?;
         Ok(PyDatabase(db))
     }
 
@@ -222,13 +235,13 @@ impl PyDatabase {
 }
 
 enum DynWriter {
-    Cosine(Writer<distance::Cosine>),
-    Euclidean(Writer<distance::Euclidean>),
-    Manhattan(Writer<distance::Manhattan>),
-    BqCosine(Writer<distance::BinaryQuantizedCosine>),
-    BqEuclidean(Writer<distance::BinaryQuantizedEuclidean>),
-    BqManhattan(Writer<distance::BinaryQuantizedManhattan>),
-    Hamming(Writer<distance::Hamming>),
+    Cosine(Writer<'static, distance::Cosine>),
+    Euclidean(Writer<'static, distance::Euclidean>),
+    Manhattan(Writer<'static, distance::Manhattan>),
+    BqCosine(Writer<'static, distance::BinaryQuantizedCosine>),
+    BqEuclidean(Writer<'static, distance::BinaryQuantizedEuclidean>),
+    BqManhattan(Writer<'static, distance::BinaryQuantizedManhattan>),
+    Hamming(Writer<'static, distance::Hamming>),
 }
 
 #[derive(Clone)]
@@ -370,13 +383,13 @@ impl PyWriter {
 }
 
 enum DynReader {
-    Cosine(Reader<distance::Cosine>),
-    Euclidean(Reader<distance::Euclidean>),
-    Manhattan(Reader<distance::Manhattan>),
-    BqCosine(Reader<distance::BinaryQuantizedCosine>),
-    BqEuclidean(Reader<distance::BinaryQuantizedEuclidean>),
-    BqManhattan(Reader<distance::BinaryQuantizedManhattan>),
-    Hamming(Reader<distance::Hamming>),
+    Cosine(Reader<'static, distance::Cosine>),
+    Euclidean(Reader<'static, distance::Euclidean>),
+    Manhattan(Reader<'static, distance::Manhattan>),
+    BqCosine(Reader<'static, distance::BinaryQuantizedCosine>),
+    BqEuclidean(Reader<'static, distance::BinaryQuantizedEuclidean>),
+    BqManhattan(Reader<'static, distance::BinaryQuantizedManhattan>),
+    Hamming(Reader<'static, distance::Hamming>),
 }
 
 macro_rules! hnsw_search {
@@ -624,6 +637,7 @@ mod test {
 
     #[test]
     fn write_vectors_py() {
+        Python::initialize();
         Python::attach(|py| {
             let dir = tempfile::tempdir().unwrap();
             let distance = PyDistance::Cosine;
@@ -633,8 +647,13 @@ mod test {
                 .unwrap();
             writer.add_items(vec![0, 1], input.readonly()).unwrap();
             writer.build().unwrap();
+            assert!(
+                PyDatabase::new(dir.path().to_path_buf(), PyDistance::Cosine, None, None).is_err()
+            );
             PyDatabase::commit_rw_txn().unwrap();
-            let reader = database.reader(0).unwrap();
+            let reopened =
+                PyDatabase::new(dir.path().to_path_buf(), PyDistance::Cosine, None, None).unwrap();
+            let reader = reopened.reader(0).unwrap();
             assert_eq!(vec![(0, 0.0)], reader.by_vec(vec![0.0, 1.0, 2.0], 1, 10).unwrap());
             assert_eq!(vec![(1, 0.0)], reader.by_vec(vec![1.0, 0.0, 2.0], 1, 10).unwrap());
         });
