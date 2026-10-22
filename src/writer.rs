@@ -19,13 +19,13 @@ use crate::unaligned_vector::UnalignedVector;
 use crate::update_status::{UpdateStatus, UpdateStatusCodec};
 use crate::version::{Version, VersionCodec};
 use crate::{
-    Database, Error, ItemId, Key, Metadata, MetadataCodec, Node, Prefix, PrefixCodec, Result,
-    CANCELLATION_PROBING,
+    CANCELLATION_PROBING, Database, Error, ItemId, Key, Metadata, MetadataCodec, Node, Prefix,
+    PrefixCodec, Result,
 };
 
 /// The options available when configuring the hannoy database.
-pub struct HannoyBuilder<'a, D: Distance, R: Rng + SeedableRng, P> {
-    writer: &'a Writer<D>,
+pub struct HannoyBuilder<'a, 'e, D: Distance, R: Rng + SeedableRng, P> {
+    writer: &'a Writer<'e, D>,
     rng: &'a mut R,
     inner: BuildOption<'a, P>,
 }
@@ -57,7 +57,7 @@ impl Default for BuildOption<'_, NoProgress> {
     }
 }
 
-impl<'a, D: Distance, R: Rng + SeedableRng, P> HannoyBuilder<'a, D, R, P> {
+impl<'a, 'e, D: Distance, R: Rng + SeedableRng, P> HannoyBuilder<'a, 'e, D, R, P> {
     // NOTE: unused in hannoy
     // pub fn available_memory(&mut self, memory: usize) -> &mut Self {
     //     self.inner.available_memory = Some(memory);
@@ -114,7 +114,7 @@ impl<'a, D: Distance, R: Rng + SeedableRng, P> HannoyBuilder<'a, D, R, P> {
     /// let mut rng = StdRng::seed_from_u64(4729);
     /// writer.builder(&mut rng).progress(NoProgress).build::<16,32>(&mut wtxn);
     /// ```
-    pub fn progress<NP: steppe::Progress>(self, progress: NP) -> HannoyBuilder<'a, D, R, NP> {
+    pub fn progress<NP: steppe::Progress>(self, progress: NP) -> HannoyBuilder<'a, 'e, D, R, NP> {
         let HannoyBuilder {
             writer,
             rng,
@@ -272,17 +272,17 @@ impl<'a, D: Distance, R: Rng + SeedableRng, P> HannoyBuilder<'a, D, R, P> {
 /// A writer to store new items, remove existing ones, and build the search
 /// index to query the nearest neighbors to items or vectors.
 #[derive(Debug)]
-pub struct Writer<D: Distance> {
-    database: Database<D>,
+pub struct Writer<'e, D: Distance> {
+    database: Database<'e, D>,
     index: u16,
     dimensions: usize,
     /// The folder in which tempfile will write its temporary files.
     tmpdir: Option<PathBuf>,
 }
 
-impl<D: Distance> Writer<D> {
+impl<'e, D: Distance> Writer<'e, D> {
     /// Creates a new writer from a database, index and dimensions.
-    pub fn new(database: Database<D>, index: u16, dimensions: usize) -> Writer<D> {
+    pub fn new(database: Database<'e, D>, index: u16, dimensions: usize) -> Writer<'e, D> {
         Writer { database, index, dimensions, tmpdir: None }
     }
 
@@ -355,7 +355,10 @@ impl<D: Distance> Writer<D> {
 
     /// Returns a writer after having deleted the tree nodes and rewrote all the items
     /// for the new [`Distance`] format to be able to modify items safely.
-    pub fn prepare_changing_distance<ND: Distance>(self, wtxn: &mut RwTxn) -> Result<Writer<ND>> {
+    pub fn prepare_changing_distance<ND: Distance>(
+        self,
+        wtxn: &mut RwTxn<'e>,
+    ) -> Result<Writer<'e, ND>> {
         if TypeId::of::<ND>() != TypeId::of::<D>() {
             // If we are moving from a distance to the same but binary quantized
             // distance we do not need to clear links, otherwise we do.
@@ -511,7 +514,7 @@ impl<D: Distance> Writer<D> {
     }
 
     /// Returns an [`HannoyBuilder`] to configure the available options to build the database.
-    pub fn builder<'a, R>(&'a self, rng: &'a mut R) -> HannoyBuilder<'a, D, R, NoProgress>
+    pub fn builder<'a, R>(&'a self, rng: &'a mut R) -> HannoyBuilder<'a, 'e, D, R, NoProgress>
     where
         R: Rng + SeedableRng,
     {

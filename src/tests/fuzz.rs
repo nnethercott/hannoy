@@ -13,7 +13,7 @@ use crate::distance::Cosine;
 use crate::key::{KeyCodec, Prefix, PrefixCodec};
 use crate::node::{Links, Node, NodeCodec};
 use crate::node_id::NodeMode;
-use crate::tests::{create_database_indices_with_items, DatabaseHandle};
+use crate::tests::{DatabaseHandle, create_database_indices_with_items};
 use crate::{Database, Reader, Writer};
 
 #[derive(Arbitrary, Debug)]
@@ -22,7 +22,7 @@ enum WriteOp<const M: usize> {
     Del(u32),
 }
 
-fn assert_all_readable<const DIM: usize>(rtxn: &RoTxn, database: Database<Cosine>) {
+fn assert_all_readable<const DIM: usize>(rtxn: &RoTxn, database: Database<'static, Cosine>) {
     info!("READING");
     let reader = Reader::<Cosine>::open(rtxn, 0, database).unwrap();
     let n = reader.item_ids().len() as usize;
@@ -32,7 +32,7 @@ fn assert_all_readable<const DIM: usize>(rtxn: &RoTxn, database: Database<Cosine
 
 fn assert_deleted_items_are_gone(
     rtxn: &RoTxn,
-    database: Database<Cosine>,
+    database: Database<'static, Cosine>,
     deleted: &RoaringBitmap,
 ) {
     // assert the reader cannot find any deleted vectors

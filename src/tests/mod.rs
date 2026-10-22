@@ -2,14 +2,14 @@ use std::fmt;
 use std::ops::Range;
 
 use heed::types::LazyDecode;
-use heed::{Env, EnvOpenOptions, WithTls};
+use heed::{CommitOrAbort, Env, EnvOpenOptions, WithTls};
 use rand::distr::Uniform;
 use rand::rngs::{StdRng, ThreadRng};
 use rand::{Rng, RngExt as _, SeedableRng};
 use tempfile::TempDir;
+use tracing_subscriber::EnvFilter;
 use tracing_subscriber::fmt::layer;
 use tracing_subscriber::prelude::*;
-use tracing_subscriber::EnvFilter;
 
 use crate::version::VersionCodec;
 use crate::{Database, Distance, MetadataCodec, NodeCodec, NodeMode, Reader, Writer};
@@ -25,7 +25,7 @@ fn env_logger_init() {
 
 pub struct DatabaseHandle<D> {
     pub env: Env<WithTls>,
-    pub database: Database<D>,
+    pub database: Database<'static, D>,
     #[allow(unused)]
     pub tempdir: TempDir,
 }
@@ -107,9 +107,13 @@ fn create_database<D: Distance>() -> DatabaseHandle<D> {
     let dir = tempfile::tempdir().unwrap();
     let env = unsafe { EnvOpenOptions::new().map_size(10 * 1024 * 1024 * 1024).open(dir.path()) }
         .unwrap();
-    let mut wtxn = env.write_txn().unwrap();
-    let database: Database<D> = env.create_database(&mut wtxn, None).unwrap();
-    wtxn.commit().unwrap();
+    let wtxn = env.write_txn().unwrap();
+    let database: Database<D> = env
+        .create_databases_and_commit(wtxn, |dbo, wtxn| -> heed::Result<_> {
+            dbo.create_database(wtxn, None).map(CommitOrAbort::<_, ()>::Commit)
+        })
+        .unwrap()
+        .unwrap_commit();
     DatabaseHandle { env, database, tempdir: dir }
 }
 

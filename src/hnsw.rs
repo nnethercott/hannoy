@@ -10,12 +10,12 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use heed::RwTxn;
 use min_max_heap::MinMaxHeap;
 use papaya::HashMap;
+use rand::Rng;
 use rand::distr::weighted::WeightedIndex;
 use rand::prelude::Distribution;
-use rand::Rng;
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use roaring::RoaringBitmap;
-use tinyvec::{array_vec, ArrayVec};
+use tinyvec::{ArrayVec, array_vec};
 use tracing::{debug, instrument};
 
 use crate::key::Key;
@@ -25,7 +25,7 @@ use crate::parallel::FrozenReader;
 use crate::progress::{AtomicInsertItemsStep, HannoyBuild};
 use crate::stats::BuildStats;
 use crate::writer::BuildOption;
-use crate::{Database, Distance, Error, ItemId, Result, CANCELLATION_PROBING};
+use crate::{CANCELLATION_PROBING, Database, Distance, Error, ItemId, Result};
 
 pub(crate) type ScoredLink = (OrderedFloat, ItemId);
 
@@ -119,11 +119,11 @@ impl<'a, D: Distance, const M: usize, const M0: usize> HnswBuilder<'a, D, M, M0>
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub fn build<R, P>(
+    pub fn build<'e, R, P>(
         &mut self,
         mut to_insert: RoaringBitmap,
         to_delete: &RoaringBitmap,
-        database: Database<D>,
+        database: Database<'e, D>,
         index: u16,
         wtxn: &mut RwTxn,
         rng: &mut R,
@@ -601,8 +601,8 @@ impl<'a, D: Distance, const M: usize, const M0: usize> HnswBuilder<'a, D, M, M0>
 mod tests {
     use std::collections::HashMap;
 
-    use rand::rngs::StdRng;
     use rand::SeedableRng;
+    use rand::rngs::StdRng;
 
     use super::HnswBuilder;
     use crate::distance::Cosine;

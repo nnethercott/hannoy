@@ -15,6 +15,7 @@ fn rng() -> StdRng {
 // hnsw build and search benchmarks
 mod hnsw {
     use hannoy::Reader;
+    use heed::CommitOrAbort;
 
     use super::*;
 
@@ -28,13 +29,19 @@ mod hnsw {
         .unwrap()
     }
 
-    fn create_db_and_fill_with_vecs<const DIM: usize>(
+    fn create_db_and_fill_with_vecs<'e, const DIM: usize>(
         env: &'_ Env,
         size: usize,
-    ) -> hannoy::Result<(Writer<Cosine>, RwTxn<'_>, Database<Cosine>)> {
-        let mut wtxn = env.write_txn().unwrap();
+    ) -> hannoy::Result<(Writer<'_, Cosine>, RwTxn<'_>, Database<'_, Cosine>)> {
+        let wtxn = env.write_txn().unwrap();
+        let db: Database<Cosine> = env
+            .create_databases_and_commit(wtxn, |dbo, wtxn| {
+                dbo.create_database(wtxn, None).map(CommitOrAbort::<_, ()>::Commit)
+            })
+            .unwrap()
+            .unwrap_commit();
 
-        let db: Database<Cosine> = env.create_database(&mut wtxn, None)?;
+        let mut wtxn = env.write_txn().unwrap();
         let writer: Writer<Cosine> = Writer::new(db, 0, DIM);
         let mut rng = rng();
 

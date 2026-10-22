@@ -1,3 +1,4 @@
+use heed::CommitOrAbort;
 use heed::types::DecodeIgnore;
 use proptest::proptest;
 use rand::distr::Uniform;
@@ -10,7 +11,7 @@ use super::{create_database, rng};
 use crate::distance::{BinaryQuantizedCosine, Cosine, Euclidean};
 use crate::key::{KeyCodec, Prefix, PrefixCodec};
 use crate::reader::get_item;
-use crate::tests::{create_database_indices_with_items, DatabaseHandle};
+use crate::tests::{DatabaseHandle, create_database_indices_with_items};
 use crate::{Reader, Writer};
 
 const M: usize = 3;
@@ -236,11 +237,14 @@ fn convert_from_arroy_to_hannoy() {
     let dir = tempfile::tempdir().unwrap();
     let env = unsafe { heed::EnvOpenOptions::new().map_size(200 * 1024 * 1024).open(dir.path()) }
         .unwrap();
-    let mut wtxn = env.write_txn().unwrap();
-
-    let database: arroy::Database<arroy::distances::Cosine> =
-        env.create_database(&mut wtxn, None).unwrap();
-    wtxn.commit().unwrap();
+    let rtxn = env.read_txn().unwrap();
+    let database: arroy::Database<arroy::distances::Cosine> = env
+        .open_databases_and_commit(rtxn, |dbo, rtxn| -> heed::Result<_> {
+            dbo.open_database(rtxn, None).map(CommitOrAbort::<_, ()>::Commit)
+        })
+        .unwrap()
+        .unwrap_commit()
+        .unwrap();
 
     let mut rng = rng();
     let mut wtxn = env.write_txn().unwrap();
@@ -265,8 +269,15 @@ fn convert_from_arroy_to_hannoy() {
 
     let mut wtxn = env.write_txn().unwrap();
     let rtxn = env.read_txn().unwrap();
-    let database: crate::Database<Cosine> = env.open_database(&wtxn, None).unwrap().unwrap();
+    let database: crate::Database<Cosine> = env
+        .open_databases_and_commit(rtxn, |dbo, rtxn| {
+            dbo.open_database(rtxn, None).map(CommitOrAbort::<_, ()>::Commit)
+        })
+        .unwrap()
+        .unwrap_commit()
+        .unwrap();
 
+    let rtxn = env.read_txn().unwrap();
     db_indexes.shuffle(&mut rng);
 
     for index in db_indexes {
@@ -307,11 +318,14 @@ fn convert_from_arroy_to_hannoy_binary_quantized() {
     let dir = tempfile::tempdir().unwrap();
     let env = unsafe { heed::EnvOpenOptions::new().map_size(200 * 1024 * 1024).open(dir.path()) }
         .unwrap();
-    let mut wtxn = env.write_txn().unwrap();
 
-    let database: arroy::Database<arroy::distances::BinaryQuantizedCosine> =
-        env.create_database(&mut wtxn, None).unwrap();
-    wtxn.commit().unwrap();
+    let wtxn = env.write_txn().unwrap();
+    let database: arroy::Database<arroy::distances::BinaryQuantizedCosine> = env
+        .create_databases_and_commit(wtxn, |dbo, wtxn| {
+            dbo.create_database(wtxn, None).map(CommitOrAbort::<_, ()>::Commit)
+        })
+        .unwrap()
+        .unwrap_commit();
 
     let mut rng = rng();
     let mut wtxn = env.write_txn().unwrap();
@@ -336,9 +350,15 @@ fn convert_from_arroy_to_hannoy_binary_quantized() {
 
     let mut wtxn = env.write_txn().unwrap();
     let rtxn = env.read_txn().unwrap();
-    let database: crate::Database<BinaryQuantizedCosine> =
-        env.open_database(&wtxn, None).unwrap().unwrap();
+    let database: crate::Database<BinaryQuantizedCosine> = env
+        .open_databases_and_commit(rtxn, |dbo, rtxn| -> heed::Result<_> {
+            let db = dbo.open_database(rtxn, None).unwrap().unwrap();
+            Ok(CommitOrAbort::<_, ()>::Commit(db))
+        })
+        .unwrap()
+        .unwrap_commit();
 
+    let rtxn = env.read_txn().unwrap();
     db_indexes.shuffle(&mut rng);
 
     for index in db_indexes {

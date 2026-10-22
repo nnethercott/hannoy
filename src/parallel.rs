@@ -12,11 +12,11 @@ pub(crate) struct FrozenReader<'t, D> {
     rtxns_pool: crossbeam_channel::Receiver<RoTxn<'t, WithoutTls>>,
     rtxns: thread_local::ThreadLocal<RoTxn<'t, WithoutTls>>,
     index: u16,
-    database: Database<D>,
+    database: Database<'t, D>,
 }
 
 impl<'t, D: Distance> FrozenReader<'t, D> {
-    pub fn new(wtxn: &'t mut RwTxn<'_>, index: u16, database: Database<D>) -> Result<Self> {
+    pub fn new(wtxn: &'t mut RwTxn<'_>, index: u16, database: Database<'t, D>) -> Result<Self> {
         // We make sure to have one more thread so the current/main thread has a nested rtxn.
         let num_threads = rayon::current_num_threads() + 1;
         let (sender, rtxns_pool) = crossbeam_channel::bounded(num_threads);
