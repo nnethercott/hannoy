@@ -5,5 +5,5 @@ edition = "2024"
 
 [dependencies]
 hannoy = { path = "../"}
-heed = { git = "https://github.com/meilisearch/heed", branch = "better-db-opening", version = "0.23.0", default-features = false }
+heed = { version = "0.23.0", default-features = false }
 rand = { version = "0.8.5", features = ["alloc"] }

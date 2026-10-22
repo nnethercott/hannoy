@@ -27,7 +27,7 @@ crate-type = ["cdylib", "rlib"]
 bytemuck = { version = "1.25.2", features = ["derive", "extern_crate_alloc"] }
 byteorder = "1.5.0"
 hashbrown = "0.17.1"
-heed = { git = "https://github.com/meilisearch/heed", branch = "better-db-opening", version = "0.23.0", default-features = false }
+heed = { version = "0.23.0", default-features = false }
 min-max-heap = "1.3.0"
 page_size = "0.6.0"
 papaya = "0.2.4"
