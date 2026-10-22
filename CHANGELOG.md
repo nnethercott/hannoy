@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0](https://github.com/nnethercott/hannoy/compare/v0.2.0...v0.3.0) - 2026-10-22
+
+### Added
+
+- [**breaking**] use a safer heed version ([#140](https://github.com/nnethercott/hannoy/pull/140))
+- *(reader)* by_items ([#138](https://github.com/nnethercott/hannoy/pull/138))
+
+### Fixed
+
+- use stable rust in release please action ([#141](https://github.com/nnethercott/hannoy/pull/141))
+
+### Other
+
+- update py bindings ([#142](https://github.com/nnethercott/hannoy/pull/142))
+- modernize ([#139](https://github.com/nnethercott/hannoy/pull/139))
+- release v0.2.0 ([#135](https://github.com/nnethercott/hannoy/pull/135))
+
 ## [0.2.0](https://github.com/nnethercott/hannoy/compare/v0.1.7-nested-rtxns...v0.2.0) - 2026-08-14
 
 ### Added
