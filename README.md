@@ -101,6 +101,9 @@ E.g. prefetching 10MiB of vectors into RAM.
 export HANNOY_READER_PREFETCH_MEMORY=10485760
 ```
 
+## License
+
+Hannoy is licensed under MIT. By default, hannoy statically links with LMDB, which is licensed under [the OpenLDAP license](./LICENSE-OPENLDAP). By using hannoy, you need to make sure you comply with the terms of both the MIT and the OpenLDAP license.
 
 <!-- ## ideas for improvement -->
 <!-- - keep a counter of most frequently accessed nodes during build and make those entry points (e.g. use centroid-like) -->
