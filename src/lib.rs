@@ -18,6 +18,7 @@
 //! when you are done inserting your items.
 //!
 //! ```rust
+//! # #[cfg(feature = "heed3")] extern crate heed3 as heed;
 //! use hannoy::{distances::Cosine, Database, Reader, Result, Writer};
 //! use heed::{EnvOpenOptions, CommitOrAbort};
 //! use rand::{rngs::StdRng, SeedableRng};
@@ -26,10 +27,11 @@
 //!     const DIM: usize = 3;
 //!     let vecs: Vec<[f32; DIM]> = vec![[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
 //!
+//!     let dir = tempfile::tempdir().unwrap();
 //!     let env = unsafe {
 //!         EnvOpenOptions::new()
 //!             .map_size(1024 * 1024 * 1024 * 1) // 1GiB
-//!             .open("./")
+//!             .open(dir.path())
 //!     }
 //!     .unwrap();
 //!
@@ -71,6 +73,14 @@
     html_logo_url = "https://raw.githubusercontent.com/nnethercott/hannoy/main/assets/hanoi_new.png?raw=true"
 )]
 #![warn(clippy::todo)]
+
+#[cfg(not(any(feature = "heed", feature = "heed3")))]
+compile_error!("hannoy needs one of its `heed` (the default) or `heed3` features");
+
+// heed3 has heed's API over another LMDB, so with the `heed3` feature every `heed::` path in
+// the crate names heed3. It takes precedence when both features are enabled.
+#[cfg(feature = "heed3")]
+extern crate heed3 as heed;
 
 mod distance;
 mod error;

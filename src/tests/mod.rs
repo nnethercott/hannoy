@@ -150,3 +150,19 @@ fn create_database_indices_with_items<
 fn rng() -> StdRng {
     StdRng::from_seed(std::array::from_fn(|_| 42))
 }
+
+/// The LMDB a build links decides the data version of the files it writes: 1 for heed's
+/// mdb.master and 3 for heed3's mdb.master3.
+#[test]
+fn files_carry_the_data_version_of_the_chosen_heed() {
+    let handle = create_database::<crate::distances::Euclidean>();
+    let data = std::fs::read(handle.tempdir.path().join("data.mdb")).unwrap();
+    // The first page is a meta page: a page header, then the meta's magic and data version. The
+    // header holds a page number and 8 bytes of pad, flags and bounds, and mdb.master3 adds a txnid;
+    // both ids are the size of a usize.
+    let id = std::mem::size_of::<usize>();
+    let (meta, version) = if cfg!(feature = "heed3") { (2 * id + 8, 3) } else { (id + 8, 1) };
+    let word = |at: usize| u32::from_ne_bytes(data[at..at + 4].try_into().unwrap());
+    assert_eq!(word(meta), 0xBEEF_C0DE, "not an LMDB meta page");
+    assert_eq!(word(meta + 4), version);
+}

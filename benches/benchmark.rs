@@ -1,3 +1,6 @@
+#[cfg(feature = "heed3")]
+extern crate heed3 as heed;
+
 use hannoy::distances::Cosine;
 use hannoy::{Database, Writer};
 use heed::{Env, EnvOpenOptions, RwTxn};

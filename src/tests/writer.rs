@@ -1,6 +1,8 @@
+#[cfg(not(feature = "heed3"))]
 use heed::CommitOrAbort;
 use heed::types::DecodeIgnore;
 use proptest::proptest;
+#[cfg(not(feature = "heed3"))]
 use rand::distr::Uniform;
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
@@ -8,7 +10,9 @@ use rand::{RngExt, SeedableRng};
 use roaring::RoaringBitmap;
 
 use super::{create_database, rng};
-use crate::distance::{BinaryQuantizedCosine, Cosine, Euclidean};
+#[cfg(not(feature = "heed3"))]
+use crate::distance::BinaryQuantizedCosine;
+use crate::distance::{Cosine, Euclidean};
 use crate::key::{KeyCodec, Prefix, PrefixCodec};
 use crate::reader::get_item;
 use crate::tests::{DatabaseHandle, create_database_indices_with_items};
@@ -228,6 +232,8 @@ fn write_random_vectors_to_random_indexes() {
     wtxn.commit().unwrap();
 }
 
+// arroy is built on heed, so its databases cannot live in a heed3 environment.
+#[cfg(not(feature = "heed3"))]
 #[test]
 fn convert_from_arroy_to_hannoy() {
     const DIM: usize = 1025;
@@ -309,6 +315,8 @@ fn convert_from_arroy_to_hannoy() {
 
 // Minimal reproducer for issue #77
 // <https://github.com/nnethercott/hannoy/issues/77>
+// arroy is built on heed, so its databases cannot live in a heed3 environment.
+#[cfg(not(feature = "heed3"))]
 #[test]
 fn convert_from_arroy_to_hannoy_binary_quantized() {
     const DIM: usize = 1025;

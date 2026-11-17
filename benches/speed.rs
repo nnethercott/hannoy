@@ -1,3 +1,6 @@
+#[cfg(feature = "heed3")]
+extern crate heed3 as heed;
+
 use std::env;
 use std::fs::OpenOptions;
 use std::hint::black_box;
