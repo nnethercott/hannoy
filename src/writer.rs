@@ -76,6 +76,7 @@ impl<'a, 'e, D: Distance, R: Rng + SeedableRng, P> HannoyBuilder<'a, 'e, D, R, P
     /// # Example
     ///
     /// ```no_run
+    /// # #[cfg(feature = "heed3")] extern crate heed3 as heed;
     /// # use hannoy::{Writer, distances::Euclidean};
     /// # let (writer, wtxn): (Writer<Euclidean>, heed::RwTxn) = todo!();
     /// use rand::rngs::StdRng;
@@ -104,6 +105,7 @@ impl<'a, 'e, D: Distance, R: Rng + SeedableRng, P> HannoyBuilder<'a, 'e, D, R, P
     /// # Example
     ///
     /// ```no_run
+    /// # #[cfg(feature = "heed3")] extern crate heed3 as heed;
     /// # use hannoy::{Writer, distances::Euclidean};
     /// # let (writer, wtxn): (Writer<Euclidean>, heed::RwTxn) = todo!();
     /// use rand::rngs::StdRng;
@@ -152,6 +154,7 @@ impl<'a, 'e, D: Distance, R: Rng + SeedableRng, P> HannoyBuilder<'a, 'e, D, R, P
     /// # Example
     ///
     /// ```no_run
+    /// # #[cfg(feature = "heed3")] extern crate heed3 as heed;
     /// # use hannoy::{Writer, distances::Euclidean};
     /// # let (writer, wtxn): (Writer<Euclidean>, heed::RwTxn) = todo!();
     /// use rand::rngs::StdRng;
@@ -175,6 +178,7 @@ impl<'a, 'e, D: Distance, R: Rng + SeedableRng, P> HannoyBuilder<'a, 'e, D, R, P
     /// # Example
     ///
     /// ```no_run
+    /// # #[cfg(feature = "heed3")] extern crate heed3 as heed;
     /// # use hannoy::{Writer, distances::Euclidean};
     /// # let (writer, wtxn): (Writer<Euclidean>, heed::RwTxn) = todo!();
     /// use rand::rngs::StdRng;
@@ -200,6 +204,7 @@ impl<'a, 'e, D: Distance, R: Rng + SeedableRng, P> HannoyBuilder<'a, 'e, D, R, P
     /// # Example
     ///
     /// ```no_run
+    /// # #[cfg(feature = "heed3")] extern crate heed3 as heed;
     /// # use hannoy::{Writer, distances::Euclidean};
     /// # let (writer, wtxn): (Writer<Euclidean>, heed::RwTxn) = todo!();
     /// use rayon;
@@ -231,6 +236,7 @@ impl<'a, 'e, D: Distance, R: Rng + SeedableRng, P> HannoyBuilder<'a, 'e, D, R, P
     /// # Example
     ///
     /// ```no_run
+    /// # #[cfg(feature = "heed3")] extern crate heed3 as heed;
     /// # use hannoy::{Writer, distances::Euclidean};
     /// # let (writer, wtxn): (Writer<Euclidean>, heed::RwTxn) = todo!();
     /// use rayon;

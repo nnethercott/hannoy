@@ -74,6 +74,7 @@ impl<'e, 'a, D: Distance> QueryBuilder<'e, 'a, D> {
     /// # Examples
     ///
     /// ```no_run
+    /// # #[cfg(feature = "heed3")] extern crate heed3 as heed;
     /// # use hannoy::{Reader, distances::Euclidean};
     /// # let (reader, rtxn): (Reader<Euclidean>, heed::RoTxn) = todo!();
     /// reader.nns(20).by_item(&rtxn, 5);
@@ -96,6 +97,7 @@ impl<'e, 'a, D: Distance> QueryBuilder<'e, 'a, D> {
     /// # Examples
     ///
     /// ```no_run
+    /// # #[cfg(feature = "heed3")] extern crate heed3 as heed;
     /// # use hannoy::{Reader, distances::Euclidean, Searched};
     /// # let (reader, rtxn): (Reader<Euclidean>, heed::RoTxn) = todo!();
     /// use std::time::{Instant, Duration};
@@ -125,6 +127,7 @@ impl<'e, 'a, D: Distance> QueryBuilder<'e, 'a, D> {
     /// # Examples
     ///
     /// ```no_run
+    /// # #[cfg(feature = "heed3")] extern crate heed3 as heed;
     /// # use hannoy::{Reader, distances::Euclidean};
     /// # let (reader, rtxn): (Reader<Euclidean>, heed::RoTxn) = todo!();
     /// reader.nns(20).by_vector(&rtxn, &[1.25854, -0.75598, 0.58524]);
@@ -155,6 +158,7 @@ impl<'e, 'a, D: Distance> QueryBuilder<'e, 'a, D> {
     /// # Examples
     ///
     /// ```no_run
+    /// # #[cfg(feature = "heed3")] extern crate heed3 as heed;
     /// # use hannoy::{Reader, distances::Euclidean, Searched};
     /// # let (reader, rtxn): (Reader<Euclidean>, heed::RoTxn) = todo!();
     /// use std::time::{Instant, Duration};
@@ -192,6 +196,7 @@ impl<'e, 'a, D: Distance> QueryBuilder<'e, 'a, D> {
     /// # Examples
     ///
     /// ```no_run
+    /// # #[cfg(feature = "heed3")] extern crate heed3 as heed;
     /// # use hannoy::{Reader, distances::Euclidean};
     /// # let (reader, rtxn): (Reader<Euclidean>, heed::RoTxn) = todo!();
     /// let candidates = roaring::RoaringBitmap::from_iter([1, 3, 4, 5, 6, 7, 8, 9, 15, 16]);
@@ -210,6 +215,7 @@ impl<'e, 'a, D: Distance> QueryBuilder<'e, 'a, D> {
     /// # Examples
     ///
     /// ```no_run
+    /// # #[cfg(feature = "heed3")] extern crate heed3 as heed;
     /// # use hannoy::{Reader, distances::Euclidean};
     /// # let (reader, rtxn): (Reader<Euclidean>, heed::RoTxn) = todo!();
     /// reader.nns(20).ef_search(21).by_item(&rtxn, 6);
@@ -227,6 +233,7 @@ impl<'e, 'a, D: Distance> QueryBuilder<'e, 'a, D> {
     /// # Examples
     ///
     /// ```no_run
+    /// # #[cfg(feature = "heed3")] extern crate heed3 as heed;
     /// # use hannoy::{Reader, distances::Euclidean};
     /// # let (reader, rtxn): (Reader<Euclidean>, heed::RoTxn) = todo!();
     /// reader.nns(20).linear_below(500).by_item(&rtxn, 6);
@@ -245,6 +252,7 @@ impl<'e, 'a, D: Distance> QueryBuilder<'e, 'a, D> {
     /// # Examples
     ///
     /// ```no_run
+    /// # #[cfg(feature = "heed3")] extern crate heed3 as heed;
     /// # use hannoy::{Reader, distances::Euclidean};
     /// # let (reader, rtxn): (Reader<Euclidean>, heed::RoTxn) = todo!();
     /// reader.nns(20).linear_below_ratio(0.1).by_item(&rtxn, 6);
@@ -626,6 +634,7 @@ impl<'e, D: Distance> Reader<'e, D> {
     ///
     /// # Examples
     /// ```no_run
+    /// # #[cfg(feature = "heed3")] extern crate heed3 as heed;
     /// # use hannoy::{Reader, distances::Euclidean};
     /// # use heed::{Env, WithoutTls};
     /// # let (reader, env): (Reader<Euclidean>, Env<WithoutTls>) = todo!();

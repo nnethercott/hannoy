@@ -63,6 +63,17 @@ fn main() -> Result<()> {
 }
 ```
 
+#### heed or heed3
+hannoy stores its index through [heed](https://crates.io/crates/heed) by default, on LMDB's `mdb.master` branch. To use [heed3](https://crates.io/crates/heed3) instead, on `mdb.master3`, turn off the default features and enable `heed3`:
+
+```toml
+hannoy = { version = "0.4", default-features = false, features = ["heed3"] }
+```
+
+heed3 has heed's API, but the two write different on-disk formats, LMDB data versions 1 and 3, and neither opens the other's files. heed3 says it will be stable once `mdb.master3` is released. hannoy opens plain heed3 databases, not encrypted ones.
+
+Depend on the same heed as hannoy: two LMDBs in one binary define the same C symbols, so the linker may resolve them all to one library. arroy runs on heed only, so the `arroy` feature's dumpless upgrade has no arroy database to read in a heed3 environment.
+
 ### Python 🐍
 ```python
 import hannoy
