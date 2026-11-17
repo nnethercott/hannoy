@@ -5,7 +5,7 @@ use std::mem::size_of;
 use byteorder::{BigEndian, ByteOrder};
 use heed::BoxedError;
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Version {
     pub major: u32,
     pub minor: u32,
@@ -75,5 +75,13 @@ mod test {
         assert_eq!(version.major, decoded.major);
         assert_eq!(version.minor, decoded.minor);
         assert_eq!(version.patch, decoded.patch);
+    }
+
+    #[test]
+    fn current_is_the_crate_version() {
+        // The snapshots name the stored version `current` instead of its number, so this pins it.
+        // A version holds no pre-release or build suffix.
+        let crate_version = env!("CARGO_PKG_VERSION").split(['-', '+']).next().unwrap();
+        assert_eq!(Version::current().to_string(), format!("v{crate_version}"));
     }
 }
