@@ -11,7 +11,7 @@ use tracing_subscriber::EnvFilter;
 use tracing_subscriber::fmt::layer;
 use tracing_subscriber::prelude::*;
 
-use crate::version::VersionCodec;
+use crate::version::{Version, VersionCodec};
 use crate::{Database, Distance, MetadataCodec, NodeCodec, NodeMode, Reader, Writer};
 
 mod fuzz;
@@ -87,7 +87,13 @@ impl<D: Distance> fmt::Display for DatabaseHandle<D> {
                         .get(&rtxn, &key)
                         .unwrap()
                         .unwrap();
-                    writeln!(f, "Version: {version:?}")?;
+                    // Every write stores the crate's own version, so naming it rather than its
+                    // number keeps the snapshots from changing with each release.
+                    if version == Version::current() {
+                        writeln!(f, "Version: current")?;
+                    } else {
+                        writeln!(f, "Version: {version:?}")?;
+                    }
                 }
                 NodeMode::Updated | NodeMode::Metadata => {
                     unreachable!("Mode must be an Updated or Metadata")

@@ -2,7 +2,7 @@
 use proptest::prelude::*;
 use rand::rngs::{StdRng, ThreadRng};
 use rand::seq::SliceRandom;
-use rand::{RngExt as _, SeedableRng};
+use rand::{RngExt, SeedableRng};
 use roaring::RoaringBitmap;
 
 use crate::distance::{BinaryQuantizedCosine, Cosine};
